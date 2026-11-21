@@ -26,12 +26,12 @@ jobs:
     if: ${{ github.event.repository.private == false }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Review dependencies
-        uses: actions/dependency-review-action@v5.0.0
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           # The CUDA 12.9 vLLM environment is isolated in the hashed GPU lock.
           # diskcache and torch have no patched compatible release; Heartwood

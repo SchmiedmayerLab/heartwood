@@ -19,7 +19,7 @@ jobs:
       required: ${{ steps.inputs.outputs.required }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -59,17 +59,17 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Install pinned build tools
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: 0.13.7
           python-version: 3.12.15
       - name: Restore gateway build cache
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: test-results/gateway-cache
           key: >-
@@ -81,7 +81,7 @@ jobs:
           --gateway --gateway-tests --output test-results/gateway-candidate --cache test-results/gateway-cache
       - name: Retain gateway qualification artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: worker-gateway-candidate-${{ github.sha }}
           path: |
@@ -104,12 +104,12 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Install pinned build tools
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: 0.13.7
           python-version: 3.12.15
@@ -139,7 +139,7 @@ jobs:
         run: |
           test-results/worker-candidate/environment/bin/python -I -m pytest --no-cov -q
       - name: Retain qualification artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: worker-dependency-candidate-${{ github.sha }}
           path: |
@@ -155,17 +155,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: 'true'
           persist-credentials: false
       - name: Restore records build cache
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: test-results/records-cache
           key: records-linux-amd64-${{ hashFiles('images/worker/candidate/records.json', 'deploy/build-records-fixture.py') }}
       - name: Install pinned build tools
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: 0.13.7
           python-version: 3.12.15
@@ -174,7 +174,7 @@ jobs:
           uv run --no-project --python 3.12.15 deploy/build-records-fixture.py
           --output test-results/records-tools --cache test-results/records-cache
       - name: Retain tools, corresponding sources and licenses
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: records-tools-${{ github.sha }}
           path: test-results/records-tools/
@@ -187,22 +187,22 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Download candidate wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-dependency-candidate-${{ github.sha }}
           path: test-results/worker-candidate
       - name: Download the pinned gateway build
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-gateway-candidate-${{ github.sha }}
           path: test-results/gateway-candidate
       - name: Download verified records tools
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: records-tools-${{ github.sha }}
           path: test-results/records-tools
@@ -222,7 +222,7 @@ jobs:
           test-results/native-qualification --commit "${GITHUB_SHA}"
       - name: Retain synthetic qualification evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: worker-native-qualification-${{ github.sha }}
           path: |

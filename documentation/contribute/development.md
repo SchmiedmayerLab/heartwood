@@ -30,7 +30,8 @@ If verification fails, keep the files for inspection and start from a clean chec
 Installing Heartwood packages from a package registry without these wheels is not supported; the native release archive and container images build them through the same bootstrap.
 
 Resolution ignores releases younger than seven days through uv's `exclude-newer`, npm's `min-release-age`, and the Dependabot cooldown; security updates are not delayed.
-Base images are pinned by digest, and third-party GitHub Actions use exact versions from immutable releases.
+Base images are pinned by digest.
+Every GitHub Action and reusable workflow from another repository that this repository references is pinned by its full commit SHA, with the version as a trailing comment, and Dependabot updates both; a compliance test refuses any other reference.
 
 ## Reuse Before Variants
 

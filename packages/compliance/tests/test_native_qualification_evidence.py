@@ -864,7 +864,7 @@ def test_only_a_main_job_without_candidate_code_can_attest() -> None:
         "python3 deploy/qualification_evidence.py"
         ' test-results/native-qualification --commit "${GITHUB_SHA}"'
     )
-    assert attest["uses"] == "actions/attest@v4"
+    assert attest["uses"].startswith("actions/attest@")
     assert attest["with"] == {"subject-path": "test-results/native-qualification/SHA256SUMS"}
 
 

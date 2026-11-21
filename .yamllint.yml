@@ -22,3 +22,6 @@ rules:
     level: error
     allowed-values: ["false", "true", "on"]  # Allow GitHub Actions workflow triggers using `on`.
   document-start: disable
+  # Dependabot writes the version of a pinned action as ` # vX` after one space.
+  comments:
+    min-spaces-from-content: 1

@@ -14,8 +14,10 @@ multi-ecosystem-groups:
 # Version updates wait seven days after a release, matching uv's exclude-newer and npm's
 # min-release-age; security updates are not delayed.
 updates:
+  # Actions are pinned by commit with the version as a comment; Dependabot updates both.
+  # The second directory holds the composite actions of this repository.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories: ["/", "/.github/actions/*"]
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
     cooldown:

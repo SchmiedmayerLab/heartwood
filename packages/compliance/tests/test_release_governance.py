@@ -335,7 +335,12 @@ def test_reusable_validation_workflows_use_the_supported_release_line() -> None:
     )
 
     assert validation.count("SchmiedmayerLab/.github/.github/workflows/") == 3
-    assert validation.count("@v0.5") == 3
+    assert validation.count("# v0.5") == 3
+    # The three reusable workflows come from one commit of the organization's release line.
+    assert (
+        len(set(re.findall(r"SchmiedmayerLab/\.github/[^@]+@([0-9a-f]{40}) # v0\.5", validation)))
+        == 1
+    )
     markdown_job = validation.split("  markdown-links:\n", maxsplit=1)[1].split(
         "\n  yamllint:\n", maxsplit=1
     )[0]
@@ -490,8 +495,8 @@ def test_documentation_is_validated_continuously_and_published_from_releases() -
     assert "published-site/${RELEASE_VERSION}/index.html" in publication
     assert "published-site/${DOCUMENTATION_CHANNEL}/index.html" in publication
     assert 'git rev-parse --verify "${DOCUMENTATION_BRANCH}^{commit}"' in publication
-    assert "actions/upload-pages-artifact@v5" in publication
-    assert "actions/deploy-pages@v5" in publication
+    assert "actions/upload-pages-artifact@" in publication
+    assert "actions/deploy-pages@" in publication
     assert "Verify the deployed documentation" in publication
     assert '"${documentation_root}/${path}"' in publication
     assert '"${documentation_root}/versions.json"' in publication
@@ -683,22 +688,61 @@ def test_release_image_promotion_refuses_candidates_that_changed_after_verificat
     assert state.read_text(encoding="utf-8") == ""
 
 
-def test_third_party_actions_use_exact_release_versions() -> None:
-    trusted_owners = {"actions", "SchmiedmayerLab"}
-    unpinned: list[str] = []
+# A tag can be moved to other code; a full commit SHA cannot. The trailing version comment
+# is what Dependabot reads and updates together with the SHA.
+_PINNED_ACTION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40} # v\d+(\.\d+){0,2}")
+_USES_LINE = re.compile(r"^\s*(?:-\s+)?uses:\s*(.*)$")
+
+
+def test_every_action_is_pinned_by_commit_with_its_version() -> None:
     paths = [
-        *sorted(Path(".github/workflows").glob("*.yml")),
-        *sorted(Path(".github/actions").glob("*/action.yml")),
+        *sorted(Path(".github/workflows").glob("*.y*ml")),
+        *sorted(Path(".github/actions").glob("*/action.y*ml")),
     ]
+    unpinned: list[str] = []
+    references = 0
     for path in paths:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        scanned: list[str] = []
+        for number, line in enumerate(lines, start=1):
+            match = _USES_LINE.match(line)
+            if match is None or match.group(1).startswith("./"):
+                continue
+            scanned.append(match.group(1).partition(" #")[0].strip("'\""))
+            if _PINNED_ACTION.fullmatch(match.group(1)) is None:
+                unpinned.append(f"{path}:{number}: {match.group(1)}")
+        # The parsed file names exactly the references the line scan saw, so no reference
+        # escapes the scan through another YAML form or hides in a script.
         document = _workflow(str(path))
         jobs = document.get("jobs") or {"composite": document.get("runs", {})}
-        for job in jobs.values():
-            for step in job.get("steps", []):
-                uses = step.get("uses", "")
-                if not uses or uses.startswith("./") or uses.split("/")[0] in trusted_owners:
-                    continue
-                if re.fullmatch(r"v\d+\.\d+\.\d+", uses.rpartition("@")[2]) is None:
-                    unpinned.append(f"{path}: {uses}")
+        parsed = [
+            uses
+            for job in jobs.values()
+            for uses in [
+                job.get("uses", ""),
+                *(step.get("uses", "") for step in job.get("steps", [])),
+            ]
+            if uses and not uses.startswith("./")
+        ]
+        assert sorted(parsed) == sorted(scanned), path
+        references += len(scanned)
 
+    assert references > 0
     assert unpinned == []
+    # Dependabot keeps the pins current in the workflows and the composite actions.
+    updates = _workflow(".github/dependabot.yml")["updates"]
+    (actions,) = [entry for entry in updates if entry["package-ecosystem"] == "github-actions"]
+    assert actions["directories"] == ["/", "/.github/actions/*"]
+
+
+def test_the_pinned_action_check_refuses_a_tag() -> None:
+    assert _PINNED_ACTION.fullmatch("actions/checkout@" + "a" * 40 + " # v7")
+    assert _PINNED_ACTION.fullmatch("o/r/.github/workflows/x.yml@" + "a" * 40 + " # v0.5")
+    for unpinned in (
+        "actions/checkout@v7",
+        "actions/checkout@" + "a" * 40,
+        "actions/checkout@" + "a" * 39 + " # v7",
+        "actions/checkout@main # v7",
+        "docker://alpine:3",
+    ):
+        assert _PINNED_ACTION.fullmatch(unpinned) is None, unpinned

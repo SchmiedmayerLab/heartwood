@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
@@ -51,27 +51,27 @@ jobs:
         run: python3 deploy/verify_model_sources.py --source-root . --allow-unavailable
   reuse:
     name: REUSE Compliance
-    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@v0.5
+    uses: SchmiedmayerLab/.github/.github/workflows/reuse.yml@fb9dd6c658af3d5b6073b986655cb093ea5821c3 # v0.5
   actionlint:
     name: Lint GitHub Actions Workflows
-    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@v0.5
+    uses: SchmiedmayerLab/.github/.github/workflows/actionlint.yml@fb9dd6c658af3d5b6073b986655cb093ea5821c3 # v0.5
   markdown-links:
     name: Check Markdown Links
     permissions:
       contents: read
       pull-requests: read
-    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@v0.5
+    uses: SchmiedmayerLab/.github/.github/workflows/markdown-links.yml@fb9dd6c658af3d5b6073b986655cb093ea5821c3 # v0.5
   yamllint:
     name: Lint YAML
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
       - name: Install yamllint
         run: pip install yamllint==1.38.0
       - name: Run yamllint
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
