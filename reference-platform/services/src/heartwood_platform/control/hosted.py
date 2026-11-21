@@ -28,9 +28,11 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from heartwood.schemas import PlatformLaunchContext
 from heartwood_platform.control.inference import RouteModel
+from heartwood_platform.control.project_data import ProjectDataVolume
 
 _DEPLOYMENT = "/etc/heartwood/deployment"
-# The OpenShell workspace of the session's workers, in which its provider lives.
+# The OpenShell workspace of the session's workers, in which its provider lives and to
+# whose sandboxes project data volumes are attached.
 WORKER_WORKSPACE = "research"
 # The model connection of the route, whose identifier is the worker's profile.
 _MODELS_PATH = "/chat/completions"
@@ -195,6 +197,7 @@ class HostedGateway:
         client_id: str,
         namespace: str,
         launch_context: PlatformLaunchContext,
+        project_data: ProjectDataVolume | None = None,
     ) -> dict[str, str]:
         """Return the deployment manifest and the files it names, by Secret key."""
         settings = self._settings
@@ -259,7 +262,7 @@ class HostedGateway:
                         "image_digest": digest,
                         "supervisor_image_digest": self._supervisor,
                         "sandbox_image_digest": self._sandbox,
-                        "workspace": "research",
+                        "workspace": WORKER_WORKSPACE,
                         # The init container of the gateway pod replaces it with the
                         # digest that the session's OpenShell gateway admits the policy with.
                         "sandbox_policy_sha256": _PENDING_DIGEST,
@@ -277,6 +280,19 @@ class HostedGateway:
                 _table(
                     "worker.inputs",
                     {"schema_version": "heartwood.worker-inputs.v1", "files": []},
+                ),
+                # The session's read-only copy of the project's data, which admission checks.
+                ""
+                if project_data is None
+                else _table(
+                    "worker.project_data",
+                    {
+                        "claim_name": project_data.claim_name,
+                        "claim_uid": project_data.claim_uid,
+                        "project": launch_context.project_id,
+                        "content_sha256": project_data.content_sha256,
+                        "mount_path": project_data.mount_path,
+                    },
                 ),
                 _table(
                     "planning",

@@ -307,6 +307,7 @@ class LaunchService:
                 client_id=launch.client_id,
                 namespace=launch.namespace,
                 launch_context=launch.launch_context,
+                project_data=volume,
             )
         )
         # The gateway pod mounts this Secret. Only it carries credentials; the reply

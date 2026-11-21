@@ -195,6 +195,11 @@ _REMOVAL_SECONDS = 60
 # The supervisor pod can stay for its termination grace period after the sandbox gateway
 # reports the deletion.
 _ABSENCE_SECONDS = 90
+# The volume name of a platform-declared project data claim, and the claim's labels and
+# annotation that the platform sets when it filled it.
+_PROJECT_DATA = "project-data"
+_PROJECT_LABEL = "heartwood.platform/project"
+_CONTENT_ANNOTATION = "heartwood.platform/content-sha256"
 _POLICY = "networkpolicy.networking.k8s.io"
 _CLAIM = "persistentvolumeclaim"
 _SANDBOX_RESOURCE = "sandbox.agents.x-k8s.io"
@@ -527,7 +532,24 @@ def admission_record(observed: dict[str, Any]) -> dict[str, Any]:
     """
     namespace = observed.get("namespace")
     labels = _field(namespace, "metadata", "labels")
+    claim = observed.get("project_data_claim")
+    data = (
+        {}
+        if claim is None
+        else {
+            "project_data": {
+                "claim_name": _reported(_field(claim, "metadata", "name")),
+                "claim_uid": _reported(_field(claim, "metadata", "uid")),
+                "project": _reported(_field(claim, "metadata", "labels", _PROJECT_LABEL)),
+                "content_sha256": _reported(
+                    _field(claim, "metadata", "annotations", _CONTENT_ANNOTATION)
+                ),
+                "access_modes": _reported(_field(claim, "spec", "accessModes")),
+            }
+        }
+    )
     return {
+        **data,
         "workload_pod": _pod_record(observed.get("workload_pod")),
         "supervisor_pod": _pod_record(observed.get("supervisor_pod")),
         "network_policies": {
@@ -675,6 +697,11 @@ class KubernetesWorkerAdmission:
         self.names = {
             mount: f"hw-attempt-{intent.attempt_id.hex}-{mount}" for mount in ("inputs", "skills")
         }
+        # Every read-only claim of the worker by volume name: its claim and its mount path.
+        self.read_only_claims = {mount: (claim, f"/{mount}") for mount, claim in self.names.items()}
+        if settings.project_data is not None:
+            data = settings.project_data
+            self.read_only_claims[_PROJECT_DATA] = (data.claim_name, str(data.mount_path))
         self.worker_name = f"hw-{intent.attempt_id.hex[:16]}"
         # The driver names the Sandbox resource and its workload pod after both.
         self.pod_name = f"{settings.workspace}--{self.worker_name}"
@@ -722,7 +749,17 @@ class KubernetesWorkerAdmission:
         if _SANDBOX_ID.fullmatch(sandbox_id) is None:
             raise WorkerAttemptError("native sandbox identity cannot name Kubernetes objects")
         driver_policies = ("os-control-" + sandbox_id, _FENCE_POLICY)
+        data = self.settings.project_data
         return {
+            **(
+                {}
+                if data is None
+                else {
+                    "project_data_claim": self._get(
+                        _CLAIM, "PersistentVolumeClaim", data.claim_name
+                    )
+                }
+            ),
             "workload_pod": self._get("pod", "Pod", self.pod_name),
             "supervisor_pod": self._get("pod", "Pod", "os-supervisor-" + sandbox_id),
             "control_policy": self._get(_POLICY, "NetworkPolicy", driver_policies[0]),
@@ -742,6 +779,7 @@ class KubernetesWorkerAdmission:
         sandbox = self._inspect_workload(observed["workload_pod"], sandbox_id)
         self._inspect_supervisor(observed["supervisor_pod"], sandbox_id, sandbox)
         self._inspect_policies(observed, sandbox_id, sandbox)
+        self._inspect_project_data(observed)
         namespace = observed["namespace"]
         version = _field(namespace, "metadata", "labels", _POD_SECURITY + "-version")
         if (
@@ -753,6 +791,27 @@ class KubernetesWorkerAdmission:
             raise WorkerAttemptError(
                 "native worker namespace does not enforce the restricted Pod Security level"
             )
+
+    def _inspect_project_data(self, observed: dict[str, Any]) -> None:
+        """Require the declared claim: its identity, its project and its content."""
+        data = self.settings.project_data
+        if data is None:
+            return
+        metadata = _field(observed["project_data_claim"], "metadata")
+        if _field(metadata, "labels", _PROJECT_LABEL) != data.project:
+            raise WorkerAttemptError("native project data volume belongs to another project")
+        if (
+            _field(metadata, "uid") != data.claim_uid
+            or _field(metadata, "annotations", _CONTENT_ANNOTATION) != data.content_sha256
+            or _field(metadata, "labels", "openshell.ai/sandbox-attachable") != "true"
+            or _field(metadata, "labels", "openshell.ai/sandbox-attachable-workspace")
+            != self.settings.workspace
+            or any(
+                _field(observed["project_data_claim"], "spec", source) is not _ABSENT
+                for source in ("dataSource", "dataSourceRef")
+            )
+        ):
+            raise WorkerAttemptError("native project data volume does not match its declaration")
 
     def _inspect_workload(self, pod: dict[str, Any], sandbox_id: str) -> tuple[str, str]:
         """Decide on the workload pod and return the name and UID of its Sandbox resource."""
@@ -843,7 +902,7 @@ class KubernetesWorkerAdmission:
                 "name": mount,
                 "persistentVolumeClaim": {"claimName": claim, "readOnly": True},
             }
-            for mount, claim in self.names.items()
+            for mount, (claim, _) in self.read_only_claims.items()
         }
         workspace = volumes.get("workspace", {})
         claim = _field(workspace, "persistentVolumeClaim")
@@ -884,7 +943,7 @@ class KubernetesWorkerAdmission:
         ):
             raise WorkerAttemptError("native worker has a volume that admission does not list")
         for mount, volume in projections.items():
-            target = PurePosixPath("/" + mount)
+            target = PurePosixPath(self.read_only_claims[mount][1])
             matching = [
                 observed
                 for observed in mounts[_AGENT]
@@ -905,8 +964,20 @@ class KubernetesWorkerAdmission:
                     for observed in observed_mounts
                     if observed.get("name") == mount
                 )
+                # The volume is mounted once, in the worker's container, at its own path.
+                or [
+                    (name, observed.get("mountPath"))
+                    for name, observed_mounts in mounts.items()
+                    for observed in observed_mounts
+                    if observed.get("name") == mount
+                ]
+                != [(_AGENT, str(target))]
             ):
-                raise WorkerAttemptError("native worker projection mount is not read-only")
+                raise WorkerAttemptError(
+                    "native project data volume is not mounted read-only at its declared path"
+                    if mount == _PROJECT_DATA
+                    else "native worker projection mount is not read-only"
+                )
 
     def _inspect_supervisor(
         self, pod: dict[str, Any], sandbox_id: str, sandbox: tuple[str, str]
@@ -1203,17 +1274,17 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
         self._remove_staging()
 
     def driver_config(self) -> dict[str, Any]:
-        """Supply only the two attempt-owned claims, read-only on the volume and the mount."""
+        """Supply the attempt-owned claims and any project data, read-only on volume and mount."""
         return {
             "volumes": [
                 {"name": mount, "persistent_volume_claim": {"claim_name": claim, "read_only": True}}
-                for mount, claim in self.names.items()
+                for mount, (claim, _) in self.read_only_claims.items()
             ],
             "containers": {
                 _AGENT: {
                     "volume_mounts": [
-                        {"name": mount, "mount_path": f"/{mount}", "read_only": True}
-                        for mount in self.names
+                        {"name": mount, "mount_path": path, "read_only": True}
+                        for mount, (_, path) in self.read_only_claims.items()
                     ]
                 }
             },

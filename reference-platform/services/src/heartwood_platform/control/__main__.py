@@ -170,6 +170,10 @@ class Settings(_Settings):
             raise ValueError("model names must be unique")
         if self.hosted.model_route.model not in names:
             raise ValueError("the worker's model is not a model of the route")
+        if self.project_data is not None and self.project_data.workspace != WORKER_WORKSPACE:
+            raise ValueError(
+                f"project data volumes are attached to the workspace {WORKER_WORKSPACE}"
+            )
         try:
             headroom = request_headroom(route_models(self), self.synthetic_prices)
         except InferenceSetupError as error:

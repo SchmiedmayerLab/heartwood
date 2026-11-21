@@ -285,6 +285,31 @@ The credential in `kubeconfig` needs these permissions in `namespace` and no oth
 The namespace must provide what [staging](../architecture/system.md#kubernetes-worker-staging) uses: a service account `hw-staging`, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pod all traffic.
 `kubectl` runs with `PATH` and a temporary home directory only, so a `kubeconfig` that calls a credential plugin is not supported.
 
+An optional `[worker.project_data]` table declares a read-only volume of the project's data that the platform filled before the gateway started:
+
+```toml
+[worker.project_data]
+claim_name = "hw-project-data-0123456789abcdef"
+claim_uid = "6f1b8c2e-4d3a-4b5c-9e8f-0a1b2c3d4e5f"
+project = "demo"
+content_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+mount_path = "/data"
+```
+
+| Key | Requirement |
+|---|---|
+| `claim_name` | Name of the persistent volume claim in `namespace` |
+| `claim_uid` | UID the cluster gave the claim; a claim created again under the name has another UID |
+| `project` | The platform project the claim belongs to, which its label `heartwood.platform/project` names |
+| `content_sha256` | Digest of the claim's content, which its annotation `heartwood.platform/content-sha256` names |
+| `mount_path` | Normalized path at which the worker reads the data: `/data`, an empty directory in the worker image, or a path below it, so the volume never shadows part of the image |
+
+The driver configuration attaches the claim read-only on the volume and on the mount, and [admission](../architecture/system.md#kubernetes-worker-admission) refuses a worker whose volume differs from the declaration.
+The policy file must list `mount_path` under `filesystem.read_only`, and no entry under `filesystem.read_write` may be `mount_path` or a path above it.
+Each entry under `filesystem.read_write` must then be an absolute, normalized path.
+The claim must carry the label `openshell.ai/sandbox-attachable` set to `true` and the label `openshell.ai/sandbox-attachable-workspace` set to `workspace`, which the platform sets once the claim is filled.
+The declaration is part of each attempt's input identity.
+
 ### Model Connections
 
 The `[model_connections]` table supplies platform model connections in the [`heartwood.model-connections.v1`](../operate/platform-contract.md#contract-artifacts) format.

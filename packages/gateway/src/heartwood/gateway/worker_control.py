@@ -12,12 +12,14 @@ import hashlib
 import importlib
 import json
 import os
+import posixpath
 import re
 import signal
 import subprocess
 import sys
 from collections import deque
 from contextlib import suppress
+from pathlib import PurePosixPath
 from threading import Event, Thread
 from time import monotonic
 from typing import Any
@@ -193,6 +195,23 @@ class NativeWorkerControl:
             or (
                 isinstance(self.settings, KubernetesWorkerDeployment)
                 and "/workspace" not in policy.filesystem.read_write
+            )
+            # The worker reads project data only where the policy lists it read-only.
+            or (
+                isinstance(self.settings, KubernetesWorkerDeployment)
+                and self.settings.project_data is not None
+                and (
+                    str(self.settings.project_data.mount_path) not in policy.filesystem.read_only
+                    # A Landlock rule covers everything below its path, which must be
+                    # canonical so the comparison sees the path the kernel resolves.
+                    or any(
+                        not path.startswith("/")
+                        or path.startswith("//")
+                        or posixpath.normpath(path) != path
+                        or self.settings.project_data.mount_path.is_relative_to(PurePosixPath(path))
+                        for path in policy.filesystem.read_write
+                    )
+                )
             )
         ):
             raise WorkerAttemptError(
