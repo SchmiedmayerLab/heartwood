@@ -162,3 +162,5 @@ def test_gateway_has_the_settings_the_platform_requirements_name() -> None:
     assert driver["workspace_mode"] == "shared"
     assert driver["supervisor_image"] == release["supervisor"]
     assert driver["sandbox_runtime_image"] == release["sandbox"]
+    # Creations without a recorded outcome keep their request admission slot.
+    assert configuration["openshell"]["gateway"]["mutation_admission_limit_per_caller"] == 100000

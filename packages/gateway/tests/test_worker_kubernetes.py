@@ -231,6 +231,7 @@ def _objects(admission: KubernetesWorkerAdmission) -> Objects:
                 "seccompProfile": {"type": "RuntimeDefault"},
                 "supplementalGroupsPolicy": "Strict",
             },
+            "restartPolicy": "Never",
             "serviceAccountName": "openshell-sandbox",
             "shareProcessNamespace": False,
             "volumes": [
@@ -588,6 +589,7 @@ _CONTEXT = ("securityContext",)
 _CONFINEMENT = [
     *_case(_workload, "token", ("spec", "automountServiceAccountToken"), _DELETE, True, None),
     *_case(_workload, "process-namespace", ("spec", "shareProcessNamespace"), _DELETE, True),
+    *_case(_workload, "restart", ("spec", "restartPolicy"), _DELETE, "Always", "OnFailure"),
     *_case(_workload, "pod-user", ("spec", *_CONTEXT, "runAsUser"), _DELETE, 0, 1000, "10001"),
     *_case(_workload, "pod-group", ("spec", *_CONTEXT, "runAsGroup"), _DELETE, 0, True),
     *_case(_workload, "pod-fs-group", ("spec", *_CONTEXT, "fsGroup"), _DELETE, 0),

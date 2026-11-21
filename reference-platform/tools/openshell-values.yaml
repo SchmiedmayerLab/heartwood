@@ -59,5 +59,10 @@ server:
 gatewayConfig:
   openshell:
     version: 2
+  # Heartwood sends each worker creation with a request identifier. A creation without a
+  # recorded outcome keeps its admission slot for as long as the session's store keeps it,
+  # so one session's gateway allows far more than the default 1,000.
+  openshell.gateway:
+    mutation_admission_limit_per_caller: 100000
   openshell.drivers.kubernetes:
     allowed_pod_labels: ["heartwood.project", "heartwood.attempt", "heartwood.role"]

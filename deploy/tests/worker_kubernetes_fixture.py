@@ -378,7 +378,7 @@ class KubernetesFixture:
         return name, created.id
 
     def revoke_probes(self) -> None:
-        """Delete every probe and require the gateway to report each one deleted."""
+        """Delete every probe and require that neither the gateway nor the cluster shows it."""
         for name, sandbox_id in tuple(self.probes.items()):
             for _ in range(5):
                 try:
@@ -394,7 +394,52 @@ class KubernetesFixture:
                 self.control.wait_deleted(
                     name, workspace=WORKSPACE, expected_sandbox_id=sandbox_id, timeout_seconds=90
                 )
+                # The gateway reports the deletion once the Sandbox resource and the workload pod
+                # are gone; garbage collection removes the supervisor pod afterwards, on its own
+                # grace period, so absence is awaited here as revocation awaits it.
+                self._await_probe_absence(name, sandbox_id)
             del self.probes[name]
+
+    def _await_probe_absence(self, name: str, sandbox_id: str) -> None:
+        """Wait until no Sandbox resource, pod or claim of the probe remains, recording each."""
+        observed: list[dict[str, object]] = []
+        deadline = time.monotonic() + 120
+        while True:
+            listed = json.loads(
+                self.outside(
+                    "get",
+                    "sandboxes.agents.x-k8s.io,pods,persistentvolumeclaims",
+                    "--output=json",
+                )
+            )["items"]
+            remaining = [
+                item
+                for item in listed
+                if name in json.dumps(item["metadata"]) or sandbox_id in json.dumps(item)
+            ]
+            observed.append(
+                {
+                    "seconds": round(120 - (deadline - time.monotonic()), 1),
+                    "objects": [
+                        {
+                            "name": f"{item['kind']}/{item['metadata']['name']}",
+                            "deletion_timestamp": item["metadata"].get("deletionTimestamp"),
+                            "owner_references": item["metadata"].get("ownerReferences", []),
+                            "finalizers": item["metadata"].get("finalizers", []),
+                            "phase": (item.get("status") or {}).get("phase"),
+                        }
+                        for item in remaining
+                    ],
+                }
+            )
+            if not remaining or time.monotonic() > deadline:
+                break
+            time.sleep(2)
+        (self.output / f"probe-absence-{name}.json").write_text(
+            json.dumps(observed, indent=2) + "\n"
+        )
+        if observed[-1]["objects"]:
+            raise RuntimeError(f"Objects of probe {name} remain after its deletion")
 
     def qualify_policy(self) -> str:
         """Admit a disposable probe before selecting the launch policy hash."""

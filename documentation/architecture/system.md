@@ -102,7 +102,8 @@ The worker is the OpenHands agent server from the Heartwood worker image, starte
 Before starting the server it registers the image's own verified advisory specialists.
 It runs in an OpenShell sandbox created through OpenShell's Docker or Kubernetes driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
 With `openshell-kubernetes`, the driver mounts the sandbox's workspace claim at `/sandbox`, and `/workspace` is the image's own directory on the container's writable layer.
-Files the worker writes to `/workspace` on this driver are lost when the container restarts.
+The workload pod's restart policy is `Never`, which admission requires, so the kubelet never restarts the worker's container.
+When that container ends, the sandbox gateway no longer reports the sandbox ready, and Heartwood fences the attempt at its next runtime observation and revokes it, so `/workspace` lasts as long as the worker.
 The sandbox has no network of its own (`network=none`); its only routes are those the OpenShell policy and supervisor permit.
 
 The gateway reaches the worker through an `openshell forward service` tunnel on loopback and authenticates every request with a per-attempt `SESSION_API_KEY`.
@@ -180,6 +181,7 @@ The table lists the accepted values next to the values Docker inspection accepts
 | Other security settings | Not applicable | No security context field other than those in this table, `readOnlyRootFilesystem`, `fsGroupChangePolicy`, and `supplementalGroupsPolicy`; no sysctl other than `net.ipv4.ip_unprivileged_port_start`; no `runtimeClassName`; no host port; no restart policy on a container |
 | Environment | Not inspected | No `envFrom` and no `valueFrom` entry, so no Secret or ConfigMap reaches a container through its environment |
 | Process and IPC namespaces | `PidMode` and `IpcMode` are private | `hostPID` and `hostIPC` are false; `shareProcessNamespace` is false on the workload pod |
+| Restart | Not inspected | `restartPolicy` is `Never` on the workload pod |
 | User namespace | `UsernsMode` is empty | `hostUsers` is true |
 | Cgroup namespace | `CgroupnsMode` is `private` | Not reported |
 | User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod, and a pod-level `runAsUser` or `runAsGroup` on the supervisor pod is `10001`; `fsGroup` is `10001` on both pods, and neither lists another supplemental group |

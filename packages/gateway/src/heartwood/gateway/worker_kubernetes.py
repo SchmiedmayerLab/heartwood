@@ -115,6 +115,7 @@ _RECORDED_POD_FIELDS = (
     "hostUsers",
     "shareProcessNamespace",
     "automountServiceAccountToken",
+    "restartPolicy",
     "securityContext",
     "resources",
     "resourceClaims",
@@ -793,6 +794,9 @@ class KubernetesWorkerAdmission:
         if (
             not _pod_confined(pod)
             or _field(spec, "shareProcessNamespace") is not False
+            # The kubelet never restarts the worker: when its container ends, the worker
+            # and its writable layer end with it, and the attempt is revoked.
+            or _field(spec, "restartPolicy") != "Never"
             or not all(_is_worker_id(_field(context, name)) for name in ("runAsUser", "runAsGroup"))
             or _field(context, "runAsNonRoot") is not True
             or not all(_confined(container) for container in everything)
