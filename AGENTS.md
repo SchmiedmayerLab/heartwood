@@ -46,6 +46,7 @@ When project direction changes, update the relevant architecture or operations p
 | Scientific experiment records, lineage, and recovery | [documentation/architecture/experiments.md](documentation/architecture/experiments.md) |
 | Skill trust, distribution, activation, and interface contract | [documentation/architecture/skills.md](documentation/architecture/skills.md) |
 | Research Skill contribution, policy, and validation | [documentation/contribute/skills.md](documentation/contribute/skills.md) |
+| Kubernetes reference platform layout and cloud boundary | [reference-platform/README.md](reference-platform/README.md) |
 | Testing layers and evidence language | [documentation/architecture/testing.md](documentation/architecture/testing.md) |
 | Python and web development workflow | [documentation/contribute/development.md](documentation/contribute/development.md) |
 | Pull request description structure | [Organization pull request template](https://github.com/SchmiedmayerLab/.github/blob/main/.github/pull_request_template.md) |

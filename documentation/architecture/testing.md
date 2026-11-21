@@ -30,6 +30,7 @@ Release documentation states the supported contract; run-specific results stay i
 | Supply chain | `pytest` with an ephemeral TUF repository | Skill refresh, offline verification, expiry, rollback, substitution, path confinement, exact-digest approval, and revocation |
 | Container and native smoke | Container smoke and native release workflows | Entrypoints, filesystem layout, no secrets in image layers, offline operation, and installation of the release archive in an empty Ubuntu 24.04 container |
 | Capable-model acceptance | Capable model workflow, optional GPU qualification | Real inference driving the gateway and OpenHands through approval, rejection, replay, and audit export |
+| Reference platform boundary and services | Reference platform workflow | Application packages free of cloud SDKs, cloud infrastructure identifiers and platform code; platform service lint, types and tests |
 | Native qualification | Worker candidate workflow | The installed application, worker image, and qualification gateway across the complete managed worker boundary |
 | Live synthetic validation | Operator run in Terra or Carina | The exact published artifact in the named platform without protected data |
 

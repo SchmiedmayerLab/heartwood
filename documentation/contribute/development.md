@@ -78,6 +78,7 @@ The candidate workflow tests the installed wheels with isolated Python imports, 
 | Pinned curated Skill source and shared catalog tooling | `vendor/heartwood-skills` from [`SchmiedmayerLab/heartwood-skills`](https://github.com/SchmiedmayerLab/heartwood-skills) |
 | Synthetic fixtures | `fixtures/synthetic`, `evals` |
 | Images, native packaging, and release logic | `images`, `deploy`, `.github/workflows` |
+| Kubernetes reference platform, outside the application workspace | `reference-platform` |
 | Public documentation | `documentation` |
 
 ## Run Checks
@@ -96,6 +97,8 @@ npm run --prefix packages/webui typecheck
 npm test --prefix packages/webui
 npm run --prefix packages/webui build
 uv run --group docs zensical build --clean --strict
+python3 reference-platform/tools/check_cloud_boundary.py
+(cd reference-platform/services && uv sync --locked && uv run mypy && uv run pytest)
 ```
 
 Run focused tests while iterating, then run the complete affected suites before review.

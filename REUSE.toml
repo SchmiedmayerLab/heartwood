@@ -17,6 +17,8 @@ path = [
     ".jscpd.json",
     ".python-version",
     "uv.lock",
+    "reference-platform/services/.python-version",
+    "reference-platform/services/uv.lock",
     "agents/**/*.md",
     "images/gpu/vllm-requirements.txt",
     "images/worker/config.json",
