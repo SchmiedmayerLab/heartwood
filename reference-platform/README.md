@@ -411,7 +411,7 @@ A session whose project has no more than that cost available is refused.
 The control service creates the provider `hub.modelRoute.provider` in the workspace `research` of the session's OpenShell gateway with the key, through the pinned OpenShell command-line tool in the platform services image, and keeps only the key's SHA-256 hash.
 The provider's profile allows the key only in `POST` requests to LiteLLM's chat completions endpoint from `hub.modelRoute.binaries` of the worker image; a worker that attaches the provider sees a placeholder in `hub.modelRoute.placeholderEnv`.
 OpenShell identifies a program by the path that its links resolve to, so `hub.modelRoute.binaries` names the worker image's interpreter by that path, which depends on the architecture; `deploy/qualify-kubernetes-worker.py images` reports it as `worker_interpreter`, and the [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with it.
-The value has no default, and the chart refuses to render without it.
+The value has no default, and the chart refuses to render without it, or with the stand-in program `/agnhost` of `values-kind.yaml` together with another `hub.worker.image`.
 Each launch also gives the session a new discovery key, which may only list the route's models; the previous key stays valid for a gateway started before the launch, and the key before it is deleted.
 The gateway lists models with it through the model connection `hub.modelRoute.profileId` of its manifest, trusting the platform CA alone, and the manifest declares each model's limits and tool support.
 At a later launch the worker key keeps its budget and gets the route's current models, so a model removed from `inference.models` is refused from then on; a session whose OpenShell gateway lost the provider gets a rotated key.
@@ -559,7 +559,7 @@ bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
 The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py` and `test_hosted_worker.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
-`test_hosted_worker.py` also needs the worker image in `hub.worker.image`.
+`test_hosted_worker.py` also needs the worker image in `hub.worker.image` and its interpreter in `hub.modelRoute.binaries`.
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
