@@ -1,5 +1,5 @@
 diff --git a/crates/openshell-server/src/compute/mod.rs b/crates/openshell-server/src/compute/mod.rs
-index cd14dc2..746d929 100644
+index 4ba1311..179ad13 100644
 --- a/crates/openshell-server/src/compute/mod.rs
 +++ b/crates/openshell-server/src/compute/mod.rs
 @@ -369,13 +369,17 @@ struct DeleteTransition {
@@ -7,7 +7,7 @@ index cd14dc2..746d929 100644
  }
  
 +/// An explicit delete of a sandbox already marked deleting calls the driver again.
-+pub(crate) const DELETE_RETRIES_DELETING: &str = "openshell.compute.delete-retries-deleting";
++pub const DELETE_RETRIES_DELETING: &str = "openshell.compute.delete-retries-deleting";
 +
  /// Result of trying to claim ownership of a sandbox's delete operation.
  #[derive(Debug)]

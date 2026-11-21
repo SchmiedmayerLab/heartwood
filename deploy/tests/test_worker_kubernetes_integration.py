@@ -971,6 +971,70 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
         native._stop(application)
 
 
+def _reason(error: grpc.RpcError) -> str | None:
+    """The reason of the error details the gateway attaches to a refusal."""
+    from google.rpc import error_details_pb2, status_pb2
+
+    for key, value in error.trailing_metadata() or ():  # type: ignore[attr-defined]
+        if key == "grpc-status-details-bin":
+            status = status_pb2.Status.FromString(value)
+            for detail in status.details:
+                info = error_details_pb2.ErrorInfo()
+                if detail.Unpack(info):
+                    return str(info.reason)
+    return None
+
+
+def test_kubernetes_repeated_creation_is_not_executed_after_revocation(
+    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A creation delivered again after its sandbox was revoked creates nothing."""
+    from openshell import SandboxClient
+
+    fixture = infrastructure
+    create = SandboxClient.create
+    delivered: dict[str, Any] = {}
+
+    def lose_reply(client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
+        if "heartwood.attempt" not in request.get("labels", {}):
+            raise AssertionError("Only the attempt's creation is expected here")
+        delivered.update(request)
+        create(client, **request)
+        raise TimeoutError("synthetic lost creation reply")
+
+    application = native._application(fixture)
+    service = application._service("composition")
+    monkeypatch.setattr(SandboxClient, "create", lose_reply)
+    try:
+        native._submit(application, CommandKind.CHAT, {"prompt": "Synthetic repeated creation."})
+        attempt_id = _fenced_without_worker(service)
+        assert delivered["request_id"] == attempt_id
+        native._stop(application)
+        _settled(service, "revoked")
+        # The same request arrives again: the gateway refuses to execute it a second time.
+        monkeypatch.setattr(SandboxClient, "create", create)
+        with pytest.raises(grpc.RpcError) as refused:
+            fixture.control.create(**delivered)
+        assert refused.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+        assert _reason(refused.value) == "REQUEST_REPLAY_UNAVAILABLE"
+        time.sleep(10)
+        assert fixture.objects() == []
+        _evidence(
+            fixture,
+            {
+                "drill_id": "kubernetes-repeated-creation.v1",
+                "attempt_id": attempt_id,
+                "request_id": delivered["request_id"],
+                "revocation_outcome": "revoked",
+                "repeated_creation": refused.value.code().name,
+                "objects_after_repeated_creation": [],
+                "provider_requests": len(fixture.provider.observations),
+            },
+        )
+    finally:
+        native._stop(application)
+
+
 def _refused_launch(
     fixture: KubernetesFixture, method: str, **deployment: str
 ) -> tuple[SessionService, str, list[str]]:

@@ -1,27 +1,110 @@
 diff --git a/crates/openshell-server/src/compute/mod.rs b/crates/openshell-server/src/compute/mod.rs
-index 5d80faf..162ddbc 100644
+index 179ad133..0ec69aad 100644
 --- a/crates/openshell-server/src/compute/mod.rs
 +++ b/crates/openshell-server/src/compute/mod.rs
-@@ -372,6 +372,18 @@ struct DeleteTransition {
+@@ -372,6 +372,101 @@ struct DeleteTransition {
  /// An explicit delete of a sandbox already marked deleting calls the driver again.
- pub(crate) const DELETE_RETRIES_DELETING: &str = "openshell.compute.delete-retries-deleting";
+ pub const DELETE_RETRIES_DELETING: &str = "openshell.compute.delete-retries-deleting";
  
 +/// A creation is rejected under a name that a deletion found absent.
-+pub(crate) const CREATE_REJECTS_DELETED_NAME: &str =
-+    "openshell.compute.create-rejects-deleted-name";
++pub const CREATE_REJECTS_DELETED_NAME: &str = "openshell.compute.create-rejects-deleted-name";
 +/// One record per workspace and name, written when a deletion finds no sandbox.
 +const CONFIRMED_ABSENT_NAME_OBJECT_TYPE: &str = "sandbox_name_confirmed_absent_v1";
 +/// How long a name stays rejected after the last deletion that found it absent.
 +const CONFIRMED_ABSENT_NAME_RETENTION_MS: i64 = 24 * 60 * 60 * 1000;
 +
++/// Absence records one sweep pass visits at most.
++const CONFIRMED_ABSENT_NAME_SWEEP_BATCH: u32 = 1000;
++/// Gateway clocks may differ by up to this much. Records are kept this
++/// much longer, and the sweep deletes a rejected creation only this long
++/// before expiry, so a creation whose check found a record expired stays.
++const CONFIRMED_ABSENT_NAME_CLOCK_MARGIN_MS: i64 = 5 * 60 * 1000;
++/// How long a record is kept after its retention start.
++const CONFIRMED_ABSENT_NAME_KEPT_MS: i64 =
++    CONFIRMED_ABSENT_NAME_RETENTION_MS + CONFIRMED_ABSENT_NAME_CLOCK_MARGIN_MS;
++/// Bounded retries when concurrent deletions write the same record.
++const CONFIRMED_ABSENT_NAME_WRITE_ATTEMPTS: usize = 8;
++
 +fn confirmed_absent_name_retained(recorded_at_ms: i64, now_ms: i64) -> bool {
-+    now_ms < recorded_at_ms.saturating_add(CONFIRMED_ABSENT_NAME_RETENTION_MS)
++    now_ms < recorded_at_ms.saturating_add(CONFIRMED_ABSENT_NAME_KEPT_MS)
++}
++
++/// Payload of an absence record. A deletion writes it empty, so the
++/// retention starts at the record's last write.
++#[derive(Default, serde::Serialize, serde::Deserialize)]
++struct AbsenceRecordPayload {
++    /// Retention start restored by a withdrawn renewal.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    recorded_at_ms: Option<i64>,
++}
++
++impl AbsenceRecordPayload {
++    /// An unreadable payload reads as an ordinary record, which rejects.
++    fn recorded_at_ms(record: &ObjectRecord) -> i64 {
++        serde_json::from_slice::<Self>(&record.payload)
++            .ok()
++            .and_then(|payload| payload.recorded_at_ms)
++            .unwrap_or(record.updated_at_ms)
++    }
++}
++
++/// One write of a deletion to an absence record, as far as it may be undone.
++struct AbsenceWrite {
++    id: String,
++    resource_version: u64,
++    /// Retention start before this write; none when the write inserted it.
++    renewed_from_ms: Option<i64>,
++}
++
++/// Whether a sandbox was never sent to the driver.
++fn never_dispatched(sandbox: &Sandbox) -> bool {
++    sandbox
++        .status
++        .as_ref()
++        .and_then(|status| status.provisioning.as_ref())
++        .is_some_and(|record| {
++            record.driver_operation_id.is_empty() && !record.driver_operation_pending
++        })
++}
++
++/// A never dispatched sandbox that persisted after the retention start of
++/// an absence record under its name, which stays retained beyond `margin_ms`,
++/// is a creation that its own check rejects. A crash before the check can
++/// leave it behind. A record keeps its id and its retention start never
++/// moves back past a write it backs, so the record existed since then.
++fn rejected_creation(
++    absence: &ObjectRecord,
++    sandbox: &ObjectRecord,
++    now_ms: i64,
++    margin_ms: i64,
++) -> bool {
++    let recorded_at_ms = AbsenceRecordPayload::recorded_at_ms(absence);
++    Sandbox::decode(sandbox.payload.as_slice()).is_ok_and(|decoded| never_dispatched(&decoded))
++        && sandbox.created_at_ms >= recorded_at_ms
++        && confirmed_absent_name_retained(recorded_at_ms, now_ms.saturating_add(margin_ms))
++}
++
++fn confirmed_absent_name_rejection(name: &str) -> Status {
++    openshell_core::rpc_error::failed_precondition(
++        "SANDBOX_NAME_CONFIRMED_ABSENT",
++        format!(
++            "sandbox name '{name}' was confirmed absent to a deletion; \
++             create the sandbox under another name"
++        ),
++    )
++}
++
++#[cfg(test)]
++tokio::task_local! {
++    /// Signals `.0` after a deletion recorded an absence and waits for `.1`
++    /// before the deletion reads the name again.
++    static ABSENCE_RECORDED: (Arc<Notify>, Arc<Notify>);
 +}
 +
  /// Result of trying to claim ownership of a sandbox's delete operation.
  #[derive(Debug)]
  enum BeginDelete {
-@@ -1028,13 +1040,16 @@ impl ComputeRuntime {
+@@ -1028,13 +1123,16 @@ impl ComputeRuntime {
              capabilities.extension.clone(),
          )
          .map_err(|error| ComputeError::Message(error.to_string()))?;
@@ -43,7 +126,7 @@ index 5d80faf..162ddbc 100644
          info!(
              configured_driver = %driver_name,
              advertised_driver = %capabilities.driver_name,
-@@ -1785,6 +1800,18 @@ impl ComputeRuntime {
+@@ -1785,6 +1883,28 @@ impl ComputeRuntime {
              }
          };
  
@@ -54,43 +137,197 @@ index 5d80faf..162ddbc 100644
 +            .ensure_name_not_confirmed_absent(sandbox.object_workspace(), sandbox.object_name())
 +            .await
 +        {
-+            return Err(self
-+                .compensate_failed_create(&sandbox, lifecycle_guard, None, status)
-+                .await);
++            let cleanup = self
++                .compensate_failed_create(&sandbox, lifecycle_guard, None, status.clone())
++                .await;
++            if status.code() != Code::FailedPrecondition {
++                return Err(cleanup);
++            }
++            // The driver was never called, so the rejection stands even when
++            // cleanup is pending or claimed elsewhere; reconciliation ends it.
++            if cleanup.message() != status.message() {
++                warn!(sandbox_id = %sandbox_id, cleanup = %cleanup.message(),
++                    "Cleanup after a rejected creation did not complete");
++            }
++            return Err(status);
 +        }
 +
          if let Err(status) = Box::pin(crate::grpc::policy::initialize_policy_history(
              self.store.as_ref(),
              &sandbox,
-@@ -3382,6 +3409,18 @@ impl ComputeRuntime {
-             .get_message_by_name::<Sandbox>(workspace, name)
+@@ -2405,6 +2525,7 @@ impl ComputeRuntime {
              .await
-             .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?;
-+        let candidate = match candidate {
-+            Some(candidate) => Some(candidate),
-+            None => {
-+                // Record the absence, then read again. A creation that
-+                // persisted first is deleted below; a later one is rejected.
-+                self.record_confirmed_absent_name(workspace, name).await?;
-+                self.store
-+                    .get_message_by_name::<Sandbox>(workspace, name)
-+                    .await
-+                    .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
-+            }
-+        };
-         let Some(candidate) = candidate else {
+             .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?
+             .ok_or_else(|| Status::not_found("sandbox not found"))?;
++        self.ensure_not_rejected_creation(&candidate).await?;
+         self.validate_isolation_backend_binding(&candidate)?;
+         if self.isolation_backend.is_some() {
+             self.validate_launch_signer_configured(authority.is_some())?;
+@@ -3374,15 +3495,7 @@ impl ComputeRuntime {
+                 "expected_resource_version requires expected_sandbox_id",
+             ));
+         }
+-        // Resolve and acquire both request-side locks before spawning the
+-        // owned worker. Cancellation while any of these awaits is pending is
+-        // harmless because no mutation or detached work has started.
+-        let candidate = self
+-            .store
+-            .get_message_by_name::<Sandbox>(workspace, name)
+-            .await
+-            .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))?;
+-        let Some(candidate) = candidate else {
++        let Some(candidate) = self.look_up_name_for_deletion(workspace, name).await? else {
              if allow_missing {
                  return Ok(DeleteSandboxResult {
-@@ -3407,6 +3446,55 @@ impl ComputeRuntime {
+                     sandbox_id: String::new(),
+@@ -3407,6 +3520,341 @@ impl ComputeRuntime {
          self.delete_sandbox_target(target, preconditions).await
      }
  
++    /// Renews the record behind a replayed `ALREADY_ABSENT`, as a new
++    /// deletion would. Returns false when a sandbox has the name now.
++    pub(crate) async fn renew_replayed_absence(
++        &self,
++        workspace: &str,
++        name: &str,
++    ) -> Result<bool, Status> {
++        Ok(self
++            .look_up_name_for_deletion(workspace, name)
++            .await?
++            .is_none())
++    }
++
++    /// Returns the sandbox under the name, or none when no sandbox has it
++    /// and no later creation under it can reach the driver. Runs detached,
++    /// so that a cancelled request still undoes a record it does not need.
++    async fn look_up_name_for_deletion(
++        &self,
++        workspace: &str,
++        name: &str,
++    ) -> Result<Option<Sandbox>, Status> {
++        let runtime = self.clone();
++        let (workspace, name) = (workspace.to_string(), name.to_string());
++        let lookup = async move { runtime.look_up_name(&workspace, &name).await };
++        #[cfg(test)]
++        let lookup = {
++            let hook = ABSENCE_RECORDED.try_with(Clone::clone).ok();
++            async move {
++                match hook {
++                    Some(hook) => ABSENCE_RECORDED.scope(hook, lookup).await,
++                    None => lookup.await,
++                }
++            }
++        };
++        tokio::spawn(Box::pin(lookup).instrument(tracing::Span::current()))
++            .await
++            .map_err(|err| Status::internal(format!("sandbox name lookup failed: {err}")))?
++    }
++
++    async fn look_up_name(&self, workspace: &str, name: &str) -> Result<Option<Sandbox>, Status> {
++        let read = || async {
++            self.store
++                .get_message_by_name::<Sandbox>(workspace, name)
++                .await
++                .map_err(|e| Status::internal(format!("fetch sandbox failed: {e}")))
++        };
++        if let Some(candidate) = read().await? {
++            return Ok(Some(candidate));
++        }
++        // Creation rejects a longer name before it persists anything, so
++        // the absence of such a name needs no record.
++        if name.len() > crate::grpc::MAX_ROUTABLE_NAME_LEN {
++            return Ok(None);
++        }
++        // Record the absence, then read again. A creation that persisted
++        // first is found here; a later one is rejected by its check.
++        let written = self.record_confirmed_absent_name(workspace, name).await?;
++        #[cfg(test)]
++        {
++            if let Ok((reached, resume)) = ABSENCE_RECORDED.try_with(Clone::clone) {
++                reached.notify_one();
++                resume.notified().await;
++            }
++        }
++        let candidate = read().await?;
++        if candidate.is_some()
++            && let Some(written) = written
++        {
++            // This deletion answers for the sandbox it found, never with
++            // absence, so its write backs no answer.
++            self.withdraw_absence_write(workspace, name, &written).await;
++        }
++        Ok(candidate)
++    }
++
++    /// Inserts the record or renews it in place, and returns the write. A
++    /// renewal keeps the record's id, and an undo is conditional on this
++    /// write's version, so it never touches a write of another deletion.
++    /// Under persistent contention it falls back to an upsert that is never
++    /// undone, which keeps the name rejected until the record expires.
 +    async fn record_confirmed_absent_name(
 +        &self,
 +        workspace: &str,
 +        name: &str,
-+    ) -> Result<(), Status> {
-+        // An upsert by workspace and name: a repeated deletion renews the record.
++    ) -> Result<Option<AbsenceWrite>, Status> {
++        let failed = |e| Status::internal(format!("record sandbox absence failed: {e}"));
++        for _ in 0..CONFIRMED_ABSENT_NAME_WRITE_ATTEMPTS {
++            let existing = self
++                .store
++                .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, workspace, name)
++                .await
++                .map_err(failed)?;
++            let (id, condition, renewed_from_ms) = match existing {
++                None => (
++                    uuid::Uuid::new_v4().to_string(),
++                    WriteCondition::MustCreate,
++                    None,
++                ),
++                Some(existing) => (
++                    existing.id.clone(),
++                    WriteCondition::MatchResourceVersion(existing.resource_version),
++                    Some(AbsenceRecordPayload::recorded_at_ms(&existing)),
++                ),
++            };
++            // A renewal on a gateway whose clock runs behind must not move
++            // the retention start back past the answers it extends.
++            let payload = match renewed_from_ms {
++                Some(previous) => serde_json::to_vec(&AbsenceRecordPayload {
++                    recorded_at_ms: Some(crate::persistence::current_time_ms().max(previous)),
++                })
++                .map_err(|e| Status::internal(format!("encode sandbox absence record: {e}")))?,
++                None => Vec::new(),
++            };
++            match self
++                .store
++                .put_if(
++                    CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                    &id,
++                    name,
++                    workspace,
++                    &payload,
++                    None,
++                    condition,
++                )
++                .await
++            {
++                Ok(written) => {
++                    return Ok(Some(AbsenceWrite {
++                        id,
++                        resource_version: written.resource_version,
++                        renewed_from_ms,
++                    }));
++                }
++                Err(
++                    crate::persistence::PersistenceError::Conflict { .. }
++                    | crate::persistence::PersistenceError::UniqueViolation { .. },
++                ) => {
++                    // Random backoff spreads concurrent deletions of one name.
++                    let jitter = uuid::Uuid::new_v4().as_u128() % 10;
++                    tokio::time::sleep(Duration::from_millis(1 + jitter as u64)).await;
++                }
++                Err(error) => return Err(failed(error)),
++            }
++        }
 +        self.store
 +            .put_if(
 +                CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
@@ -102,8 +339,61 @@ index 5d80faf..162ddbc 100644
 +                WriteCondition::Unconditional,
 +            )
 +            .await
-+            .map(|_| ())
-+            .map_err(|e| Status::internal(format!("record sandbox absence failed: {e}")))
++            .map_err(failed)?;
++        Ok(None)
++    }
++
++    /// Undoes one write: removes an inserted record, or restores the
++    /// retention start a renewal replaced. Conditional on the write's
++    /// version, so a later write of another deletion stays in force.
++    async fn withdraw_absence_write(&self, workspace: &str, name: &str, written: &AbsenceWrite) {
++        let payload = written.renewed_from_ms.map(|recorded_at_ms| {
++            serde_json::to_vec(&AbsenceRecordPayload {
++                recorded_at_ms: Some(recorded_at_ms),
++            })
++            .unwrap_or_default()
++        });
++        let mut attempts = 0;
++        loop {
++            let result = match &payload {
++                None => self
++                    .store
++                    .delete_if(
++                        CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                        &written.id,
++                        written.resource_version,
++                    )
++                    .await
++                    .map(drop),
++                Some(payload) => self
++                    .store
++                    .put_if(
++                        CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                        &written.id,
++                        name,
++                        workspace,
++                        payload,
++                        None,
++                        WriteCondition::MatchResourceVersion(written.resource_version),
++                    )
++                    .await
++                    .map(drop),
++            };
++            match result {
++                // On a conflict another deletion wrote the record since.
++                Ok(()) | Err(crate::persistence::PersistenceError::Conflict { .. }) => return,
++                Err(error) if attempts < 2 => {
++                    debug!(%error, workspace, name, "Retrying withdrawal of sandbox absence record");
++                    attempts += 1;
++                    tokio::time::sleep(Duration::from_millis(100 << attempts)).await;
++                }
++                Err(error) => {
++                    // The record stays and keeps the name rejected until it expires.
++                    warn!(%error, workspace, name, "Failed to withdraw sandbox absence record");
++                    return;
++                }
++            }
++        }
 +    }
 +
 +    async fn ensure_name_not_confirmed_absent(
@@ -118,18 +408,113 @@ index 5d80faf..162ddbc 100644
 +            .map_err(|e| Status::internal(format!("fetch sandbox absence record failed: {e}")))?;
 +        let retained = record.is_some_and(|record| {
 +            confirmed_absent_name_retained(
-+                record.updated_at_ms,
++                AbsenceRecordPayload::recorded_at_ms(&record),
 +                crate::persistence::current_time_ms(),
 +            )
 +        });
 +        if retained {
-+            return Err(openshell_core::rpc_error::failed_precondition(
-+                "SANDBOX_NAME_CONFIRMED_ABSENT",
-+                format!(
-+                    "sandbox name '{name}' was confirmed absent to a deletion; \
-+                     create the sandbox under another name"
-+                ),
-+            ));
++            return Err(confirmed_absent_name_rejection(name));
++        }
++        Ok(())
++    }
++
++    /// Refuses to start a never dispatched sandbox under a retained record.
++    async fn ensure_not_rejected_creation(&self, sandbox: &Sandbox) -> Result<(), Status> {
++        let failed = |e| Status::internal(format!("fetch sandbox absence record failed: {e}"));
++        let Some(absence) = self
++            .store
++            .get_by_name(
++                CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                sandbox.object_workspace(),
++                sandbox.object_name(),
++            )
++            .await
++            .map_err(failed)?
++        else {
++            return Ok(());
++        };
++        // Without comparing timestamps of different replicas: a sandbox that
++        // passed its check only meets a later record of a deletion that
++        // found it, and then stays unstartable until the record expires.
++        let retained = confirmed_absent_name_retained(
++            AbsenceRecordPayload::recorded_at_ms(&absence),
++            crate::persistence::current_time_ms(),
++        );
++        if retained && never_dispatched(sandbox) {
++            return Err(confirmed_absent_name_rejection(sandbox.object_name()));
++        }
++        Ok(())
++    }
++
++    /// Visits one batch of absence records after `cursor` and wraps around
++    /// at the end. Removes expired records and deletes creations that their
++    /// own check rejects.
++    async fn sweep_confirmed_absent_names(
++        &self,
++        cursor: &mut Option<ObjectCursor>,
++    ) -> Result<(), String> {
++        let page = self
++            .store
++            .list_by_type_after(
++                CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                cursor.as_ref(),
++                CONFIRMED_ABSENT_NAME_SWEEP_BATCH,
++            )
++            .await
++            .map_err(|e| e.to_string())?;
++        let last_page = page.len() < CONFIRMED_ABSENT_NAME_SWEEP_BATCH as usize;
++        for record in page {
++            *cursor = Some(ObjectCursor::from(&record));
++            let now_ms = crate::persistence::current_time_ms();
++            let recorded_at_ms = AbsenceRecordPayload::recorded_at_ms(&record);
++            if !confirmed_absent_name_retained(recorded_at_ms, now_ms) {
++                match self
++                    .store
++                    .delete_if(
++                        CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                        &record.id,
++                        record.resource_version,
++                    )
++                    .await
++                {
++                    Ok(_) | Err(crate::persistence::PersistenceError::Conflict { .. }) => {}
++                    Err(error) => return Err(error.to_string()),
++                }
++                continue;
++            }
++            let Some(sandbox) = self
++                .store
++                .get_by_name(Sandbox::object_type(), &record.workspace, &record.name)
++                .await
++                .map_err(|e| e.to_string())?
++            else {
++                continue;
++            };
++            if !rejected_creation(
++                &record,
++                &sandbox,
++                now_ms,
++                CONFIRMED_ABSENT_NAME_CLOCK_MARGIN_MS,
++            ) {
++                continue;
++            }
++            let target = SandboxDeleteTarget {
++                sandbox_id: sandbox.id.clone(),
++                sandbox_name: sandbox.name.clone(),
++            };
++            let preconditions = SandboxDeletePreconditions {
++                expected_sandbox_id: Some(sandbox.id.clone()),
++                expected_resource_version: Some(sandbox.resource_version),
++            };
++            info!(sandbox_id = %sandbox.id, "Deleting a creation rejected by its absence check");
++            let deleted = Box::pin(self.delete_sandbox_target(target, preconditions)).await;
++            if let Err(status) = deleted {
++                warn!(sandbox_id = %sandbox.id, error = %status.message(),
++                    "Failed to delete a creation rejected by its absence check");
++            }
++        }
++        if last_page {
++            *cursor = None;
 +        }
 +        Ok(())
 +    }
@@ -137,7 +522,83 @@ index 5d80faf..162ddbc 100644
      pub(crate) async fn delete_sandbox_by_id(
          &self,
          sandbox_id: &str,
-@@ -15229,6 +15317,123 @@ mod tests {
+@@ -3507,20 +3955,30 @@ impl ComputeRuntime {
+         // for exact-version rollback after an ambiguous driver failure.
+         let (transition, retrying) = match self
+             .begin_sandbox_delete_with_initial_snapshot(&target.sandbox_id, Some(current), None)
+-            .await?
++            .await
+         {
+             // A failed driver call can leave Deleting after a concurrent
+             // configuration write prevents exact-version recovery. An explicit
+             // retry owns the same UUID's lifecycle gate and must retry the
+             // idempotent driver operation rather than acknowledge it forever.
+-            BeginDelete::AlreadyDeleting(deleting) => (
++            Ok(BeginDelete::AlreadyDeleting(deleting)) => (
+                 DeleteTransition {
+                     previous: (*deleting).clone(),
+                     deleting: *deleting,
+                 },
+                 true,
+             ),
+-            BeginDelete::Started(transition) => (*transition, false),
++            Ok(BeginDelete::Started(transition)) => (*transition, false),
++            // Another replica removed the record after it was read: the same
++            // answer as when it was gone before, never an absence answer.
++            Err(status) if status.code() == Code::NotFound => {
++                self.cleanup_removed_sandbox_state(&target.sandbox_id);
++                return Ok(DeleteSandboxResult {
++                    sandbox_id: target.sandbox_id,
++                    outcome: openshell_core::proto::DeletionOutcome::Completed,
++                });
++            }
++            Err(status) => return Err(status),
+         };
+ 
+         self.sandbox_index.update_from_sandbox(&transition.deleting);
+@@ -4347,6 +4805,15 @@ impl ComputeRuntime {
+             if !sandbox_phase_should_be_running(phase) && !recoverable_error {
+                 continue;
+             }
++            // A creation that its own check rejects stays undispatched during
++            // the retention; the absence record sweep usually deletes it.
++            if let Err(error) = self.ensure_not_rejected_creation(&sandbox).await {
++                if error.code() != Code::FailedPrecondition {
++                    warn!(sandbox_id, error = %error.message(), "Failed to read sandbox absence record");
++                    failed += 1;
++                }
++                continue;
++            }
+             if let Err(error) = self.validate_isolation_backend_binding(&sandbox) {
+                 warn!(sandbox_id, %error, "Rejected recovered isolation backend selection");
+                 failed += 1;
+@@ -5018,6 +5485,7 @@ impl ComputeRuntime {
+     }
+ 
+     async fn reconcile_loop(self: Arc<Self>, mut cancel: watch::Receiver<bool>) {
++        let mut absence_cursor = None;
+         loop {
+             if let Err(error) = self.recover_pending_sandbox_updates().await {
+                 warn!(%error, "Sandbox update recovery sweep failed");
+@@ -5025,6 +5493,9 @@ impl ComputeRuntime {
+             if let Err(err) = self.reconcile_store_with_backend(ORPHAN_GRACE_PERIOD).await {
+                 warn!(error = %err, "Store reconciliation sweep failed");
+             }
++            if let Err(error) = self.sweep_confirmed_absent_names(&mut absence_cursor).await {
++                warn!(%error, "Sandbox absence record sweep failed");
++            }
+             tokio::select! {
+                 () = tokio::time::sleep(RECONCILE_INTERVAL) => {}
+                 _ = cancel.changed() => return,
+@@ -8830,6 +9301,7 @@ mod tests {
+         SuspendSandboxResponse, ValidateSandboxCreateResponse, WatchSandboxesDeletedEvent,
+         WatchSandboxesSandboxEvent,
+     };
++    use openshell_core::rpc_error::StatusExt as _;
+     use std::collections::HashMap;
+     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+     use std::sync::{Arc, Mutex as TestMutex};
+@@ -15229,6 +15701,780 @@ mod tests {
          stop_watch_loop(shutdown_tx, watch_handle).await;
      }
  
@@ -231,9 +692,15 @@ index 5d80faf..162ddbc 100644
 +        assert!(renewed.resource_version > record.resource_version);
 +
 +        let recorded = renewed.updated_at_ms;
-+        let retention = CONFIRMED_ABSENT_NAME_RETENTION_MS;
-+        assert!(confirmed_absent_name_retained(recorded, recorded + retention - 1));
-+        assert!(!confirmed_absent_name_retained(recorded, recorded + retention));
++        let retention = CONFIRMED_ABSENT_NAME_KEPT_MS;
++        assert!(confirmed_absent_name_retained(
++            recorded,
++            recorded + retention - 1
++        ));
++        assert!(!confirmed_absent_name_retained(
++            recorded,
++            recorded + retention
++        ));
 +    }
 +
 +    #[tokio::test]
@@ -258,10 +725,661 @@ index 5d80faf..162ddbc 100644
 +        );
 +    }
 +
++    /// Runs `during` while a deletion of `sandbox-a` waits between its
++    /// absence record and its second read of the name.
++    async fn delete_with_pause_after_absence_record(
++        runtime: &ComputeRuntime,
++        during: impl Future<Output = ()>,
++    ) -> Result<DeleteSandboxResult, Status> {
++        let recorded = Arc::new(Notify::new());
++        let resume = Arc::new(Notify::new());
++        let deletion = ABSENCE_RECORDED.scope(
++            (recorded.clone(), resume.clone()),
++            runtime.delete_sandbox_allow_missing("default", "sandbox-a", true),
++        );
++        let (result, ()) = tokio::join!(deletion, async {
++            tokio::time::timeout(Duration::from_secs(10), recorded.notified())
++                .await
++                .expect("the deletion records an absence");
++            during.await;
++            resume.notify_one();
++        });
++        result
++    }
++
++    async fn absence_record(runtime: &ComputeRuntime) -> Option<ObjectRecord> {
++        runtime
++            .store
++            .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, "default", "sandbox-a")
++            .await
++            .unwrap()
++    }
++
++    #[tokio::test]
++    async fn delete_that_finds_a_sandbox_on_its_second_read_withdraws_its_record() {
++        let driver = ControlledDriver::new();
++        // The driver reports the sandbox absent, so each deletion completes.
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++
++        let deleted = delete_with_pause_after_absence_record(&runtime, async {
++            assert!(absence_record(&runtime).await.is_some());
++            let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap();
++
++        assert_eq!(deleted.sandbox_id, "sb-1");
++        assert_eq!(
++            deleted.outcome,
++            openshell_core::proto::DeletionOutcome::Completed
++        );
++        assert!(absence_record(&runtime).await.is_none());
++        runtime
++            .create_sandbox(
++                sandbox_record("sb-2", "sandbox-a", SandboxPhase::Provisioning),
++                None,
++                false,
++            )
++            .await
++            .unwrap();
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 1);
++    }
++
++    #[tokio::test]
++    async fn delete_that_finds_a_sandbox_keeps_the_record_of_an_earlier_deletion() {
++        let driver = ControlledDriver::new();
++        // The driver reports the sandbox absent, so each deletion completes.
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++        let earlier = runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        assert_eq!(
++            earlier.outcome,
++            openshell_core::proto::DeletionOutcome::AlreadyAbsent
++        );
++        let earlier_record = absence_record(&runtime).await.unwrap();
++
++        let deleted = delete_with_pause_after_absence_record(&runtime, async {
++            let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap();
++
++        assert_eq!(deleted.sandbox_id, "sb-1");
++        // The renewal is undone: the retention starts at the earlier answer.
++        let restored = absence_record(&runtime).await.unwrap();
++        assert_eq!(
++            AbsenceRecordPayload::recorded_at_ms(&restored),
++            earlier_record.updated_at_ms
++        );
++        assert_absent_name_rejected(&runtime, &driver).await;
++    }
++
++    #[tokio::test]
++    async fn delete_that_finds_a_sandbox_keeps_a_record_renewed_by_another_deletion() {
++        let driver = ControlledDriver::new();
++        // The driver reports the sandbox absent, so each deletion completes.
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++
++        let deleted = delete_with_pause_after_absence_record(&runtime, async {
++            // Another deletion answers absence on the same record, and a
++            // creation persists only afterwards.
++            let other = runtime
++                .delete_sandbox_allow_missing("default", "sandbox-a", true)
++                .await
++                .unwrap();
++            assert_eq!(
++                other.outcome,
++                openshell_core::proto::DeletionOutcome::AlreadyAbsent
++            );
++            let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap();
++
++        assert_eq!(deleted.sandbox_id, "sb-1");
++        assert!(absence_record(&runtime).await.is_some());
++        assert_absent_name_rejected(&runtime, &driver).await;
++    }
++
++    #[tokio::test]
++    async fn delete_that_finds_a_sandbox_and_fails_withdraws_its_record() {
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Error("delete failed"));
++        let runtime = test_runtime(driver.clone()).await;
++
++        let failed = delete_with_pause_after_absence_record(&runtime, async {
++            let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap_err();
++
++        // The error answers for the found sandbox, not with absence.
++        assert_eq!(failed.code(), Code::Internal);
++        assert!(absence_record(&runtime).await.is_none());
++    }
++
++    #[tokio::test]
++    async fn delete_that_finds_a_sandbox_restores_the_expired_record_it_renewed() {
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        let earlier = absence_record(&runtime).await.unwrap();
++        let expired = earlier.updated_at_ms - CONFIRMED_ABSENT_NAME_KEPT_MS;
++        runtime.store.backdate(&earlier.id, expired).await.unwrap();
++
++        delete_with_pause_after_absence_record(&runtime, async {
++            let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap();
++
++        let restored = absence_record(&runtime).await.unwrap();
++        assert_eq!(restored.id, earlier.id);
++        assert_eq!(AbsenceRecordPayload::recorded_at_ms(&restored), expired);
++        runtime
++            .create_sandbox(
++                sandbox_record("sb-2", "sandbox-a", SandboxPhase::Provisioning),
++                None,
++                false,
++            )
++            .await
++            .unwrap();
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 1);
++    }
++
++    #[tokio::test]
++    async fn cancelled_delete_that_finds_a_sandbox_still_withdraws_its_record() {
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++        let recorded = Arc::new(Notify::new());
++        let resume = Arc::new(Notify::new());
++        let deletion = ABSENCE_RECORDED.scope(
++            (recorded.clone(), resume.clone()),
++            runtime.delete_sandbox_allow_missing("default", "sandbox-a", true),
++        );
++        let mut deletion = Box::pin(deletion);
++        tokio::select! {
++            _ = &mut deletion => panic!("the deletion waits after its record"),
++            () = recorded.notified() => {}
++        }
++        let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++        runtime.store.put_message(&sandbox).await.unwrap();
++        // The request is cancelled; its detached lookup still undoes the record.
++        drop(deletion);
++        resume.notify_one();
++        tokio::time::timeout(Duration::from_secs(10), async {
++            while absence_record(&runtime).await.is_some() {
++                tokio::time::sleep(Duration::from_millis(10)).await;
++            }
++        })
++        .await
++        .expect("the detached lookup withdraws the record");
++
++        // A retry deletes the sandbox, and the name is usable again.
++        runtime
++            .delete_sandbox("default", "sandbox-a")
++            .await
++            .unwrap();
++        runtime
++            .create_sandbox(
++                sandbox_record("sb-2", "sandbox-a", SandboxPhase::Provisioning),
++                None,
++                false,
++            )
++            .await
++            .unwrap();
++    }
++
++    #[tokio::test]
++    async fn delete_of_an_absent_name_too_long_to_create_records_nothing() {
++        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
++        let longest = "a".repeat(crate::grpc::MAX_ROUTABLE_NAME_LEN);
++        let too_long = "a".repeat(crate::grpc::MAX_ROUTABLE_NAME_LEN + 1);
++        for (name, recorded) in [(&longest, true), (&too_long, false)] {
++            let absent = runtime
++                .delete_sandbox_allow_missing("default", name, true)
++                .await
++                .unwrap();
++            assert_eq!(
++                absent.outcome,
++                openshell_core::proto::DeletionOutcome::AlreadyAbsent
++            );
++            let record = runtime
++                .store
++                .get_by_name(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, "default", name)
++                .await
++                .unwrap();
++            assert_eq!(record.is_some(), recorded);
++        }
++    }
++
++    #[tokio::test]
++    async fn rejected_creation_keeps_its_reason_while_cleanup_is_pending() {
++        let driver = ControlledDriver::new();
++        // Cleanup of the rejected creation cannot complete.
++        driver.set_delete_outcome(ControlledDeleteOutcome::Error("delete failed"));
++        let runtime = test_runtime(driver.clone()).await;
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++
++        let rejected = runtime
++            .create_sandbox(
++                sandbox_record("sb-1", "sandbox-a", SandboxPhase::Provisioning),
++                None,
++                false,
++            )
++            .await
++            .unwrap_err();
++
++        assert_eq!(rejected.code(), Code::FailedPrecondition);
++        assert_eq!(
++            rejected.get_error_details().error_info().unwrap().reason,
++            "SANDBOX_NAME_CONFIRMED_ABSENT"
++        );
++        assert_eq!(
++            rejected.message(),
++            confirmed_absent_name_rejection("sandbox-a").message()
++        );
++        let pending = runtime
++            .store
++            .get_message::<Sandbox>("sb-1")
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(pending.phase(), SandboxPhase::Deleting as i32);
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 0);
++    }
++
++    fn undispatched_sandbox(id: &str, name: &str) -> Sandbox {
++        let mut sandbox = sandbox_record(id, name, SandboxPhase::Provisioning);
++        sandbox
++            .status
++            .get_or_insert_with(Default::default)
++            .provisioning = Some(provisioning_deadline::new_preparation_record(
++            crate::persistence::current_time_ms(),
++            1800,
++            300_000,
++        ));
++        sandbox
++    }
++
++    #[tokio::test]
++    async fn sweep_deletes_a_creation_left_behind_before_its_absence_check() {
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime = test_runtime(driver.clone()).await;
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        tokio::time::sleep(Duration::from_millis(5)).await;
++        // A creation persisted its sandbox, then the gateway stopped before
++        // the creation's check. Its preparation deadline expired and the
++        // timeout cleanup finished, which makes it startable.
++        runtime
++            .store
++            .put_message(&timed_out_leftover("sb-1", "sandbox-a"))
++            .await
++            .unwrap();
++
++        let refused = runtime
++            .start_sandbox("default", "sandbox-a")
++            .await
++            .unwrap_err();
++        assert_eq!(refused.code(), Code::FailedPrecondition);
++        assert_eq!(
++            refused.get_error_details().error_info().unwrap().reason,
++            "SANDBOX_NAME_CONFIRMED_ABSENT"
++        );
++        assert_eq!(driver.start_calls.load(Ordering::SeqCst), 0);
++
++        // Not touched: a sandbox persisted before the record's last write,
++        // and one that was sent to the driver.
++        let earlier = undispatched_sandbox("sb-2", "sandbox-b");
++        runtime.store.put_message(&earlier).await.unwrap();
++        tokio::time::sleep(Duration::from_millis(5)).await;
++        write_absence_record(&runtime, "sandbox-b").await;
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-c", true)
++            .await
++            .unwrap();
++        tokio::time::sleep(Duration::from_millis(5)).await;
++        let mut dispatched = undispatched_sandbox("sb-3", "sandbox-c");
++        provisioning_operation::claim_record(&mut dispatched);
++        runtime.store.put_message(&dispatched).await.unwrap();
++
++        runtime
++            .sweep_confirmed_absent_names(&mut None)
++            .await
++            .unwrap();
++
++        for (id, kept) in [("sb-1", false), ("sb-2", true), ("sb-3", true)] {
++            let present = runtime
++                .store
++                .get_message::<Sandbox>(id)
++                .await
++                .unwrap()
++                .is_some();
++            assert_eq!(present, kept, "{id}");
++        }
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 0);
++    }
++
++    #[tokio::test]
++    async fn startup_recovery_does_not_start_a_creation_left_behind() {
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let runtime =
++            test_runtime_with_gateway_managed_lifecycle(driver.clone(), "arbitrary").await;
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        tokio::time::sleep(Duration::from_millis(5)).await;
++        runtime
++            .store
++            .put_message(&undispatched_sandbox("sb-1", "sandbox-a"))
++            .await
++            .unwrap();
++
++        runtime.start_persisted_sandboxes().await.unwrap();
++        runtime
++            .sweep_confirmed_absent_names(&mut None)
++            .await
++            .unwrap();
++
++        assert!(
++            runtime
++                .store
++                .get_message::<Sandbox>("sb-1")
++                .await
++                .unwrap()
++                .is_none()
++        );
++        assert_eq!(driver.start_calls(), 0);
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 0);
++    }
++
++    /// A never dispatched sandbox whose preparation deadline expired and
++    /// whose timeout cleanup finished, which makes it startable.
++    fn timed_out_leftover(id: &str, name: &str) -> Sandbox {
++        let mut leftover = undispatched_sandbox(id, name);
++        let now =
++            openshell_core::time::timestamp_from_millis(crate::persistence::current_time_ms());
++        let status = leftover.status.as_mut().unwrap();
++        status.phase = SandboxPhase::Error as i32;
++        let provisioning = status.provisioning.as_mut().unwrap();
++        provisioning.timeout_time = now.ok();
++        provisioning.cleanup_completed_time = now.ok();
++        leftover
++    }
++
++    async fn write_absence_record(runtime: &ComputeRuntime, name: &str) {
++        runtime
++            .store
++            .put_if(
++                CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                &format!("absence-{name}"),
++                name,
++                "default",
++                &[],
++                None,
++                WriteCondition::MustCreate,
++            )
++            .await
++            .unwrap();
++    }
++
++    #[tokio::test]
++    async fn start_guards_do_not_rely_on_timestamps_of_different_replicas() {
++        let driver = ControlledDriver::new();
++        let runtime = test_runtime(driver.clone()).await;
++        // The leftover's creation time reads as earlier than the record,
++        // as with a replica clock that runs behind.
++        runtime
++            .store
++            .put_message(&timed_out_leftover("sb-1", "sandbox-a"))
++            .await
++            .unwrap();
++        tokio::time::sleep(Duration::from_millis(5)).await;
++        write_absence_record(&runtime, "sandbox-a").await;
++
++        // Stopping keeps it never dispatched; starting it is still refused.
++        runtime.stop_sandbox("default", "sandbox-a").await.unwrap();
++        let refused = runtime
++            .start_sandbox("default", "sandbox-a")
++            .await
++            .unwrap_err();
++        assert_eq!(
++            refused.get_error_details().error_info().unwrap().reason,
++            "SANDBOX_NAME_CONFIRMED_ABSENT"
++        );
++        assert_eq!(driver.start_calls(), 0);
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 0);
++
++        let managed = ControlledDriver::new();
++        let runtime =
++            test_runtime_with_gateway_managed_lifecycle(managed.clone(), "arbitrary").await;
++        runtime
++            .store
++            .put_message(&undispatched_sandbox("sb-2", "sandbox-b"))
++            .await
++            .unwrap();
++        tokio::time::sleep(Duration::from_millis(5)).await;
++        write_absence_record(&runtime, "sandbox-b").await;
++        runtime.start_persisted_sandboxes().await.unwrap();
++        assert_eq!(managed.start_calls(), 0);
++    }
++
++    #[tokio::test]
++    async fn sweep_removes_expired_absence_records_in_bounded_passes() {
++        let runtime = test_runtime(Arc::new(TestDriver::default())).await;
++        let expired = crate::persistence::current_time_ms() - CONFIRMED_ABSENT_NAME_KEPT_MS;
++        let batch = CONFIRMED_ABSENT_NAME_SWEEP_BATCH as usize;
++        for index in 0..=batch {
++            let id = format!("absence-{index:05}");
++            runtime
++                .store
++                .put_if(
++                    CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                    &id,
++                    &format!("expired-{index:05}"),
++                    "default",
++                    &[],
++                    None,
++                    WriteCondition::MustCreate,
++                )
++                .await
++                .unwrap();
++            runtime.store.backdate(&id, expired).await.unwrap();
++        }
++        runtime
++            .delete_sandbox_allow_missing("default", "retained", true)
++            .await
++            .unwrap();
++        let remaining = || async {
++            runtime
++                .store
++                .list_by_type(CONFIRMED_ABSENT_NAME_OBJECT_TYPE, 10_000, 0)
++                .await
++                .unwrap()
++                .len()
++        };
++
++        let mut cursor = None;
++        runtime
++            .sweep_confirmed_absent_names(&mut cursor)
++            .await
++            .unwrap();
++        assert_eq!(remaining().await, 2);
++        assert!(cursor.is_some());
++        runtime
++            .sweep_confirmed_absent_names(&mut cursor)
++            .await
++            .unwrap();
++        assert_eq!(remaining().await, 1);
++        assert!(cursor.is_none());
++        assert!(
++            runtime
++                .ensure_name_not_confirmed_absent("default", "retained")
++                .await
++                .is_err()
++        );
++    }
++
++    #[tokio::test]
++    async fn delete_whose_sandbox_vanishes_during_the_phase_transition_completes() {
++        let driver = ControlledDriver::new();
++        let runtime = test_runtime(driver.clone()).await;
++        let sandbox = sandbox_record("sb-vanish", "sandbox-a", SandboxPhase::Ready);
++        runtime.store.put_message(&sandbox).await.unwrap();
++        // Another replica removes the record when this deletion writes it.
++        runtime
++            .store
++            .execute_for_test(
++                "CREATE TRIGGER vanish BEFORE UPDATE ON objects WHEN OLD.id = 'sb-vanish' \
++                 BEGIN DELETE FROM objects WHERE id = 'sb-vanish'; SELECT RAISE(IGNORE); END;",
++            )
++            .await;
++
++        let deleted = runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++
++        assert_eq!(deleted.sandbox_id, "sb-vanish");
++        assert_eq!(
++            deleted.outcome,
++            openshell_core::proto::DeletionOutcome::Completed
++        );
++        assert_eq!(driver.delete_calls.load(Ordering::SeqCst), 0);
++    }
++
++    /// Insert, renewal, mark and undo of absence records on one store.
++    async fn exercise_absence_record_store(runtime: &ComputeRuntime) {
++        // An insert, then a renewal of the same record.
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        let inserted = absence_record(runtime).await.unwrap();
++        runtime
++            .delete_sandbox_allow_missing("default", "sandbox-a", true)
++            .await
++            .unwrap();
++        let renewed = absence_record(runtime).await.unwrap();
++        assert_eq!(renewed.id, inserted.id);
++        assert!(renewed.resource_version > inserted.resource_version);
++
++        // The renewal never moves the retention start back.
++        assert!(
++            AbsenceRecordPayload::recorded_at_ms(&renewed)
++                >= AbsenceRecordPayload::recorded_at_ms(&inserted)
++        );
++
++        // A renewal of an expired record that finds a sandbox is undone.
++        let expired =
++            AbsenceRecordPayload::recorded_at_ms(&renewed) - CONFIRMED_ABSENT_NAME_KEPT_MS;
++        let payload = serde_json::to_vec(&AbsenceRecordPayload {
++            recorded_at_ms: Some(expired),
++        })
++        .unwrap();
++        runtime
++            .store
++            .put_if(
++                CONFIRMED_ABSENT_NAME_OBJECT_TYPE,
++                &renewed.id,
++                "sandbox-a",
++                "default",
++                &payload,
++                None,
++                WriteCondition::MatchResourceVersion(renewed.resource_version),
++            )
++            .await
++            .unwrap();
++        delete_with_pause_after_absence_record(runtime, async {
++            let sandbox = sandbox_record("sb-1", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap();
++        let restored = absence_record(runtime).await.unwrap();
++        assert_eq!(AbsenceRecordPayload::recorded_at_ms(&restored), expired);
++        runtime
++            .ensure_name_not_confirmed_absent("default", "sandbox-a")
++            .await
++            .unwrap();
++
++        // The sweep removes it; an insert that finds a sandbox is removed.
++        runtime
++            .sweep_confirmed_absent_names(&mut None)
++            .await
++            .unwrap();
++        assert!(absence_record(runtime).await.is_none());
++        delete_with_pause_after_absence_record(runtime, async {
++            let sandbox = sandbox_record("sb-2", "sandbox-a", SandboxPhase::Ready);
++            runtime.store.put_message(&sandbox).await.unwrap();
++        })
++        .await
++        .unwrap();
++        assert!(absence_record(runtime).await.is_none());
++    }
++
++    #[tokio::test]
++    async fn absence_records_on_sqlite() {
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        exercise_absence_record_store(&test_runtime(driver).await).await;
++    }
++
++    #[tokio::test]
++    #[ignore = "requires a disposable PostgreSQL database in OPENSHELL_TEST_POSTGRES_URL; run mise run test:rust:postgres"]
++    async fn postgres_absence_records() {
++        let schema = crate::persistence::test_postgres::TestSchema::create("absence").await;
++        let driver = ControlledDriver::new();
++        driver.set_delete_outcome(ControlledDeleteOutcome::Ok(false));
++        let mut runtime = test_runtime(driver).await;
++        runtime.store = Arc::new(schema.connect_store().await);
++        exercise_absence_record_store(&runtime).await;
++        drop(runtime);
++        schema.drop_schema().await;
++    }
++
++    async fn assert_absent_name_rejected(runtime: &ComputeRuntime, driver: &ControlledDriver) {
++        let rejected = runtime
++            .create_sandbox(
++                sandbox_record("sb-2", "sandbox-a", SandboxPhase::Provisioning),
++                None,
++                false,
++            )
++            .await
++            .unwrap_err();
++        assert_eq!(rejected.code(), Code::FailedPrecondition);
++        assert!(rejected.message().contains("confirmed absent"));
++        assert_eq!(driver.create_calls.load(Ordering::SeqCst), 0);
++    }
++
      #[tokio::test]
      async fn concurrent_duplicate_deletes_retry_unconfirmed_cleanup() {
          let driver = ControlledDriver::new();
-@@ -18493,6 +18698,7 @@ mod tests {
+@@ -18493,6 +19739,7 @@ mod tests {
              .negotiated_extension
              .supported_capabilities;
          assert!(supported.iter().any(|c| c == DELETE_RETRIES_DELETING));
@@ -269,3 +1387,589 @@ index 5d80faf..162ddbc 100644
          assert!(supported.is_sorted());
      }
  
+diff --git a/crates/openshell-server/src/grpc/mod.rs b/crates/openshell-server/src/grpc/mod.rs
+index 734817a3..8d76d5ae 100644
+--- a/crates/openshell-server/src/grpc/mod.rs
++++ b/crates/openshell-server/src/grpc/mod.rs
+@@ -156,7 +156,7 @@ const MAX_NAME_LEN: usize = 253;
+ /// Maximum length for DNS-routable names (workspace, sandbox, service).
+ /// Three segments plus two `--` delimiters must fit a 63-char DNS label:
+ /// 19 + 2 + 19 + 2 + 19 = 61.
+-const MAX_ROUTABLE_NAME_LEN: usize = 19;
++pub const MAX_ROUTABLE_NAME_LEN: usize = 19;
+ /// Maximum number of providers that can be attached to a sandbox.
+ const MAX_PROVIDERS: usize = 32;
+ /// Maximum length for the `log_level` field.
+diff --git a/crates/openshell-server/src/grpc/mutation_replay.rs b/crates/openshell-server/src/grpc/mutation_replay.rs
+index a284d9c5..d76680e1 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay.rs
+@@ -130,6 +130,15 @@ pub(super) trait Mutation: Message + Default + Send + Sync + 'static {
+         store: &Store,
+         success: Success,
+     ) -> impl Future<Output = Result<Self::Output, Status>> + Send;
++    /// Runs before a restored success is returned; an error replaces it.
++    fn before_replay(
++        _state: &ServerState,
++        _request: &Self,
++        _workspace: &str,
++        _output: &Self::Output,
++    ) -> impl Future<Output = Result<(), Status>> + Send {
++        std::future::ready(Ok(()))
++    }
+ }
+ 
+ /// Empty IDs preserve the existing RPC contract, including cancellation.
+@@ -317,7 +326,9 @@ async fn execute_owned<M: Mutation>(
+                 return Err(replay_unavailable());
+             }
+             let success = previous.success.ok_or_else(uncertain)?;
+-            let mut response = Response::new(M::restore(&state.store, success).await?);
++            let output = M::restore(&state.store, success).await?;
++            M::before_replay(state, request.get_ref(), &scope.name, &output).await?;
++            let mut response = Response::new(output);
+             response.metadata_mut().insert(
+                 "openshell-replayed",
+                 "true".parse().expect("static metadata"),
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs b/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
+index a88c6abb..2b2f2ba0 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
+@@ -39,7 +39,7 @@ use super::{
+ };
+ use crate::auth::principal::Principal;
+ use crate::auth::workspace_authz::{
+-    MinWorkspaceRole, authorize_workspace, selected_workspace_name,
++    AuthGrant, MinWorkspaceRole, authorize_workspace, selected_workspace_name,
+ };
+ use crate::grpc::{policy, provider, sandbox, service};
+ use crate::persistence::{ObjectType, SetResourceVersion, Store};
+@@ -547,18 +547,61 @@ attachment_mutation!(
+     detached
+ );
+ 
+-sandbox_scoped_mutation!(
+-    DeleteSandboxRequest,
+-    DeleteSandboxResponse,
+-    "DeleteSandbox",
+-    sandbox::handle_delete_sandbox,
+-    User,
+-    |response: &Response<DeleteSandboxResponse>| Ok(Outcome::SandboxDeletion {
+-        id: response.get_ref().sandbox_id.clone(),
+-        outcome: response.get_ref().outcome
+-    }),
+-    async |_store: &Store, value: Outcome| {
+-        let Outcome::SandboxDeletion { id, outcome } = value else {
++impl Mutation for DeleteSandboxRequest {
++    type Output = DeleteSandboxResponse;
++    const METHOD: &'static str = "DeleteSandbox";
++    const PROTECTED: bool = true;
++    fn request_id(&self) -> &str {
++        &self.request_id
++    }
++    async fn authorize(&self, state: &ServerState, principal: &Principal) -> Result<Scope, Status> {
++        let workspace = selected_workspace_name(self.workspace_scope.as_ref())?;
++        let authz = authorize_workspace(
++            &state.store,
++            &state.admin_role,
++            principal,
++            workspace,
++            MinWorkspaceRole::User,
++        )
++        .await
++        .map_err(|status| {
++            if status.code() == tonic::Code::PermissionDenied {
++                Status::not_found("sandbox not found")
++            } else {
++                status
++            }
++        })?;
++        match named_scope(state, &authz.workspace).await {
++            // As in the handler, a caller who may create the workspace may
++            // delete in it before it exists. The scope then has no workspace
++            // id, so a replay after the workspace is created is refused.
++            Err(status)
++                if status.code() == tonic::Code::NotFound
++                    && authz.grant == AuthGrant::PlatformAdmin =>
++            {
++                Ok(Scope {
++                    name: authz.workspace,
++                    workspace_id: None,
++                    target_id: None,
++                })
++            }
++            scope => scope,
++        }
++    }
++    async fn execute(
++        state: &Arc<ServerState>,
++        request: Request<Self>,
++    ) -> Result<Response<Self::Output>, Status> {
++        sandbox::handle_delete_sandbox(state, request).await
++    }
++    fn capture(response: &Response<Self::Output>) -> Result<Success, Status> {
++        Ok(Success::Ordinary(Outcome::SandboxDeletion {
++            id: response.get_ref().sandbox_id.clone(),
++            outcome: response.get_ref().outcome,
++        }))
++    }
++    async fn restore(_store: &Store, success: Success) -> Result<Self::Output, Status> {
++        let Outcome::SandboxDeletion { id, outcome } = outcome(success)? else {
+             return Err(replay_unavailable());
+         };
+         Ok(DeleteSandboxResponse {
+@@ -566,7 +609,28 @@ sandbox_scoped_mutation!(
+             outcome,
+         })
+     }
+-);
++    /// A replayed absence answer is renewed like a new one, and is refused
++    /// once a sandbox has the name.
++    async fn before_replay(
++        state: &ServerState,
++        request: &Self,
++        workspace: &str,
++        output: &Self::Output,
++    ) -> Result<(), Status> {
++        if output.outcome != openshell_core::proto::DeletionOutcome::AlreadyAbsent as i32 {
++            return Ok(());
++        }
++        if state
++            .compute
++            .renew_replayed_absence(workspace, &request.name)
++            .await?
++        {
++            Ok(())
++        } else {
++            Err(replay_unavailable())
++        }
++    }
++}
+ 
+ sandbox_scoped_mutation!(
+     ExposeServiceRequest,
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs b/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
+index f0867a97..a18fdfac 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
+@@ -78,9 +78,10 @@ pub(in crate::grpc::mutation_replay) async fn exercise_protected_backend(url: &s
+         ..Default::default()
+     };
+     restarted.store.put_message(&replacement).await.unwrap();
++    // A replayed absence must be renewed, which a sandbox under the name prevents.
+     assert_eq!(
+-        replay(&restarted, req).await.outcome,
+-        i32::from(DeletionOutcome::AlreadyAbsent)
++        reason(&run(&restarted, authed_request(req)).await.unwrap_err()),
++        "REQUEST_REPLAY_UNAVAILABLE"
+     );
+     assert!(
+         restarted
+@@ -1155,3 +1156,147 @@ async fn draft_receipts_replay_after_chunk_state_and_review_tokens_change() {
+     assert_eq!(approved.chunks_approved, 1);
+     assert_eq!(Box::pin(replay(&state, all)).await, approved);
+ }
++
++fn absence_record_query(
++    state: &ServerState,
++    workspace: &'static str,
++    name: &'static str,
++) -> impl Future<Output = Option<crate::persistence::ObjectRecord>> {
++    let store = state.store.clone();
++    async move {
++        store
++            .get_by_name("sandbox_name_confirmed_absent_v1", workspace, name)
++            .await
++            .unwrap()
++    }
++}
++
++#[tokio::test]
++async fn deletion_replay_renews_absence_and_records_in_a_missing_workspace() {
++    let (_directory, state) = protected_state().await;
++    let req = DeleteSandboxRequest {
++        name: "sandbox-a".into(),
++        workspace_scope: Some(openshell_core::proto::workspace_selector("later")),
++        allow_missing: true,
++        request_id: id(),
++    };
++    let first = run(&state, authed_request(req.clone()))
++        .await
++        .unwrap()
++        .into_inner();
++    assert_eq!(first.outcome, i32::from(DeletionOutcome::AlreadyAbsent));
++    let recorded = absence_record_query(&state, "later", "sandbox-a")
++        .await
++        .unwrap();
++
++    // A replay after the retention renews the record it answers with.
++    state
++        .store
++        .backdate(&recorded.id, recorded.updated_at_ms - 25 * 60 * 60 * 1000)
++        .await
++        .unwrap();
++    assert_eq!(
++        replay(&state, req.clone()).await.outcome,
++        i32::from(DeletionOutcome::AlreadyAbsent)
++    );
++    let renewed = absence_record_query(&state, "later", "sandbox-a")
++        .await
++        .unwrap();
++    assert!(renewed.updated_at_ms >= recorded.updated_at_ms);
++    assert!(renewed.resource_version > recorded.resource_version);
++
++    // Once the workspace exists, the old scope no longer replays.
++    run(
++        &state,
++        authed_request(openshell_core::proto::CreateWorkspaceRequest {
++            name: "later".into(),
++            ..Default::default()
++        }),
++    )
++    .await
++    .unwrap();
++    assert_eq!(
++        reason(&run(&state, authed_request(req)).await.unwrap_err()),
++        "REQUEST_REPLAY_UNAVAILABLE"
++    );
++}
++
++#[tokio::test]
++async fn deletion_with_request_id_in_a_missing_workspace_needs_a_platform_admin() {
++    let (_directory, mut state) = protected_state().await;
++    Arc::get_mut(&mut state).unwrap().admin_role = "openshell-admin".into();
++    let member = WorkspaceMember {
++        metadata: Some(ObjectMeta {
++            workspace: "gone".into(),
++            ..meta("non-member")
++        }),
++        principal_subject: "non-member".into(),
++        role: WorkspaceRole::User.into(),
++    };
++    state.store.put_message(&member).await.unwrap();
++    let status = run(
++        &state,
++        non_member_request(DeleteSandboxRequest {
++            name: "sandbox-a".into(),
++            workspace_scope: Some(openshell_core::proto::workspace_selector("gone")),
++            allow_missing: true,
++            request_id: id(),
++        }),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(status.code(), Code::NotFound);
++    assert!(
++        absence_record_query(&state, "gone", "sandbox-a")
++            .await
++            .is_none()
++    );
++}
++
++#[tokio::test]
++async fn creation_with_request_id_does_not_run_again_after_its_deletion() {
++    let (_directory, state) = protected_state().await;
++    let req = create_sandbox("delivered-twice");
++    let created = run(&state, authed_request(req.clone()))
++        .await
++        .unwrap()
++        .into_inner()
++        .sandbox
++        .unwrap();
++    let deleted = run(
++        &state,
++        authed_request(DeleteSandboxRequest {
++            name: "delivered-twice".into(),
++            workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
++            allow_missing: true,
++            request_id: String::new(),
++        }),
++    )
++    .await
++    .unwrap()
++    .into_inner();
++    assert_eq!(deleted.sandbox_id, created.object_id());
++
++    // A second delivery replays the deleted sandbox instead of creating one.
++    let replayed = replay(&state, req.clone()).await.sandbox.unwrap();
++    assert_eq!(replayed.object_id(), created.object_id());
++    assert_eq!(replayed.phase(), SandboxPhase::Deleting as i32);
++    // Once the record is gone, the delivery is refused, still not executed.
++    state
++        .store
++        .delete(Sandbox::object_type(), created.object_id())
++        .await
++        .unwrap();
++    assert_eq!(
++        reason(&run(&state, authed_request(req)).await.unwrap_err()),
++        "REQUEST_REPLAY_UNAVAILABLE"
++    );
++    assert!(
++        state
++            .store
++            .get_message_by_name::<Sandbox>("default", "delivered-twice")
++            .await
++            .unwrap()
++            .is_none()
++    );
++}
+diff --git a/crates/openshell-server/src/grpc/sandbox.rs b/crates/openshell-server/src/grpc/sandbox.rs
+index 72c20a69..8500e2c1 100644
+--- a/crates/openshell-server/src/grpc/sandbox.rs
++++ b/crates/openshell-server/src/grpc/sandbox.rs
+@@ -1817,9 +1817,22 @@ async fn handle_delete_sandbox_inner(
+             status
+         }
+     })?;
+-    let workspace = super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace)
+-        .await?
+-        .name;
++    // The caller is authorized for this workspace name. When no such
++    // workspace exists, the deletion still runs under the name, so that it
++    // records the absence before it answers. Only a caller who may create
++    // the workspace may record names in it before it exists. A caller that
++    // failed authorization above never reaches this point.
++    let (workspace, workspace_missing) =
++        match super::workspace::resolve_workspace(state.store.as_ref(), &authz.workspace).await {
++            Ok(resolved) => (resolved.name, None),
++            Err(status)
++                if status.code() == tonic::Code::NotFound
++                    && authz.grant == crate::auth::workspace_authz::AuthGrant::PlatformAdmin =>
++            {
++                (authz.workspace, Some(status))
++            }
++            Err(status) => return Err(status),
++        };
+     // Main's canonical public delete request contains no caller-provided
+     // identity/version fields. The compute layer still binds the resolved
+     // object ID and lifecycle guards before committing deletion.
+@@ -1832,7 +1845,11 @@ async fn handle_delete_sandbox_inner(
+             req.allow_missing,
+             preconditions,
+         )
+-        .await?;
++        .await
++        .map_err(|status| match workspace_missing {
++            Some(missing) if status.code() == tonic::Code::NotFound => missing,
++            _ => status,
++        })?;
+     if !result.sandbox_id.is_empty() {
+         state.telemetry.end_sandbox_session(&result.sandbox_id);
+     }
+@@ -10404,6 +10421,216 @@ mod tests {
+         assert!(capture.events().is_empty(), "deletion is not misuse");
+     }
+ 
++    fn delete_request(workspace: &str, name: &str, allow_missing: bool) -> DeleteSandboxRequest {
++        DeleteSandboxRequest {
++            request_id: String::new(),
++            allow_missing,
++            name: name.to_string(),
++            workspace_scope: Some(openshell_core::proto::workspace_selector(
++                workspace.to_string(),
++            )),
++        }
++    }
++
++    fn create_request(workspace: &str, name: &str) -> CreateSandboxRequest {
++        CreateSandboxRequest {
++            name: name.to_string(),
++            spec: Some(SandboxSpec::default()),
++            workspace_scope: Some(openshell_core::proto::workspace_selector(
++                workspace.to_string(),
++            )),
++            ..Default::default()
++        }
++    }
++
++    #[tokio::test]
++    async fn authorized_delete_in_a_missing_workspace_rejects_a_later_creation() {
++        use openshell_core::proto::CreateWorkspaceRequest;
++
++        let state = test_server_state().await;
++
++        let absent = handle_delete_sandbox(
++            &state,
++            authed_request(delete_request("later", "sandbox-a", true)),
++        )
++        .await
++        .unwrap()
++        .into_inner();
++        assert_eq!(
++            absent.outcome,
++            openshell_core::proto::DeletionOutcome::AlreadyAbsent as i32
++        );
++        assert!(absent.sandbox_id.is_empty());
++        let missing = handle_delete_sandbox(
++            &state,
++            authed_request(delete_request("later", "sandbox-b", false)),
++        )
++        .await
++        .unwrap_err();
++        assert_eq!(missing.code(), tonic::Code::NotFound);
++        assert_eq!(missing.message(), "workspace 'later' not found");
++
++        crate::grpc::workspace::handle_create_workspace(
++            &state,
++            Request::new(CreateWorkspaceRequest {
++                request_id: String::new(),
++                name: "later".to_string(),
++                labels: HashMap::new(),
++            }),
++        )
++        .await
++        .unwrap();
++
++        for name in ["sandbox-a", "sandbox-b"] {
++            let rejected =
++                handle_create_sandbox(&state, authed_request(create_request("later", name)))
++                    .await
++                    .unwrap_err();
++            assert_eq!(rejected.code(), tonic::Code::FailedPrecondition);
++            assert!(rejected.message().contains("confirmed absent"));
++        }
++        // The records are scoped to the workspace and the name.
++        handle_create_sandbox(&state, authed_request(create_request("later", "sandbox-c")))
++            .await
++            .unwrap();
++        handle_create_sandbox(
++            &state,
++            authed_request(create_request("default", "sandbox-a")),
++        )
++        .await
++        .unwrap();
++    }
++
++    /// A request of a user without roles.
++    fn request_as<T>(subject: &str, inner: T) -> Request<T> {
++        use crate::auth::identity::{Identity, IdentityProvider};
++        use crate::auth::principal::{Principal, UserPrincipal};
++        let mut req = Request::new(inner);
++        req.extensions_mut().insert(Principal::User(UserPrincipal {
++            identity: Identity {
++                subject: subject.to_string(),
++                display_name: None,
++                roles: vec![],
++                scopes: vec![],
++                provider: IdentityProvider::Oidc,
++            },
++        }));
++        req
++    }
++
++    #[tokio::test]
++    async fn unauthorized_delete_records_no_absence() {
++        let mut state = test_server_state().await;
++        Arc::get_mut(&mut state).unwrap().admin_role = "openshell-admin".to_string();
++        // A member whose role does not reach the required one.
++        state
++            .store
++            .put_message(&openshell_core::proto::WorkspaceMember {
++                metadata: Some(ObjectMeta {
++                    id: "member-weak".to_string(),
++                    name: "weak-member".to_string(),
++                    workspace: "default".to_string(),
++                    ..Default::default()
++                }),
++                principal_subject: "weak-member".to_string(),
++                role: openshell_core::proto::WorkspaceRole::Unspecified.into(),
++            })
++            .await
++            .unwrap();
++
++        for (subject, workspace) in [
++            ("non-member", "default"),
++            ("non-member", "no-such-ws"),
++            ("weak-member", "default"),
++        ] {
++            for allow_missing in [false, true] {
++                let err = handle_delete_sandbox(
++                    &state,
++                    request_as(
++                        subject,
++                        delete_request(workspace, "sandbox-a", allow_missing),
++                    ),
++                )
++                .await
++                .unwrap_err();
++                assert_eq!(err.code(), tonic::Code::NotFound);
++                assert_eq!(err.message(), "sandbox not found");
++            }
++        }
++
++        for workspace in ["default", "no-such-ws"] {
++            assert!(
++                state
++                    .store
++                    .get_by_name("sandbox_name_confirmed_absent_v1", workspace, "sandbox-a")
++                    .await
++                    .unwrap()
++                    .is_none()
++            );
++        }
++        // `authed_request` carries the platform admin role.
++        handle_create_sandbox(
++            &state,
++            authed_request(create_request("default", "sandbox-a")),
++        )
++        .await
++        .unwrap();
++    }
++
++    #[tokio::test]
++    async fn only_callers_who_may_create_a_workspace_record_names_before_it_exists() {
++        let mut state = test_server_state().await;
++        Arc::get_mut(&mut state).unwrap().admin_role = "openshell-admin".to_string();
++        // A membership left from a deleted workspace.
++        state
++            .store
++            .put_message(&openshell_core::proto::WorkspaceMember {
++                metadata: Some(ObjectMeta {
++                    id: "member-former".to_string(),
++                    name: "former".to_string(),
++                    workspace: "gone".to_string(),
++                    ..Default::default()
++                }),
++                principal_subject: "former".to_string(),
++                role: openshell_core::proto::WorkspaceRole::User.into(),
++            })
++            .await
++            .unwrap();
++        let record = || async {
++            state
++                .store
++                .get_by_name("sandbox_name_confirmed_absent_v1", "gone", "sandbox-a")
++                .await
++                .unwrap()
++        };
++
++        for allow_missing in [false, true] {
++            let err = handle_delete_sandbox(
++                &state,
++                request_as("former", delete_request("gone", "sandbox-a", allow_missing)),
++            )
++            .await
++            .unwrap_err();
++            assert_eq!(err.code(), tonic::Code::NotFound);
++            assert_eq!(err.message(), "workspace 'gone' not found");
++        }
++        assert!(record().await.is_none());
++
++        // `authed_request` carries the platform admin role.
++        let absent = handle_delete_sandbox(
++            &state,
++            authed_request(delete_request("gone", "sandbox-a", true)),
++        )
++        .await
++        .unwrap()
++        .into_inner();
++        assert_eq!(
++            absent.outcome,
++            openshell_core::proto::DeletionOutcome::AlreadyAbsent as i32
++        );
++        assert!(record().await.is_some());
++    }
++
+     /// Workspace collection operations reject non-members, while operations on
+     /// a sandbox reference hide both missing and unauthorized sandboxes as
+     /// `NOT_FOUND` to avoid an object-existence oracle.

@@ -1,0 +1,57 @@
+diff --git a/src/openshell/sandbox.py b/src/openshell/sandbox.py
+index 6a09240..5e05345 100644
+--- a/src/openshell/sandbox.py
++++ b/src/openshell/sandbox.py
+@@ -948,7 +948,14 @@ class SandboxClient:
+         name: str | None = None,
+         labels: Mapping[str, str] | None = None,
+         service_exposures: Sequence[ServiceExposure] | None = None,
++        request_id: str | None = None,
+     ) -> SandboxRef:
++        """Create a sandbox.
++
++        With `request_id`, a nonzero hyphenated UUID, the gateway executes the
++        request at most once within its replay window and answers a repeated
++        delivery with the original result or a refusal.
++        """
+         request_spec = spec if spec is not None else _default_spec()
+         response = self._stub.CreateSandbox(
+             openshell_pb2.CreateSandboxRequest(
+@@ -957,6 +964,7 @@ class SandboxClient:
+                 name=name or "",
+                 labels=dict(labels) if labels else {},
+                 service_exposures=_service_exposure_messages(service_exposures),
++                request_id=request_id or "",
+             ),
+             timeout=self._timeout,
+         )
+diff --git a/tests/sandbox_test.py b/tests/sandbox_test.py
+index 7db9baf..8c6b978 100644
+--- a/tests/sandbox_test.py
++++ b/tests/sandbox_test.py
+@@ -2351,6 +2351,17 @@ def test_create_forwards_name_and_labels() -> None:
+     assert dict(ref.labels) == {"aiq": "deep-research"}
+ 
+ 
++def test_create_forwards_request_id() -> None:
++    stub = _FakeSandboxStub()
++    client = _client_with_fake_stub(stub)
++    request_id = "6f1b8a9e-3c2d-4f5e-8a7b-1c2d3e4f5a6b"
++
++    client.create(workspace="default", name="job-1", request_id=request_id)
++
++    assert stub.create_request is not None
++    assert stub.create_request.request_id == request_id
++
++
+ def test_create_forwards_service_exposures() -> None:
+     stub = _FakeSandboxStub()
+     client = _client_with_fake_stub(stub)
+@@ -2742,6 +2753,7 @@ def test_create_without_args_sends_empty_metadata() -> None:
+     assert stub.create_request is not None
+     assert stub.create_request.name == ""
+     assert dict(stub.create_request.labels) == {}
++    assert stub.create_request.request_id == ""
+     assert _request_workspace(stub.create_request) == "default"
+ 
+ 

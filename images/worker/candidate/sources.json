@@ -55,12 +55,16 @@
         {
           "path": "sandbox-admission.patch",
           "sha256": "b5ddd41407de5330653548a530e335ee94a035338d231c11f635a8a151570530"
+        },
+        {
+          "path": "sandbox-request-id.patch",
+          "sha256": "8568d5b8b71a7c5634b4fb8e6608cfee46fd98eb129190c9c4080ff48d4fedd9"
         }
       ],
       "packages": [
         {
           "path": ".",
-          "version": "0.1.9+heartwood.1",
+          "version": "0.1.9+heartwood.2",
           "original_version": null,
           "name": "openshell"
         }
@@ -79,6 +83,6 @@
     "openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl": "6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792",
     "openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl": "926a57328eb4d526ce7edce5b97a889bcf0b01b40b91cf97da5eabadd29c86f5",
     "openhands_tools-1.62.0+heartwood.3-py3-none-any.whl": "240742f7ed97ee02ac1baf25fa400ca8fd81f642c7dc41da9586a067f93b8697",
-    "openshell-0.1.9+heartwood.1-py3-none-any.whl": "44e9f055fb42469d083afd492d866e72dce928601aa618f94ab6edb95c2e8abc"
+    "openshell-0.1.9+heartwood.2-py3-none-any.whl": "4f628d5f8cc9b451ad1be2de16ff453c3f82dc88ef053b22454ba9c95b18a87f"
   }
 }

@@ -103,6 +103,7 @@ EXPECTED_CASES = {
             "test_kubernetes_workflow_boundary_and_revocation",
             "test_kubernetes_conflicting_deletion_is_retried_until_absence",
             "test_kubernetes_unsent_creation_is_confirmed_absent",
+            "test_kubernetes_repeated_creation_is_not_executed_after_revocation",
             "test_kubernetes_admission_refuses_another_supervisor_image",
             "test_kubernetes_admission_refuses_an_added_network_policy",
             "test_kubernetes_staging_requires_the_default_deny_policy",

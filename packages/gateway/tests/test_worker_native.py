@@ -422,6 +422,7 @@ class _Sandboxes:
         self.pb = pytest.importorskip("openshell._proto.openshell_pb2")
         self.grpc = pytest.importorskip("grpc")
         self.spec: Any = None
+        self.request_ids: list[str] = []
         self.sandbox: SimpleNamespace | None = None
         self.deleted: list[str] = []
         self.closed = False
@@ -474,10 +475,17 @@ class _Sandboxes:
         )
 
     def create(
-        self, *, workspace: str, name: str, spec: object, labels: dict[str, str]
+        self,
+        *,
+        workspace: str,
+        name: str,
+        spec: object,
+        labels: dict[str, str],
+        request_id: str,
     ) -> SimpleNamespace:
         assert workspace == self.settings.workspace
         self.spec = spec
+        self.request_ids.append(request_id)
         if self.sandbox is None:
             self.place(name, labels)
         assert self.sandbox is not None
@@ -698,6 +706,9 @@ def test_launch_binds_the_observed_runtime_and_admits_only_the_native_placeholde
     assert runtime.generation == "generation-1"
     assert str(runtime.endpoint) == native.endpoint
     assert native.sandboxes.deleted == []
+    # Within its replay window, the gateway executes the creation under the attempt's
+    # identifier once.
+    assert native.sandboxes.request_ids == [str(native.intent.attempt_id)]
     spec = native.sandboxes.spec
     assert list(spec.providers) == [native.settings.provider]
     assert native.settings.placeholder_env not in spec.environment
@@ -785,10 +796,8 @@ def test_lost_creation_and_deletion_responses_are_still_recorded_as_revoked(
 ) -> None:
     create, delete = native.sandboxes.create, native.sandboxes.delete
 
-    def lost_create(
-        *, workspace: str, name: str, spec: object, labels: dict[str, str]
-    ) -> SimpleNamespace:
-        create(workspace=workspace, name=name, spec=spec, labels=labels)
+    def lost_create(**request: Any) -> SimpleNamespace:  # noqa: ANN401
+        create(**request)
         raise TimeoutError("synthetic lost response")
 
     def lost_delete(name: str, *, workspace: str, timeout_seconds: float) -> None:
@@ -1605,23 +1614,24 @@ def test_launch_refuses_a_container_runtime_that_changed_after_preparation(
 def _lose_creation_response(native: _Native, monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
     """Time out the creation request; the returned callable completes it in the control plane."""
     create = native.sandboxes.create
-    pending: list[tuple[str, dict[str, str]]] = []
+    pending: list[tuple[str, dict[str, str], str]] = []
 
     def lost_create(
-        *, workspace: str, name: str, spec: object, labels: dict[str, str]
+        *, workspace: str, name: str, spec: object, labels: dict[str, str], request_id: str
     ) -> SimpleNamespace:
         assert workspace == native.settings.workspace
         native.sandboxes.spec = spec
-        pending.append((name, labels))
+        pending.append((name, labels, request_id))
         raise TimeoutError("synthetic creation timeout")
 
     def land() -> None:
-        name, labels = pending.pop()
+        name, labels, request_id = pending.pop()
         create(
             workspace=native.settings.workspace,
             name=name,
             spec=native.sandboxes.spec,
             labels=labels,
+            request_id=request_id,
         )
 
     monkeypatch.setattr(native.sandboxes, "create", lost_create)
