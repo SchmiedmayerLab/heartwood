@@ -143,8 +143,10 @@ _STAGING_SECONDS = 600
 _STAGING_READY_SECONDS = 120
 # The worker image's interpreter, which reports the digest of each staged tree.
 _STAGING_PYTHON = "/opt/heartwood/.venv/bin/python"
-# A filesystem's own directory for recovered blocks, such as on Persistent Disk; it is
-# skipped below the claim's root only when the snapshot has no entry of that name.
+# A filesystem's own directory for recovered blocks, such as on Persistent Disk. Below a
+# claim's root it is skipped only when the snapshot has no entry of that name and it is a
+# directory that belongs to user 0 with no permission for other users, which the staging
+# user cannot create.
 _LOST_AND_FOUND = "lost+found"
 # Reports the digest of the tree below a claim's mount point as `_tree_digest` computes it
 # for an archive, and fails on any entry that is not a directory or a regular file.
@@ -152,15 +154,18 @@ _TREE_DIGEST_SCRIPT = """\
 import hashlib, os, stat, sys
 
 root, skip = sys.argv[1], sys.argv[2] == "skip-lost-found"
+owner = 0
 lines = []
 
 def visit(directory, prefix):
     with os.scandir(directory) as entries:
         for entry in entries:
             path = prefix + entry.name
-            if skip and path == "lost+found" and entry.is_dir(follow_symlinks=False):
-                continue
             info = entry.stat(follow_symlinks=False)
+            if skip and path == "lost+found" and stat.S_ISDIR(info.st_mode):
+                if info.st_uid != owner or info.st_mode & 0o007:
+                    sys.exit("staged tree holds a lost+found directory of another owner")
+                continue
             mode = stat.S_IMODE(info.st_mode) & 0o777
             if stat.S_ISDIR(info.st_mode):
                 lines.append(f"{path}\\0d\\0{mode:o}\\0\\0\\n")
@@ -623,7 +628,17 @@ def _tree_digest(archive: bytes) -> str:
                 raise WorkerAttemptError("worker staging requires canonical private snapshots")
             digest = hashlib.sha256(content.read()).hexdigest()
             lines.append(f"{member.name}\0f\0{mode:o}\0{member.size}\0{digest}\n")
-    return hashlib.sha256("".join(sorted(lines)).encode()).hexdigest()
+    try:
+        return hashlib.sha256("".join(sorted(lines)).encode()).hexdigest()
+    except UnicodeEncodeError:
+        # A name that is not UTF-8 cannot be compared with what the pod reports.
+        raise WorkerAttemptError("worker staging requires canonical private snapshots") from None
+
+
+def _top_level_names(archive: bytes) -> set[str]:
+    """Return the names of an archive's entries directly below its root."""
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as members:
+        return {member.name.split("/", 1)[0] for member in members}
 
 
 class KubernetesWorkerAdmission:
@@ -1099,6 +1114,9 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
         self._staging_attempted = True
         require_private_snapshots(sources, self.names)
         archives = {mount: _archive(source) for mount, source in sources.items()}
+        # Computed before any cluster request, so a snapshot that cannot be compared stops
+        # staging before a claim exists.
+        expected = {mount: _tree_digest(archive) for mount, archive in archives.items()}
         self._require_isolation({**self.labels, "heartwood.role": "staging"})
         if self._find("pod", "Pod", self.staging_name) is not None:
             raise WorkerAttemptError("worker staging pod already exists")
@@ -1132,7 +1150,7 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
             )
             # Standard input can reach the pod incomplete, and tar accepts an archive cut
             # at a member boundary, so the staged tree is compared with what was sent.
-            skip = not (sources[mount] / _LOST_AND_FOUND).exists()
+            skip = _LOST_AND_FOUND not in _top_level_names(archive)
             reported = self.command(
                 "exec",
                 self.staging_name,
@@ -1146,7 +1164,7 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
                 "/" + mount,
                 "skip-lost-found" if skip else "keep-lost-found",
             )
-            if reported.decode(errors="replace").strip() != _tree_digest(archive):
+            if reported.decode(errors="replace").strip() != expected[mount]:
                 raise WorkerAttemptError("worker projection does not match the staged snapshot")
         finished = self._get("pod", "Pod", self.staging_name)
         statuses = _objects(_field(finished, "status"), "containerStatuses")
