@@ -42,7 +42,12 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
   - package-ecosystem: "docker"
-    directories: ["/images", "/images/platform"]
+    directories:
+      - "/images"
+      - "/images/platform"
+      - "/images/worker/candidate"
+      - "/reference-platform/images/funnel"
+      - "/reference-platform/services"
     patterns: ["*"]
     multi-ecosystem-group: "weekly-dependencies"
     cooldown:
@@ -51,3 +56,9 @@ updates:
       # Base image tags change only with a reviewed platform or runtime migration.
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  - package-ecosystem: "opentofu"
+    directory: "/reference-platform/infrastructure/gke"
+    patterns: ["*"]
+    multi-ecosystem-group: "weekly-dependencies"
+    cooldown:
+      default-days: 7
