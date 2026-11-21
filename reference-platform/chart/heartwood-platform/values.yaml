@@ -505,6 +505,10 @@ jobs:
     maxRamGb: 4
     maxDiskGb: 1
     maxRuntimeSeconds: 3600
+    # GPUs of one task, for projects with the GPU entitlement.
+    maxGpuCount: 1
+    # Tasks of one project that wait or run at once.
+    maxActiveTasks: 4
   # The host of the data service's DRS URIs, which proposals name.
   drsHost: heartwood-data.heartwood-platform.svc.cluster.local
 

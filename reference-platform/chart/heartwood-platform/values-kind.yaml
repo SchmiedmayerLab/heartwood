@@ -121,6 +121,8 @@ jobs:
     maxRamGb: 1
     maxDiskGb: 1
     maxRuntimeSeconds: 900
+    maxGpuCount: 0
+    maxActiveTasks: 4
 
 jupyterhub:
   # Short enough for the cluster tests to observe a cull.

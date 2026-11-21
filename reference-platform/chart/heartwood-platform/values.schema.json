@@ -1022,7 +1022,9 @@
             "maxCpuCores",
             "maxRamGb",
             "maxDiskGb",
-            "maxRuntimeSeconds"
+            "maxRuntimeSeconds",
+            "maxGpuCount",
+            "maxActiveTasks"
           ],
           "properties": {
             "maxCpuCores": {
@@ -1038,6 +1040,14 @@
               "exclusiveMinimum": 0
             },
             "maxRuntimeSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxGpuCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxActiveTasks": {
               "type": "integer",
               "minimum": 1
             }
