@@ -7,10 +7,14 @@
 from __future__ import annotations
 
 import ast
+import base64
 import copy
+import hashlib
+import hmac
 import http.server
 import importlib
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -33,6 +37,8 @@ _COMMIT = "1" * 40
 _KIND = "synthetic-kubernetes"
 _RUNNER = "deploy/qualify-kubernetes-worker.py"
 _DOCKERFILE = "images/worker/candidate/kubernetes-controller.Dockerfile"
+_ISSUER = "https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood"
+_RESEARCHER_KEY = b"synthetic-researcher-id-key-0123456789"
 
 
 @pytest.fixture
@@ -226,10 +232,12 @@ def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
     received: list[str] = []
+    paths: list[str] = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_PUT(self) -> None:
             received.append(self.headers["Authorization"])
+            paths.append(self.path)
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()
@@ -245,8 +253,17 @@ def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
 
     class Cluster:
         def json(self, *arguments: str) -> dict[str, Any]:
-            assert arguments == ("configmap", "platform-ca", "--namespace", "heartwood-platform")
-            return {"data": {"ca.crt": _authority()}}
+            kind, name, *namespace = arguments
+            assert namespace == ["--namespace", "heartwood-platform"]
+            return {
+                ("configmap", "platform-ca"): {"data": {"ca.crt": _authority()}},
+                ("configmap", "heartwood-hub"): {
+                    "data": {"settings.json": json.dumps({"issuer": _ISSUER})}
+                },
+                ("secret", "heartwood-researcher-ids"): {
+                    "data": {"key": base64.b64encode(_RESEARCHER_KEY + b"\n").decode()}
+                },
+            }[(kind, name)]
 
         def kubectl(self, *arguments: str, stdin: str | None = None) -> str:
             assert stdin is not None
@@ -270,6 +287,11 @@ def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
     assert len(sent) == 2
     # Only the complete token reached the control service.
     assert received == ["Bearer synthetic-token"]
+    # The path names the researcher by the identifier the platform derives, not the subject.
+    digest = hmac.new(
+        _RESEARCHER_KEY, f"{_ISSUER}\0{runner._SUBJECT}".encode(), hashlib.sha256
+    ).hexdigest()
+    assert paths == [f"/v1/researchers/r{digest[:32]}/projects/demo/launch"]
 
 
 def _authority() -> str:
