@@ -12,11 +12,11 @@
 # with the OpenShell command-line tool of images/worker/candidate/gateway.json.
 FROM scratch AS openshell-cli-amd64
 ADD --checksum=sha256:3856ac7b6b2e33d6c8ab72a1036444156516e7303da85a9b13f661a2aa63bd2d \
-    https://github.com/NVIDIA/OpenShell/releases/download/v0.1.9/openshell-x86_64-unknown-linux-musl.tar.gz /openshell.tar.gz
+    https://github.com/ai-openshell/openshell/releases/download/v0.1.9/openshell-x86_64-unknown-linux-musl.tar.gz /openshell.tar.gz
 
 FROM scratch AS openshell-cli-arm64
 ADD --checksum=sha256:cb923d08703b966f7e0e6b1483ed4ba6ed77bc10812c5502bcc1fb6ee0f6ad59 \
-    https://github.com/NVIDIA/OpenShell/releases/download/v0.1.9/openshell-aarch64-unknown-linux-musl.tar.gz /openshell.tar.gz
+    https://github.com/ai-openshell/openshell/releases/download/v0.1.9/openshell-aarch64-unknown-linux-musl.tar.gz /openshell.tar.gz
 
 FROM openshell-cli-${TARGETARCH} AS openshell-cli
 
