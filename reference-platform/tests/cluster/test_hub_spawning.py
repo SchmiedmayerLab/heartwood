@@ -85,6 +85,40 @@ def test_a_researcher_signs_in_to_the_hub_through_keycloak(server: Server) -> No
     assert user["name"] == FIRST
 
 
+def test_the_proxy_answers_only_over_https(server: Server, cluster: Cluster) -> None:
+    # The browser verifies the proxy against the platform CA alone.
+    status, _, _ = server.first.get("/hub/api/")
+    assert status == 200
+    (proxy,) = _json(
+        cluster,
+        "pods",
+        f"--namespace={PLATFORM}",
+        "--selector=app.kubernetes.io/component=proxy",
+    )["items"]
+    address = proxy["status"]["podIP"]
+    for url in (
+        # The Service has no HTTP port, and the network policy admits no connection to
+        # the proxy's HTTP port.
+        f"http://proxy-public.{PLATFORM}.svc.cluster.local/hub/api/",
+        f"http://{address}:8000/hub/api/",
+    ):
+        result = cluster.kubectl(
+            "exec",
+            f"--namespace={SESSIONS}",
+            server.first.pod,
+            "--",
+            "curl",
+            "--silent",
+            "--max-time",
+            "10",
+            "--output",
+            "/dev/null",
+            url,
+        )
+        # curl's exit status 7 is a refused connection and 28 a timeout.
+        assert result.returncode in {7, 28}, (url, result.returncode, result.stderr)
+
+
 def test_the_hub_offers_only_the_researchers_projects(server: Server) -> None:
     status, _, page = server.first.get(f"/hub/spawn/{FIRST}/demo")
     assert status == 200

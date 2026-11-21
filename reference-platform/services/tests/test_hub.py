@@ -8,13 +8,16 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -242,15 +245,25 @@ class _Section:
     pass
 
 
-def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
-    objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import asyncio
+@dataclass
+class _Hub:
+    """The configured Hub with fake JupyterHub, KubeSpawner and tornado modules."""
+
+    config: _Config
+    settings: dict[str, Any]
+    sent: list[tuple[str, str]]
+    deleted: list[str]
+    proxy_requests: list[tuple[str, Any]]
+
+
+@pytest.fixture
+def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Hub:
     import sys
     import types
 
     sent: list[tuple[str, str]] = []
     deleted: list[str] = []
+    proxy_requests: list[tuple[str, Any]] = []
 
     class HTTPError(Exception):
         def __init__(self, status: int, message: str = "") -> None:
@@ -261,6 +274,9 @@ def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
         body = b""
 
     class Client:
+        def __init__(self, **options: Any) -> None:  # noqa: ANN401
+            self.options = options
+
         async def fetch(self, request: Any, raise_error: bool = True) -> Response:  # noqa: ANN401, ARG002
             sent.append((request.method, request.url))
             return Response()
@@ -277,6 +293,16 @@ def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
         async def delete_forever(self) -> None:
             deleted.append(self.name)
 
+    class ConfigurableHTTPProxy:
+        async def api_request(
+            self,
+            path: str,
+            method: str = "GET",
+            body: Any = None,  # noqa: ANN401, ARG002
+            client: Any = None,  # noqa: ANN401
+        ) -> None:
+            proxy_requests.append((f"{method} {path}", client))
+
     tornado = types.ModuleType("tornado")
     web = types.ModuleType("tornado.web")
     web.HTTPError = HTTPError  # type: ignore[attr-defined]
@@ -285,11 +311,16 @@ def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
     httpclient.HTTPRequest = Request  # type: ignore[attr-defined]
     kubespawner = types.ModuleType("kubespawner")
     kubespawner.KubeSpawner = KubeSpawner  # type: ignore[attr-defined]
+    jupyterhub = types.ModuleType("jupyterhub")
+    proxy = types.ModuleType("jupyterhub.proxy")
+    proxy.ConfigurableHTTPProxy = ConfigurableHTTPProxy  # type: ignore[attr-defined]
     for name, module in (
         ("tornado", tornado),
         ("tornado.web", web),
         ("tornado.httpclient", httpclient),
         ("kubespawner", kubespawner),
+        ("jupyterhub", jupyterhub),
+        ("jupyterhub.proxy", proxy),
     ):
         monkeypatch.setitem(sys.modules, name, module)
     settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
@@ -299,14 +330,113 @@ def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(
     settings |= {"client_secret_file": str(secret), "token_file": str(token)}
     config = _Config()
     _module().configure(config, settings)
-    spawner_class = config.JupyterHub.spawner_class
+    return _Hub(config, settings, sent, deleted, proxy_requests)
+
+
+def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(hub: _Hub) -> None:
+    import asyncio
+
+    spawner_class = hub.config.JupyterHub.spawner_class
     subject = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 
     for name in ("x/../../../other/projects/demo", "Demo", ""):
         asyncio.run(spawner_class(subject, name).delete_forever())
-    assert sent == []
+    assert hub.sent == []
     asyncio.run(spawner_class(subject, "demo").delete_forever())
-    assert sent == [
-        ("DELETE", f"{settings['control_url']}/v1/researchers/{subject}/projects/demo/launch")
+    assert hub.sent == [
+        ("DELETE", f"{hub.settings['control_url']}/v1/researchers/{subject}/projects/demo/launch")
     ]
-    assert deleted == ["x/../../../other/projects/demo", "Demo", "", "demo"]
+    assert hub.deleted == ["x/../../../other/projects/demo", "Demo", "", "demo"]
+
+
+def test_the_proxy_serves_https_with_a_certificate_of_the_platform_ca(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
+    origin = urlsplit(settings["public_origin"])
+    assert origin.scheme == "https"
+    authority = tmp_path / "ca.crt"
+    authority.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"])
+    )
+    secret = _named(objects, "Secret", "proxy-tls")
+    assert secret["type"] == "kubernetes.io/tls"
+    serving = tmp_path / "proxy.crt"
+    serving.write_bytes(base64.b64decode(secret["data"]["tls.crt"]))
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), str(serving)],
+        check=True,
+        capture_output=True,
+    )
+    text = subprocess.run(
+        ["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", str(serving)],
+        check=True,
+        capture_output=True,
+    ).stdout.decode()
+    names = {item.strip().removeprefix("DNS:") for item in text.splitlines()[-1].split(",")}
+    assert names == set(secret["metadata"]["annotations"]["heartwood.platform/names"].split(","))
+    assert {
+        "proxy-public.heartwood-platform.svc.cluster.local",
+        "proxy-api.heartwood-platform.svc.cluster.local",
+        origin.hostname,
+    } <= names
+    # The proxy serves researchers and its API with the certificate, and its Service
+    # offers no HTTP port.
+    proxy = _named(objects, "Deployment", "proxy")["spec"]["template"]["spec"]
+    (container,) = proxy["containers"]
+    command = container["command"]
+    for argument in (
+        "--port=8443",
+        "--ssl-key=/etc/chp/tls/tls.key",
+        "--ssl-cert=/etc/chp/tls/tls.crt",
+        "--api-ssl-key=/etc/chp/tls/tls.key",
+        "--api-ssl-cert=/etc/chp/tls/tls.crt",
+    ):
+        assert argument in command
+    (volume,) = proxy["volumes"]
+    assert volume["secret"]["secretName"] == "proxy-tls"
+    service = _named(objects, "Service", "proxy-public")
+    assert service["spec"]["ports"] == [{"name": "https", "port": 443, "targetPort": "https"}]
+    assert (
+        settings["proxy_api_url"] == "https://proxy-api.heartwood-platform.svc.cluster.local:8001"
+    )
+    # Researchers reach only the HTTPS port; the HTTP port only redirects.
+    policy = _named(objects, "NetworkPolicy", "hub-proxy")
+    public, api = policy["spec"]["ingress"]
+    assert public == {"ports": [{"protocol": "TCP", "port": 8443}]}
+    assert api["ports"] == [{"protocol": "TCP", "port": 8001}]
+
+
+def test_the_public_origin_must_be_https() -> None:
+    result = subprocess.run(
+        [
+            *_TEMPLATE,
+            "--values",
+            str(_CHART / "values-kind.yaml"),
+            "--set",
+            "hub.publicOrigin=http://proxy-public.heartwood-platform.svc.cluster.local",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "publicOrigin" in result.stderr
+
+
+def test_the_hub_calls_the_proxy_api_over_https_trusting_the_platform_ca(hub: _Hub) -> None:
+    import asyncio
+
+    assert hub.config.ConfigurableHTTPProxy.api_url == hub.settings["proxy_api_url"]
+    proxy = hub.config.JupyterHub.proxy_class()
+    asyncio.run(proxy.api_request("", method="GET"))
+    asyncio.run(proxy.api_request("/user/a", method="DELETE"))
+    (first, client), (second, again) = hub.proxy_requests
+    assert (first, second) == ("GET ", "DELETE /user/a")
+    # One client for every request, which trusts the platform CA alone.
+    assert client is again
+    assert client.options["force_instance"] is True
+    defaults = client.options["defaults"]
+    assert defaults["ca_certs"] == hub.settings["ca_file"]
+    assert defaults["validate_cert"] is True
+    assert defaults["prepare_curl_callback"] is not None
