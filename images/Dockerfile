@@ -106,7 +106,9 @@ RUN set -eux; \
         "${HEARTWOOD_RUNTIME_HOME}" "${HEARTWOOD_WORKDIR}"; \
     fi; \
     missing_packages=""; \
-    for package in ca-certificates curl git jq libgomp1 libssl3t64 tmux; do \
+    . /etc/os-release; \
+    case "${VERSION_CODENAME}" in jammy) openssl_package=libssl3 ;; *) openssl_package=libssl3t64 ;; esac; \
+    for package in ca-certificates curl git jq libgomp1 "${openssl_package}" tmux; do \
       if ! dpkg-query --show --showformat='${db:Status-Abbrev}' "${package}" 2>/dev/null \
         | grep --quiet '^ii '; then \
         missing_packages="${missing_packages} ${package}"; \
