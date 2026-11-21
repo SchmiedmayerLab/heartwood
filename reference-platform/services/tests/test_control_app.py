@@ -13,13 +13,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from fakes import AUDIENCE, HUB, ISSUER, FakeKeycloak, FakeKubernetes, SigningKey, TokenReviews
+from fakes import (
+    AUDIENCE,
+    HUB,
+    ISSUER,
+    SYNTHETIC_PRICES,
+    FakeKeycloak,
+    FakeKubernetes,
+    SigningKey,
+    TokenReviews,
+)
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
+from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
@@ -80,6 +90,8 @@ class Platform:
                 launches,
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
+                PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
+                clock=lambda: _NOW,
             )
         )
 
@@ -312,8 +324,9 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "platform_ca_file": "/etc/heartwood-control/platform-ca/ca.crt",
         },
         "projects": [project],
+        "synthetic_prices": SYNTHETIC_PRICES,
     }
-    assert Settings.model_validate(settings).projects[0].id == "demo"
+    assert Settings.model_validate_json(json.dumps(settings)).projects[0].id == "demo"
 
     for change in (
         {"projects": [project, project]},
@@ -321,9 +334,10 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         {"platform_id": "two words"},
         # Keycloak is reached only over HTTPS.
         {"keycloak": {**keycloak, "url": "http://keycloak:8080"}},
+        {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
     ):
         with pytest.raises(ValueError, match="validation error"):
-            Settings.model_validate({**settings, **change})
+            Settings.model_validate_json(json.dumps({**settings, **change}))
 
 
 def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Path) -> None:

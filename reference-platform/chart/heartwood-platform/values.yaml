@@ -52,6 +52,107 @@ control:
   # Redirect URI of the gateway of one researcher and project.
   redirectUriTemplate: "http://proxy-public.heartwood-sessions.svc.cluster.local/user/{subject}/{project}/oauth_callback"
 
+# Synthetic prices of the control service's estimates, for development and tests.
+# They are not the prices of any provider.
+# skuPrices are rows of the FOCUS SKU Price dataset, with its column names. Every
+# price uses one PricingCurrency, and SkuPriceEligibility must be global.
+# runtimeProfiles name the runtime profiles of workload predictions, the kind of work
+# each runs, and one rate for each measure of that kind: duration for exploration,
+# task_duration for batch, input_tokens and output_tokens for inference. A rate's
+# quantityPerPricingUnit is the number of seconds or tokens in one PricingUnit.
+syntheticPrices:
+  estimateValiditySeconds: 3600
+  skuPrices:
+    - ServiceProviderName: Synthetic Provider
+      SkuId: synthetic-exploration-small
+      SkuPriceId: synthetic-exploration-small-list
+      ChargeCategory: Usage
+      UnitPrice: "0.0005"
+      UnitPriceType: List
+      PricingUnit: Seconds
+      PricingCurrency: USD
+      PricingCurrencyCategory: Payable
+      SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
+      SkuPriceEligibility:
+        IsGlobalScope: true
+    - ServiceProviderName: Synthetic Provider
+      SkuId: synthetic-batch-small
+      SkuPriceId: synthetic-batch-small-list
+      ChargeCategory: Usage
+      UnitPrice: "0.0003"
+      UnitPriceType: List
+      PricingUnit: Task-Seconds
+      PricingCurrency: USD
+      PricingCurrencyCategory: Payable
+      SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
+      SkuPriceEligibility:
+        IsGlobalScope: true
+    - ServiceProviderName: Synthetic Provider
+      SkuId: synthetic-batch-gpu
+      SkuPriceId: synthetic-batch-gpu-list
+      ChargeCategory: Usage
+      UnitPrice: "0.004"
+      UnitPriceType: List
+      PricingUnit: Task-Seconds
+      PricingCurrency: USD
+      PricingCurrencyCategory: Payable
+      SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
+      SkuPriceEligibility:
+        IsGlobalScope: true
+    - ServiceProviderName: Synthetic Provider
+      SkuId: synthetic-coder-input
+      SkuPriceId: synthetic-coder-input-list
+      ChargeCategory: Usage
+      UnitPrice: "0.50"
+      UnitPriceType: List
+      PricingUnit: 1,000,000 Input Tokens
+      PricingCurrency: USD
+      PricingCurrencyCategory: Payable
+      SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
+      SkuPriceEligibility:
+        IsGlobalScope: true
+    - ServiceProviderName: Synthetic Provider
+      SkuId: synthetic-coder-output
+      SkuPriceId: synthetic-coder-output-list
+      ChargeCategory: Usage
+      UnitPrice: "1.50"
+      UnitPriceType: List
+      PricingUnit: 1,000,000 Output Tokens
+      PricingCurrency: USD
+      PricingCurrencyCategory: Payable
+      SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
+      SkuPriceEligibility:
+        IsGlobalScope: true
+  runtimeProfiles:
+    - runtimeProfileRef: synthetic-exploration-small
+      kind: exploration
+      rates:
+        - measure: duration
+          skuPriceId: synthetic-exploration-small-list
+          quantityPerPricingUnit: "1"
+    - runtimeProfileRef: synthetic-batch-small
+      kind: batch
+      rates:
+        - measure: task_duration
+          skuPriceId: synthetic-batch-small-list
+          quantityPerPricingUnit: "1"
+    - runtimeProfileRef: synthetic-batch-gpu
+      kind: batch
+      rates:
+        - measure: task_duration
+          skuPriceId: synthetic-batch-gpu-list
+          quantityPerPricingUnit: "1"
+    # The runtime profile of inference is the model name.
+    - runtimeProfileRef: synthetic-coder
+      kind: inference
+      rates:
+        - measure: input_tokens
+          skuPriceId: synthetic-coder-input-list
+          quantityPerPricingUnit: "1000000"
+        - measure: output_tokens
+          skuPriceId: synthetic-coder-output-list
+          quantityPerPricingUnit: "1000000"
+
 postgresql:
   storage: 2Gi
 

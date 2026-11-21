@@ -109,12 +109,35 @@ The chart value `projects` is the source of projects and members, and the servic
 | `PUT /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session with its namespace, the project client and the launch context; the session is created at the first launch |
 | `DELETE /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session, its namespace and its redirect URI are removed |
 | `GET /v1/launch-context` | Heartwood gateway | The launch context of the researcher and project that the token names |
+| `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only tool `estimate_workload` |
 
 A platform component sends a projected service account token with the audience `heartwood-control`.
 The service verifies it with a TokenReview and accepts the service accounts in `control.serviceCallers`.
 A Heartwood gateway sends a Keycloak access token that the project client obtained by token exchange.
 The service verifies its signature, issuer, expiry and type, requires `heartwood-control` as its only audience, and takes the project from the authorized party `hw-proj-<project>` and the researcher from the subject.
 Every request is checked against the registry, and the billing binding of a launch context comes from the registry only.
+
+The control service prices synthetic work from the price sheet in the chart value `syntheticPrices`.
+Each entry of `skuPrices` is a row of the FOCUS SKU Price dataset, with the column names of the draft revision that the [platform contract](../documentation/operate/platform-contract.md#launch-context-budgets-and-estimates) pins, such as `SkuPriceId`, `UnitPrice`, `UnitPriceType`, `PricingUnit`, `PricingCurrency` and the effective period.
+The prices in `values.yaml` are synthetic examples, and the sheet claims no FOCUS conformance.
+Each entry of `runtimeProfiles` names a runtime profile of workload predictions, the kind of work it runs and the price of each measure: the seconds of exploration, the task seconds of batch work including the retry allowance, and the input and output tokens of inference.
+A GPU job is batch work on a GPU runtime profile, and the runtime profile of inference is the model name.
+`quantityPerPricingUnit` converts a measure to the pricing unit, such as 1000000 tokens for a price per million tokens.
+Prices and quantities are decimal strings with at most 18 integer and 12 fractional digits.
+The service does not start with a sheet that has unknown fields, values of another JSON type, prices that are negative or not such decimal strings, duplicate identifiers, rates of unknown prices, a missing measure or more than one currency.
+
+The MCP tool `estimate_workload` takes `project_id`, `scope`, `prediction` and `element_ids` and returns a `heartwood.platform-estimate.v1` document for the whole plan or for the named elements.
+The tool is listed as read-only, and an estimate reserves nothing and authorizes nothing.
+Each element has a cost range with its coverage.
+Work without a price, with a quantity in another unit, without an expected quantity or with a quantity of more digits has an unknown cost with the reason, and the total then covers the priced elements with partial coverage.
+Each estimate has a new identity, its creation time, a validity of `estimateValiditySeconds` that ends no later than the prices it used, and a FOCUS evidence reference with a digest for each price it used.
+Expected costs and upper bounds are rounded up and lower bounds down to six decimal places, so an expected cost or upper bound above zero is never reported as `"0"`.
+A prediction has at most 500 elements, and estimates are not stored.
+
+Every MCP request carries an exchanged token, verified like the token of `GET /v1/launch-context`, and the researcher must be a member of the token's project.
+A request without such a token receives HTTP 401, and a request during which the keys of Keycloak cannot be fetched receives HTTP 502.
+The tool refuses a `project_id` other than the token's project, a researcher without a session in the project, and a prediction whose `project_context_id` is not the launch context of that session.
+Every price applies to every project, because `SkuPriceEligibility` must be `{"IsGlobalScope": true}`.
 
 At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
 It adds the redirect URI of the researcher's gateway, from `control.redirectUriTemplate`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
@@ -263,6 +286,8 @@ A synthetic researcher signs in to a project client with the authorization code 
 The tests check the subject, the authorized party and the single audience of the exchanged token, and that Keycloak refuses an audience without its scope and the client of another project.
 The command line client's device sign-in with the scope `project-demo` gives a token that the client of project demo exchanges with HTTP Basic client authentication, as the gateway does, and that the client of project other cannot exchange.
 The tests check that the control service refuses the researcher's own token, a token for another service, and a researcher who is not a member of the client's project.
+With an exchanged token the estimate tool prices a synthetic plan from the chart's price sheet.
+The tests check that it refuses a request without a token for the control service, another project, and the launch context of another project.
 
 ### Worker Qualification
 

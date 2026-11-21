@@ -8,12 +8,14 @@
 
 Every call is authorized here, independently of what Heartwood approved. Platform
 components call with a service account token and pass subject and project as data.
-A Heartwood gateway calls with a researcher's exchanged token, which names both.
+A Heartwood gateway calls with a researcher's exchanged token, which names both, and
+reaches the planning tools over MCP with the same token.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Annotated
 
 import httpx
@@ -25,6 +27,8 @@ from starlette.routing import Route
 
 from heartwood_platform.common.tokens import AuthenticationError, ResearcherTokens, ServiceTokens
 from heartwood_platform.control.launch import LaunchService, NoSessionError
+from heartwood_platform.control.planning import MCP_PATH, UNAVAILABLE, create_planning_app
+from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import NotAMemberError
 from heartwood_platform.control.sessions import SessionError
 
@@ -57,9 +61,13 @@ def _error(status: int, message: str) -> JSONResponse:
 
 
 def create_app(
-    launches: LaunchService, researchers: ResearcherTokens, services: ServiceTokens
+    launches: LaunchService,
+    researchers: ResearcherTokens,
+    services: ServiceTokens,
+    prices: PriceSheet,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Starlette:
-    """Build the application around the launch service and both token verifiers."""
+    """Build the application around the launch service, the prices and both verifiers."""
 
     def handled(endpoint: Callable[[Request], Response]) -> Callable[[Request], Response]:
         def wrapper(request: Request) -> Response:
@@ -75,7 +83,7 @@ def create_app(
                 return _error(422, "invalid request")
             except httpx.HTTPError:
                 # Keycloak or the Kubernetes API did not answer as expected.
-                return _error(502, "a platform component is unavailable")
+                return _error(502, UNAVAILABLE)
             except SessionError as error:
                 return _error(503, str(error))
 
@@ -111,6 +119,7 @@ def create_app(
         context = launches.context(researcher.subject, researcher.project)
         return JSONResponse(context.model_dump(mode="json"))
 
+    planning = create_planning_app(launches, researchers, prices, clock)
     launch_path = "/v1/researchers/{subject}/projects/{project}/launch"
     return Starlette(
         routes=[
@@ -119,5 +128,7 @@ def create_app(
             Route(launch_path, handled(prepare), methods=["PUT"]),
             Route(launch_path, handled(delete), methods=["DELETE"]),
             Route("/v1/launch-context", handled(launch_context)),
-        ]
+            Route(MCP_PATH, planning),
+        ],
+        lifespan=planning.lifespan,
     )
