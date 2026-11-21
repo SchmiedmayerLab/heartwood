@@ -34,6 +34,7 @@ _DEPLOYMENT = "/etc/heartwood/deployment"
 WORKER_WORKSPACE = "research"
 # The model connection of the route, whose identifier is the worker's profile.
 _MODELS_PATH = "/chat/completions"
+_PENDING_DIGEST = "0" * 64
 # Session gateways derive their Heartwood project identity from the session in this
 # namespace, so a restarted gateway keeps its project state.
 _PROJECT_NAMESPACE = uuid.UUID("1f9b6c2e-6d35-4f1e-9a52-4e0b8a7c3d21")
@@ -51,8 +52,7 @@ class HostedWorkerSettings(_Settings):
     """The worker that a hosted gateway launches in its session namespace."""
 
     image: ImageReference
-    # The effective sandbox policy digest and the policy file, from qualification.
-    sandbox_policy_sha256: Digest
+    # The sandbox policy of the workers.
     policy: dict[str, Any]
     cpu: str = Field(pattern=r"^[1-9][0-9]*m?$")
     memory: str = Field(pattern=r"^[1-9][0-9]*(Mi|Gi)$")
@@ -260,7 +260,9 @@ class HostedGateway:
                         "supervisor_image_digest": self._supervisor,
                         "sandbox_image_digest": self._sandbox,
                         "workspace": "research",
-                        "sandbox_policy_sha256": worker.sandbox_policy_sha256,
+                        # The init container of the gateway pod replaces it with the
+                        # digest that the session's OpenShell gateway admits the policy with.
+                        "sandbox_policy_sha256": _PENDING_DIGEST,
                         "policy_path": f"{_DEPLOYMENT}/worker-policy.json",
                         "policy_file_sha256": hashlib.sha256(policy.encode()).hexdigest(),
                         "profile_id": route.profile_id,

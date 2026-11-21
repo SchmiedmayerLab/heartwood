@@ -593,7 +593,6 @@
           "additionalProperties": false,
           "required": [
             "image",
-            "sandboxPolicySha256",
             "policy",
             "cpu",
             "memory"
@@ -609,10 +608,6 @@
                   "const": ""
                 }
               ]
-            },
-            "sandboxPolicySha256": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
             },
             "policy": {
               "type": "object"

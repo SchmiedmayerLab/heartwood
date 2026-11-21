@@ -37,7 +37,6 @@ HOSTED: dict[str, Any] = {
     "control_url": "https://heartwood-control.heartwood-platform.svc.cluster.local:8443",
     "worker": {
         "image": "registry.example.test:5000/heartwood-worker:candidate@sha256:" + "2" * 64,
-        "sandbox_policy_sha256": "3" * 64,
         "policy": {"version": 1, "process": {"runAsUser": "10001"}},
         "cpu": "1",
         "memory": "2Gi",

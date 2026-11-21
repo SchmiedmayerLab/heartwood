@@ -239,9 +239,10 @@ Back up the Secret with the deployment's other credentials: a lost or replaced k
 After replacing the key, restart the control service; a gateway keeps recording under the earlier key until its server starts again, which writes the new key into its Secret.
 
 The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, the model route, and the control service as the `[planning]` service.
-`hub.worker` sets the worker image, its sandbox policy and the policy's effective digest from qualification, and `hub.modelRoute` the model route of the worker, see [Model Route](#model-route).
-The sandbox policy's effective digest covers the endpoint of the route's provider, so it is taken from a sandbox with that provider.
-The default policy digest matches no policy, so no worker is admitted until qualified values are set.
+`hub.worker` sets the worker image and its sandbox policy, and `hub.modelRoute` the model route of the worker, see [Model Route](#model-route).
+The OpenShell gateway admits a worker with the digest of its effective policy, which covers the endpoint of the route's provider and the identity of the provider in the session's OpenShell gateway.
+At each start of the gateway pod, the init container runs `heartwood-hosted-policy`: it creates a sandbox with the worker image, the policy and the provider, writes the digest of its admission into the manifest's `[worker]` table and removes the sandbox, so the gateway admits only workers of that policy.
+The digest is learned from the session's own OpenShell gateway, which is trusted for the session: the check then shows that every worker runs with the effective policy of the probe, and the policy file is checked against the manifest's `policy_file_sha256` first.
 
 The idle culler stops a server after `jupyterhub.cull.timeout` seconds without traffic through the proxy.
 The server's volume claim, the session namespace and the OpenShell gateway stay, and the next start runs the same session; the researcher signs in again, because tokens live in the gateway's memory only.
@@ -481,11 +482,13 @@ runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-run
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
   --set "images.hostedGateway=${hosted}" --set "images.modelRuntime=${runtime}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
-  --ignore ../tests/cluster/test_hub_spawning.py)
+  --ignore ../tests/cluster/test_hub_spawning.py --ignore ../tests/cluster/test_hosted_recovery.py \
+  --ignore ../tests/cluster/test_hosted_worker.py)
 bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
-The Hub's tests in `test_hub_spawning.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py` and `test_hosted_worker.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+`test_hosted_worker.py` also needs the worker image in `hub.worker.image`.
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.

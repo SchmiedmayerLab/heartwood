@@ -38,3 +38,8 @@ XDG_CONFIG_HOME="${work}/native" /usr/local/bin/openshell gateway add "${endpoin
 find "${work}" -mindepth 1 -type d -exec chmod 0700 {} +
 find "${work}" -mindepth 1 -type f -exec chmod 0600 {} +
 chmod 0700 "${home}/research" "${home}/state"
+# The digest of the workers' effective sandbox policy is particular to this session's
+# OpenShell gateway, so it is learned there and written into the manifest, which the
+# modes above leave writable for its owner.
+/opt/heartwood/.venv/bin/python -I -B /usr/local/libexec/heartwood-hosted-policy \
+  "${work}/deployment" "${work}/native"

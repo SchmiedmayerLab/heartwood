@@ -22,8 +22,15 @@ projects:
     policyRef: synthetic-policy-1
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
-    # A session in this project reserves what is left, which ends its key's budget after
-    # two requests to the synthetic model.
+    budgets:
+      inference: "1.5"
+  # A session in this project reserves its whole budget, which ends the session key's
+  # budget after two requests to the synthetic model.
+  - id: small
+    billingAttributionRef: synthetic-grant-small
+    policyRef: synthetic-policy-1
+    members:
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
     budgets:
       inference: "0.006"
 
