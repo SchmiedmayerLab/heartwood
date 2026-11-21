@@ -786,7 +786,7 @@ def test_control_service_configuration_holds_the_budgets() -> None:
     assert budgets == {
         "demo": {"inference": "5", "compute": "50"},
         "other": {"inference": "1.5"},
-        "small": {"inference": "0.006"},
+        "small": {"inference": "0.012"},
     }
     assert settings.inference.session_reservation == "1"
 

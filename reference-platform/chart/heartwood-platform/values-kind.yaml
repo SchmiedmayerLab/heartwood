@@ -32,7 +32,7 @@ projects:
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
     budgets:
-      inference: "0.006"
+      inference: "0.012"
 
 researchers:
   - subject: 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
@@ -74,8 +74,9 @@ hub:
 # input and 500 output tokens.
 inference:
   models:
+    # OpenHands refuses a model whose input window is below 16384 tokens.
     - name: synthetic-coder
-      maxInputTokens: 4096
+      maxInputTokens: 16384
       maxOutputTokens: 1024
       supportsToolCalls: true
       litellmParams:
