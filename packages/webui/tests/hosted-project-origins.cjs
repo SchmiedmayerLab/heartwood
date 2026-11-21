@@ -220,7 +220,7 @@ async function requireOwnLaunchRefusal(home, user) {
       "/hub/api/users/" + encodeURIComponent(researcher) + "/servers/small";
     const options = {
       headers: {
-        "X-XSRFToken": window.jhdata.xsrf_token,
+        "X-XSRFToken": globalThis.window.jhdata.xsrf_token,
         "Content-Type": "application/json",
       },
       credentials: "same-origin",
@@ -328,7 +328,7 @@ async function scenario(browser) {
   const [previousLogin] = await Promise.all([
     first.waitForEvent("page"),
     demo.page.evaluate((url) => {
-      window.open(url, "_blank");
+      globalThis.window.open(url, "_blank");
     }, demo.entry),
   ]);
   await ready(previousLogin);

@@ -55,9 +55,9 @@ import {
   type UtilityPanel,
 } from "./components/SessionRail";
 import { UtilitySheet } from "./components/UtilitySheet";
-import { signOutOfProject } from "./gatewayAccess";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import { downloadTextFile } from "./downloads";
+import { signOutOfProject } from "./gatewayAccess";
 import { modelProfileLabel } from "./modelPresentation";
 import {
   requestActivityForCommand,

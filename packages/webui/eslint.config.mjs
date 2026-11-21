@@ -14,10 +14,12 @@ export default [
     ignores: ["dist/**/*", "coverage/**/*", "playwright-report/**/*"],
   },
   {
-    files: ["scripts/*.cjs"],
+    files: ["scripts/*.cjs", "tests/*.cjs"],
     languageOptions: {
       ecmaVersion: 2022,
       globals: {
+        AbortSignal: "readonly",
+        Buffer: "readonly",
         URL: "readonly",
         __dirname: "readonly",
         console: "readonly",
