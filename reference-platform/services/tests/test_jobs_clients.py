@@ -124,31 +124,36 @@ def test_inputs_are_existing_project_objects_read_through_short_urls() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         heads.append(request.url.path)
-        found = request.url.path == "/hw-project-demo/cohort/data.csv"
+        found = request.url.path == "/hw-project-demo/datasets/cohort/data.csv"
         return httpx.Response(200 if found else 404)
 
     store = _store(httpx.MockTransport(handle))
     url = store.input_url("demo", "cohort.data.csv", 900)
     parsed = urlsplit(url)
-    assert parsed.path == "/hw-project-demo/cohort/data.csv"
+    assert parsed.path == "/hw-project-demo/datasets/cohort/data.csv"
     query = parse_qs(parsed.query)
     assert query["X-Amz-Expires"] == ["900"]
     assert query["X-Amz-Credential"][0].startswith("jobs-demo/")
     assert url == presign(
         method="GET",
         endpoint="https://versitygw.example.test:7070",
-        path="/hw-project-demo/cohort/data.csv",
+        path="/hw-project-demo/datasets/cohort/data.csv",
         credentials=Credentials("jobs-demo", "secret"),
         region="us-east-1",
         expires=900,
         now=_NOW,
     )
-    for missing in ("cohort.other.csv", "../x", "nodot", "s3://bucket/key"):
+    # A results object is never an input: identifiers name objects below datasets/.
+    for missing in ("cohort.other.csv", "results.count.txt", "../x", "nodot", "s3://bucket/key"):
         with pytest.raises(ObjectNotFoundError):
             store.input_url("demo", missing, 900)
     with pytest.raises(ObjectNotFoundError):
         store.input_url("other", "cohort.data.csv", 900)
-    assert heads == ["/hw-project-demo/cohort/data.csv", "/hw-project-demo/cohort/other.csv"]
+    assert heads == [
+        "/hw-project-demo/datasets/cohort/data.csv",
+        "/hw-project-demo/datasets/cohort/other.csv",
+        "/hw-project-demo/datasets/results/count.txt",
+    ]
 
 
 def test_outputs_go_below_the_results_prefix_of_the_operation() -> None:

@@ -26,9 +26,10 @@ import httpx
 from heartwood_platform.common.signing import Credentials, presign
 
 # A DRS identifier of the platform's data service: <dataset>.<file>, stored in the
-# project's bucket as <dataset>/<file>.
+# project's bucket as datasets/<dataset>/<file>, where the data service's bootstrap writes it.
 DRS_ID = re.compile(r"^([a-z0-9][a-z0-9-]{0,62})\.([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$")
 RESULTS_PREFIX = "results"
+DATASETS_PREFIX = "datasets"
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -93,10 +94,10 @@ class StoreObjects:
     def input_url(self, project: str, object_id: str, expires: int) -> str:
         """Return a URL that reads one existing object of the project."""
         match = DRS_ID.fullmatch(object_id)
-        # Results are not project data that a task reads by DRS identifier.
-        if match is None or match.group(1) == RESULTS_PREFIX or project not in self._buckets:
+        # Results lie outside the datasets, so a task never reads them by DRS identifier.
+        if match is None or project not in self._buckets:
             raise ObjectNotFoundError
-        key = f"{match.group(1)}/{match.group(2)}"
+        key = f"{DATASETS_PREFIX}/{match.group(1)}/{match.group(2)}"
         # The check uses its own short-lived URL, so the task's URL is never sent here.
         response = self._client.head(self._url("HEAD", project, key, 60))
         if response.status_code == httpx.codes.FORBIDDEN:

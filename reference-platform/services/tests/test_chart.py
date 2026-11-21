@@ -35,10 +35,15 @@ _MODELS = (
     'inference.models=[{"name":"synthetic-coder","maxInputTokens":32768,"maxOutputTokens":4096,'
     '"litellmParams":{"model":"openai/synthetic-coder","api_base":"https://models.example.test/v1"}}]'
 )
-_FUNNEL = "images.funnel=registry.example.test/funnel@sha256:" + "7" * 64
+# The worker's interpreter, which has no default either.
+_BINARIES = (
+    "hub.modelRoute.binaries="
+    '["/opt/heartwood/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"]'
+)
 _IMAGES = ["--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
 _RUNTIME = "images.modelRuntime=registry.example.test/runtime@sha256:" + "6" * 64
-_IMAGES += ["--set-json", _MODELS, "--set", _RUNTIME, "--set", _FUNNEL]
+_FUNNEL = "images.funnel=registry.example.test/funnel@sha256:" + "7" * 64
+_IMAGES += ["--set-json", _MODELS, "--set-json", _BINARIES, "--set", _RUNTIME, "--set", _FUNNEL]
 # Without a cluster, Helm cannot read the API server addresses.
 _API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
 _IMAGES += _API_SERVER
@@ -678,10 +683,21 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
 
 def test_installation_needs_the_api_server_addresses() -> None:
     command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
-    command += ["--set-json", _MODELS, "--set", _FUNNEL]
+    command += ["--set-json", _MODELS, "--set-json", _BINARIES, "--set", _FUNNEL]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
+
+
+def test_the_model_route_needs_the_programs_of_the_worker_image() -> None:
+    command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
+    command += ["--set-json", _MODELS, "--set", _RUNTIME, "--set", _FUNNEL, *_API_SERVER]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "hub.modelRoute.binaries must name the programs of hub.worker.image" in result.stderr
+    # The kind values name the program of their stand-in worker image.
+    command += ["--values", str(_CHART / "values-kind.yaml")]
+    assert subprocess.run(command, capture_output=True, text=True).returncode == 0
 
 
 def test_control_service_configuration_holds_the_synthetic_prices(
@@ -799,7 +815,7 @@ def test_control_service_configuration_holds_the_budgets() -> None:
     assert budgets == {
         "demo": {"inference": "5", "compute": "50"},
         "other": {"inference": "1.5"},
-        "small": {"inference": "0.006"},
+        "small": {"inference": "0.012"},
     }
     assert settings.inference.session_reservation == "1"
 
