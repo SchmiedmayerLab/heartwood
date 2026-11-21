@@ -297,7 +297,7 @@ heartwood gateway serve --deployment /etc/heartwood/project.toml \
 
 The gateway prints its external URL and no launch link, and it refuses `--capability-fd`, `--proxy-strips-prefix`, a trusted identity assertion and a loopback bind in this mode.
 
-With a manifest that declares a `[worker]` table, `gateway serve` first checks that the sandbox gateway reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) and stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-lacks-a-required-deletion-capability) when a capability is missing or the gateway's report cannot be read.
+With a manifest that declares a `[worker]` table, `gateway serve` first checks that the sandbox gateway reports the three required [capabilities](../operate/platform-requirements.md#sandbox-gateway) and stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-lacks-a-required-deletion-capability) when a capability is missing or the gateway's report cannot be read.
 It then reconciles worker attempts that an earlier gateway process for the same deployment left unrevoked, and prints one line for each session whose revocation was not observed; that attempt stays fenced and is retried at the next start.
 
 ## Project State Migration
@@ -326,7 +326,7 @@ These run from a repository checkout, not an installed release.
 | `uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap` | Build or verify the maintained runtime wheels in `vendor/runtime-wheels/` |
 | `… deploy/build-worker-candidate.py --output DIR` | Build the maintained SDK wheels into a new directory |
 | `… deploy/build-worker-candidate.py --application --output DIR` | Build the committed Heartwood application wheels |
-| `… deploy/build-worker-candidate.py --gateway --cache DIR --output DIR [--gateway-tests]` | Build the pinned qualification-only sandbox gateway; `--gateway-tests` first runs its deletion tests and the Kubernetes driver's library tests and needs 12 GiB of container memory |
+| `… deploy/build-worker-candidate.py --gateway --cache DIR --output DIR [--gateway-tests]` | Build the pinned sandbox gateway; `--gateway-tests` first runs its deletion tests and the Kubernetes driver's library tests and needs 12 GiB of container memory |
 | `python3 deploy/qualify-native-worker.py --worker-image IMAGE --runtime-image IMAGE --gateway-artifacts DIR --records-artifacts DIR --output DIR [--model-profile PATH]` | Run native worker qualification; `--model-profile` adds a capable-model case whose credential is read from standard input |
 | `python3 deploy/qualification_evidence.py [--commit SHA] DIR` | List every reason an evidence directory does not establish a qualification pass |
 | `uv run python packages/gateway/scripts/export_platform_contract.py DIR` | Export the platform contract bundle to a new directory |

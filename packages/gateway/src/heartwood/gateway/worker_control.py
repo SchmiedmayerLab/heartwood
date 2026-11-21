@@ -34,17 +34,17 @@ from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment, Work
 from heartwood.persistence import read_private_text
 
 # Revocation and cleanup evidence depends on these deletion behaviors of the gateway and its
-# Docker or Kubernetes driver: deletion waits for provisioning to settle, and an explicit delete
-# of a sandbox already marked deleting calls the driver again.
+# Docker or Kubernetes driver: deletion waits for provisioning to settle, an explicit delete
+# of a sandbox already marked deleting calls the driver again, and a deletion that finds no
+# sandbox under a name makes the gateway reject a creation under that name, so its answer is
+# evidence that an unresolved creation made nothing.
 REQUIRED_GATEWAY_CAPABILITIES = frozenset(
     {
         "openshell.compute.delete-awaits-provisioning",
         "openshell.compute.delete-retries-deleting",
+        "openshell.compute.create-rejects-deleted-name",
     }
 )
-# With this behavior, a deletion that finds no sandbox under a name makes the gateway reject a
-# creation under that name, so its answer is evidence that an unresolved creation made nothing.
-ABSENCE_REJECTS_CREATION = "openshell.compute.create-rejects-deleted-name"
 
 
 class NativeWorkerControl:
@@ -124,7 +124,7 @@ class NativeWorkerControl:
         return hashlib.sha256(identity.encode()).hexdigest()
 
     def connect(self) -> None:
-        """Create the maintained SDK client and require the gateway's deletion capabilities.
+        """Create the maintained SDK client and require the gateway's capabilities.
 
         Called only after the session retains launch intent or a fenced attempt to reconcile.
         """
@@ -154,8 +154,7 @@ class NativeWorkerControl:
                 else ""
             )
             raise WorkerGatewayCapabilityError(
-                "registered sandbox gateway did not report the required deletion capabilities"
-                + detail
+                "registered sandbox gateway did not report the required capabilities" + detail
             )
 
     def _gateway_report(self) -> WorkerGatewayReport:

@@ -960,6 +960,70 @@ def test_lost_create_retains_writer_until_native_revocation(
         _stop(application)
 
 
+def test_native_unsent_creation_is_confirmed_absent(
+    infrastructure: NativeFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A creation that never arrived is recorded as not created only on the gateway's word."""
+    import grpc
+    from openshell import SandboxClient
+
+    fixture = infrastructure
+    create = SandboxClient.create
+    unsent: dict[str, Any] = {}
+
+    def lose(_client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
+        if "heartwood.attempt" not in request.get("labels", {}):
+            raise AssertionError("Only the attempt's creation is expected here")
+        unsent.update(request)
+        raise TimeoutError("synthetic unsent creation")
+
+    application = _application(fixture)
+    service = application._service("composition")
+    monkeypatch.setattr(SandboxClient, "create", lose)
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic unsent creation."})
+        attempt = service.worker_attempt()
+        assert attempt is not None
+        assert attempt.phase == "fenced"
+        assert attempt.runtime is None
+        attempt_id = str(attempt.intent.attempt_id)
+        _stop(application)
+        settled = service.worker_attempt()
+        assert settled is not None
+        assert settled.phase == "revoked"
+        assert settled.revocation is not None
+        assert settled.revocation.outcome == "not-created"
+        assert not service.store.owns_writer
+        _assert_absent(attempt_id)
+        # The gateway keeps its answer: the name it reported absent cannot be created.
+        monkeypatch.setattr(SandboxClient, "create", create)
+        with pytest.raises(grpc.RpcError) as refused:
+            fixture.control.create(**unsent)
+        assert refused.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+        assert "confirmed absent" in refused.value.details()
+        _assert_absent(attempt_id)
+        assert not fixture.provider.observations
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "native-unsent-creation.v1",
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "attempt_id": attempt_id,
+                    "revocation_outcome": "not-created",
+                    "later_creation": refused.value.code().name,
+                    "attempt_resources_absent": True,
+                    "provider_requests": 0,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)
+
+
 def _settled_attempt(service: SessionService, phase: str) -> None:
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:

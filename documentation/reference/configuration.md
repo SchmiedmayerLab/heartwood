@@ -245,7 +245,7 @@ files = []
 Every path is absolute and canonical, outside the research directory and state root, and every native tool, configuration, policy file, and certificate is owned by root or the gateway user, not group- or world-writable, and singly linked.
 The socket must be owned by root or the gateway user and not world-writable; a group-writable socket needs `docker_socket_group`, and when that is set the socket's group must match it.
 Membership in the socket's group grants Docker control-plane authority; never add a worker identity to it.
-The registered sandbox gateway must report the two [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) native revocation depends on; the gateway version is not configured and does not satisfy the check.
+The registered sandbox gateway must report the three [capabilities](../operate/platform-requirements.md#sandbox-gateway) native revocation depends on; the gateway version is not configured and does not satisfy the check.
 The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
 
 #### Kubernetes Driver
@@ -276,7 +276,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 A key of the other driver is rejected with `HW-DEPLOY-001`.
 With this driver, `image_digest` is the registry digest by which a pod references the worker image; with `openshell-docker` it is the image identifier the Docker engine reports.
 `kubectl_cli` and `kubeconfig` follow the same ownership and location rules as the other native tools and configuration files.
-The registered sandbox gateway must report one `openshell/kubernetes` compute driver with both deletion capabilities.
+The registered sandbox gateway must report one `openshell/kubernetes` compute driver with the three required capabilities.
 The policy file must also list `/workspace` under `filesystem.read_write`, because the driver confines the worker to the listed paths and the worker's working directory is `/workspace`.
 The credential in `kubeconfig` needs these permissions in `namespace` and no others: create, delete, get, and list pods and persistent volume claims, create `pods/exec`, get and list NetworkPolicies, get and list `sandboxes.agents.x-k8s.io`, and get the namespace.
 The namespace must provide what [staging](../architecture/system.md#kubernetes-worker-staging) uses: a service account `hw-staging`, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pod all traffic.

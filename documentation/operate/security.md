@@ -35,8 +35,8 @@ A deployment manifest with a `[worker]` table runs the complete OpenHands agent 
 The gateway, canonical state, deployment authority, provider credentials, signer material and management sockets stay outside the worker's mounts and process identity.
 The worker receives only the inputs selected in the manifest and verified Skills, both read-only, plus a private writable workspace, home and temporary directory.
 
-The isolated worker passes native qualification against a patched OpenShell gateway that exists only in the qualification build; see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
-Heartwood distributes no production sandbox gateway, and checks a deployment's sandbox gateway only by the deletion capabilities it reports, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+The isolated worker passes native qualification against Heartwood's patched OpenShell [sandbox gateway build](platform-requirements.md#sandbox-gateway); see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
+Heartwood checks a deployment's sandbox gateway only by the capabilities it reports; the operator compares the deployed build with the qualification record.
 
 ## Sandbox Enforcement
 
@@ -64,7 +64,7 @@ In [`review-outside-effects`](#action-review), these controls are the only limit
 The gateway enforces everything that decides authority, independently of anything the worker reports:
 
 - the deployment manifest's paths, ownership and policy ceiling, before any store opens;
-- both deletion capabilities reported for the sandbox gateway's one compute driver, which must be the implementation the manifest's `driver` selects, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification);
+- the three required capabilities reported for the sandbox gateway's one compute driver, which must be the implementation the manifest's `driver` selects, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm that the deployed gateway is the [qualified build](platform-requirements.md#sandbox-gateway);
 - outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, any retained capability, a missing `no-new-privileges`, a shared host or container process, IPC, user or cgroup namespace, a device, a bind mount, mounts that expose withheld host paths, missing CPU and memory limits or process limit, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` type with individual categories;
 - admission of the sandbox's accepted policy hash and process generation against `sandbox_policy_sha256`;
 - worker attempts bound to project, session, image, policy and input-manifest identity, journaled and fenced so that only one attempt can write a session;
@@ -356,7 +356,7 @@ Confirm each control before researchers add project data, and again after each u
 - deny network egress except reviewed model and package endpoints;
 - keep provider secrets in a keyring, mounted secret or managed identity, and production checkpoint keys in an independently authorized signer;
 - list `allowed_action_review_modes` explicitly, with only the modes evaluated for the deployment;
-- for an isolated worker, confirm that the sandbox gateway provides the [behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification) before declaring its version;
+- for an isolated worker, confirm that the sandbox gateway is the [qualified build](platform-requirements.md#sandbox-gateway) and record its version;
 - pin release artifacts, images, model revisions and Skill versions;
 - collect content-minimized operational logs outside project outputs;
 - validate backup, retention, deletion and incident-response procedures; and

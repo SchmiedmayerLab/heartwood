@@ -129,7 +129,7 @@ GPU image builds start with the `reclaim-runner-disk` action, which removes unus
 
 Hosted jobs differ from a local checkout in two ways that matter when a result differs.
 The Python job installs with `uv sync --locked --all-extras` (default groups only) after the same bootstrap, and installed-wheel and native qualification jobs set `OPENHANDS_SUPPRESS_BANNER=1` and `LITELLM_LOCAL_MODEL_COST_MAP=True` so no model cost map is fetched from the network.
-Native worker qualification needs Docker and builds the qualification-only sandbox gateway; it runs for every main commit and for pull requests that change anything outside `documentation/` and `.github/`, or its own or the pull-request validation workflow.
+Native worker qualification needs Docker and builds the sandbox gateway; it runs for every main commit and for pull requests that change anything outside `documentation/` and `.github/`, or its own or the pull-request validation workflow.
 
 Regenerate the isolated GPU dependency lock with `bash images/gpu/compile_requirements.sh`.
 This is the same command CI uses to verify the lock, including its release-date cutoff and hashes.

@@ -291,7 +291,7 @@ def bootstrap(output: Path, uv: str) -> None:
 def _gateway_configuration() -> tuple[dict[str, Any], bytes]:
     manifest_bytes = (_CONFIG / "gateway.json").read_bytes()
     manifest = json.loads(manifest_bytes)
-    if manifest["schema_version"] != 1 or manifest["purpose"] != "qualification-only":
+    if manifest["schema_version"] != 1 or manifest["purpose"] != "deployable":
         raise ValueError("Unsupported gateway candidate manifest")
     for reference in manifest["images"].values():
         if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", reference):
@@ -492,7 +492,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
         (prebuilt / "openshell-gateway").chmod(0o555)
         shutil.copyfile(checkout / "LICENSE", output / "LICENSE.openshell")
         record = {
-            "purpose": "qualification-only",
+            "purpose": manifest["purpose"],
             "manifest_sha256": _digest(manifest_bytes),
             "builder_sha256": builder_digest,
             "architecture": arch,
@@ -506,7 +506,18 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             "binaries": {
                 binary.name: _digest(binary.read_bytes()) for binary in binaries.iterdir()
             },
+            # The deployable image names itself, its local version and the upstream revision.
+            "labels": {
+                "org.opencontainers.image.title": "heartwood-sandbox-gateway",
+                "org.opencontainers.image.version": manifest["version"],
+                "org.opencontainers.image.revision": manifest["source"]["revision"],
+            },
         }
+    labels = [
+        argument
+        for name, value in record["labels"].items()
+        for argument in ("--label", f"{name}={value}")
+    ]
     subprocess.run(
         [
             "docker",
@@ -517,6 +528,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             str(packaging / "Dockerfile.gateway"),
             "--build-arg",
             "GATEWAY_BASE_IMAGE=" + manifest["images"]["gateway_base"],
+            *labels,
             "--iidfile",
             str(output / "image-id"),
             str(output),

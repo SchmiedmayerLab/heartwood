@@ -39,11 +39,7 @@ from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._remote_workspace import _client_tool_contract
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace, require_worker_event_hooks
 from heartwood.gateway._workspace import WorkspaceInspector
-from heartwood.gateway.worker_control import (
-    ABSENCE_REJECTS_CREATION,
-    NativeWorkerControl,
-    NativeWorkerForward,
-)
+from heartwood.gateway.worker_control import NativeWorkerControl, NativeWorkerForward
 from heartwood.gateway.worker_deployment import (
     KubernetesWorkerDeployment,
     OpenShellWorkerDeployment,
@@ -119,7 +115,7 @@ def native_worker_plan_factory(
 
 
 def require_gateway_capabilities(settings: WorkerDeployment, project: ProjectContext) -> None:
-    """Require the registered gateway's deletion capabilities once before serving sessions."""
+    """Require the registered gateway's capabilities once before serving sessions."""
     control = NativeWorkerControl(settings, project)
     try:
         control.connect()
@@ -242,19 +238,13 @@ def _owned_sandbox(
 def _unresolved_creation(control: NativeWorkerControl, volumes: _Volumes) -> str | None:
     """Ask the sandbox gateway to confirm that an unresolved creation left no sandbox.
 
-    Only a Kubernetes gateway that rejects a creation after it confirmed the name absent
-    gives that evidence. Its deletion either finds nothing, and then nothing can be created
-    under the name, or removes the sandbox the creation made, whose identity it returns.
+    The required gateway rejects a creation under a name it confirmed absent to a deletion.
+    Its deletion either finds nothing, and then nothing can be created under the name, or
+    removes the sandbox the creation made, whose identity it returns.
     """
     unresolved = WorkerAttemptError(
         "native worker absence after an unresolved creation is not evidence of revocation"
     )
-    if (
-        not isinstance(volumes, KubernetesWorkerVolumes)
-        or control.gateway is None
-        or ABSENCE_REJECTS_CREATION not in control.gateway.capabilities
-    ):
-        raise unresolved from None
     try:
         result = control.client.delete(
             volumes.worker_name,
@@ -319,9 +309,14 @@ def _delete_sandbox(control: NativeWorkerControl, volumes: _Volumes, sandbox_id:
     if isinstance(volumes, KubernetesWorkerVolumes):
         _delete_with_retry(control, volumes, sandbox_id)
     else:
-        control.client.delete(
-            volumes.worker_name, workspace=workspace, timeout_seconds=_DELETION_SECONDS
-        )
+        try:
+            control.client.delete(
+                volumes.worker_name, workspace=workspace, timeout_seconds=_DELETION_SECONDS
+            )
+        except control.grpc.RpcError as error:
+            # A sandbox another deletion removed still needs the observed absence below.
+            if error.code() != control.grpc.StatusCode.NOT_FOUND:
+                raise
     control.client.wait_deleted(
         volumes.worker_name,
         workspace=workspace,

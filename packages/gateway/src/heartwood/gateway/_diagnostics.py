@@ -332,7 +332,7 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
     "worker-gateway-capability": DiagnosticDefinition(
         "HW-WORKER-001",
         "Sandbox gateway lacks a required deletion capability",
-        "Register a sandbox gateway that reports both deletion capabilities.",
+        "Register a sandbox gateway that reports the three required capabilities.",
         "/reference/troubleshooting/#hw-worker-001-sandbox-gateway-lacks-a-required-deletion-capability",
     ),
     "worker-control-plane": DiagnosticDefinition(

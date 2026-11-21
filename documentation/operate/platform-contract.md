@@ -26,7 +26,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Access and identity](#access-and-identity) through an authenticated proxy and the launch capability | Current for one launching principal per gateway |
 | [Deployment policy](#deployment-policy) bound by the operator deployment manifest | Current |
 | [Inference](#inference) through built-in and operator-configured routes | Current; connection-manifest startup unavailable; model metadata draft |
-| [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
+| [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the [sandbox gateway build](platform-requirements.md#sandbox-gateway) |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
 | [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current; `heartwood gateway serve` installs a planning service only from a deployment manifest's `[planning]` table |
@@ -239,7 +239,7 @@ Required:
 - Provider credentials, signing authority, launch capabilities, management sockets and peer-worker state outside worker access.
 - Authenticated admission bound to project, session, attempt and runtime identity, with a changed generation or configuration fencing the old attempt.
 - Revocation observed outside the worker before replacement or writer release, with reconciliation instead of duplicate execution when creation or deletion is uncertain.
-- A sandbox gateway that provides the [deletion behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification), and reports both deletion capabilities for the one compute driver the manifest's `driver` selects.
+- A sandbox gateway that provides the [deletion behavior native qualification depends on](platform-requirements.md#sandbox-gateway), and reports the three required capabilities for the one compute driver the manifest's `driver` selects.
 
 The reference adapter uses OpenShell on a local Docker engine with the native OpenHands remote conversation, workspace and event contracts.
 OpenShell names, policy objects and control credentials belong to that adapter, not to portable platform messages; another adapter must keep the same authority, lifecycle and evidence properties on its own infrastructure.
@@ -607,7 +607,7 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 | Missing or refused identity with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
 | Identity provider unreachable or unusable | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
-| Sandbox gateway lacks a deletion capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
+| Sandbox gateway lacks a required capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
 | Expired or rejected model credential | An authentication error | [HW-AGENT-008](../reference/troubleshooting.md#agent-runtime) |
 | Exhausted quota or budget | A quota error | HW-AGENT-009 |
 | Rate limit | A rate-limit error with a retry interval when known | HW-AGENT-010 |
