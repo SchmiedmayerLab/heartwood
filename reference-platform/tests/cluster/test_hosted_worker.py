@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -208,8 +209,11 @@ def test_an_approved_tool_call_runs_in_the_worker_through_the_model_route(
     assert json.loads(pods.stdout)["items"], pods.stderr
     small.command("approve", {"target_type": "action-set", "target_id": group})
 
-    executions = small.wait(lambda events: _of(events, "tool.execution.recorded"))
-    assert _COMMAND in json.dumps(executions)
+    # The execution names the approved call; it records no command or output.
+    calls = set(re.findall(r'"tool_call_id": "([^"]+)"', json.dumps(requested)))
+    (execution,) = small.wait(lambda events: _of(events, "tool.execution.recorded"))
+    assert execution["payload"]["tool_call_id"] in calls
+    assert (execution["payload"]["tool_name"], execution["payload"]["exit_code"]) == ("terminal", 0)
     finished = small.wait(
         lambda events: [
             event
