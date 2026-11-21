@@ -873,17 +873,15 @@ def test_native_producer_and_release_verify_the_same_runtime_identities(
     monkeypatch.syspath_prepend(str(_ROOT / "deploy/tests"))
     from uuid import UUID
 
-    import test_worker_kubernetes_integration as producer
-    from google.protobuf.struct_pb2 import Struct
-
     from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptIntent
     from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
     from heartwood.gateway.worker_kubernetes import KubernetesWorkerAdmission
 
+    producer = importlib.import_module("test_worker_kubernetes_integration")
     host = _host_record()
-    inventory = {}
-    expected = {}
-    pods = {}
+    inventory: dict[str, dict[str, Any]] = {}
+    expected: dict[str, dict[str, tuple[str, str]]] = {}
+    pods: dict[str, dict[str, Any]] = {}
     for kind in ("workload", "supervisor"):
         expected[kind] = {}
         pods[kind] = {
@@ -944,7 +942,7 @@ def test_native_producer_and_release_verify_the_same_runtime_identities(
             }[path],
         )
         fixture = producer.KubernetesFixture(tmp_path, tmp_path)
-    fixture.policy = Struct()
+    fixture.policy = importlib.import_module("google.protobuf.struct_pb2").Struct()
     monkeypatch.setattr(fixture, "qualify_policy", lambda: "b" * 64)
     settings = fixture.deployment(producer.WorkerInputManifest())
     replacement_pod = copy.deepcopy(pods["workload"])

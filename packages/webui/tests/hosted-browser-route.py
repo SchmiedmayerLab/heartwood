@@ -133,7 +133,10 @@ async def run() -> int:
             stdout=asyncio.subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        line = await asyncio.wait_for(forward.stdout.readline(), 20)
+        stdout = forward.stdout
+        if stdout is None:
+            raise RuntimeError("port-forward stdout pipe is unavailable")
+        line = await asyncio.wait_for(stdout.readline(), 20)
         port = re.fullmatch(rb"Forwarding from 127\.0\.0\.1:(\d+) -> 8888\s*", line)
         if not port:
             raise RuntimeError("loopback port-forward failed")
@@ -149,7 +152,7 @@ async def run() -> int:
         try:
 
             async def drain() -> None:
-                while await forward.stdout.read(4096):
+                while await stdout.read(4096):
                     pass
 
             output = asyncio.create_task(drain())

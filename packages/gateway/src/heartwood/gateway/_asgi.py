@@ -436,7 +436,7 @@ class GatewayAsgiApp:
             return _always_active
         return None
 
-    def _capability_active(self, credential: dict[str, tuple[str, ...]]) -> bool:
+    def _capability_active(self, credential: Mapping[str, tuple[str, ...]]) -> bool:
         return self.access.principal(credential) is not None
 
     async def _authorize_socket(self, receive: AsgiReceive) -> Callable[[], bool] | None:
