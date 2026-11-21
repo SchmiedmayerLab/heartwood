@@ -18,6 +18,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fakes import ISSUER, SigningKey, TokenReviews
+from heartwood_platform.common.signing import Credentials
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.data.access import ObjectAccess
 from heartwood_platform.data.app import create_app
@@ -28,7 +29,6 @@ from heartwood_platform.data.catalog_tools import (
     Operations,
     create_catalog_app,
 )
-from heartwood_platform.data.signing import Credentials
 from mcp.types import CallToolResult
 from starlette.testclient import TestClient
 from test_data_service import _ALICE, _BOB, _catalog

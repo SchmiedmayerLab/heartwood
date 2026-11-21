@@ -16,13 +16,13 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 from fakes import ISSUER, SigningKey, TokenReviews
+from heartwood_platform.common.signing import Credentials, presign
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.data.access import MAX_SECONDS, ObjectAccess, access_seconds
 from heartwood_platform.data.app import create_app
 from heartwood_platform.data.catalog import Catalog, content_sha256
 from heartwood_platform.data.copy import CopyError, Plan, copy
 from heartwood_platform.data.seed import SeedObject, SeedSettings, seed
-from heartwood_platform.data.signing import Credentials, presign
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 

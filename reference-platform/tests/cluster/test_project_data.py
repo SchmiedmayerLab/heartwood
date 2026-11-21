@@ -26,7 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from heartwood_platform.data.signing import Credentials, presign
+from heartwood_platform.common.signing import Credentials, presign
 from identity import (
     FIRST,
     PLATFORM,
