@@ -140,9 +140,11 @@ jobs:
             echo "STAGING_IMAGES=$(jq --compact-output \
               '[.image_references.worker, .image_references.replacement_worker]' "${images}")"
             echo "OPENSHELL_REPOSITORY=$(jq --raw-output .openshell_repository "${images}")"
+            echo "WORKER_INTERPRETER=$(jq --compact-output '[.worker_interpreter]' "${images}")"
           } >> "${GITHUB_ENV}"
       # Sessions run the built gateway, their pods pull the OpenShell release images from
       # the cluster's registry, and staging pods run the worker image or its replacement.
+      # The worker's interpreter is the program that may send the model route's key.
       - name: Install the platform chart
         run: >-
           bash reference-platform/cluster/install-chart.sh heartwood
@@ -153,6 +155,7 @@ jobs:
           --set "images.modelRuntime=${MODEL_RUNTIME_IMAGE}"
           --set "hub.worker.image=${WORKER_IMAGE}"
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
+          --set-json "hub.modelRoute.binaries=${WORKER_INTERPRETER}"
       - name: Test the installed chart
         working-directory: reference-platform/services
         run: |
