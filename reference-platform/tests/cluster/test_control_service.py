@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import pytest
+from identity import curl
 from kube import Cluster
 
 _SESSIONS = "heartwood-sessions"
@@ -52,8 +53,10 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
+                    "volumeMounts": [{"name": "scratch", "mountPath": "/scratch"}],
                 }
             ],
+            "volumes": [{"name": "scratch", "emptyDir": {"medium": "Memory"}}],
         },
     }
     account = {
@@ -84,18 +87,11 @@ def _token(cluster: Cluster, account: str = "hub", audience: str = "heartwood-co
 
 
 def _call(cluster: Cluster, method: str, url: str, token: str | None = None) -> tuple[int, Any]:
-    """Send a request from the probe pod. The token travels on standard input."""
+    """Send a request from the probe pod. The token reaches curl through a checked file."""
     header = f"Authorization: Bearer {token}" if token is not None else "Accept: */*"
-    result = cluster.kubectl(
-        "exec",
-        "--stdin",
-        f"--namespace={_SESSIONS}",
+    output = curl(
+        cluster,
         _POD,
-        "--",
-        "curl",
-        "--silent",
-        "--max-time",
-        "30",
         "--request",
         method,
         "--header",
@@ -105,8 +101,7 @@ def _call(cluster: Cluster, method: str, url: str, token: str | None = None) -> 
         url,
         text_input=header,
     )
-    assert result.returncode == 0, result.stderr
-    body, _, status = result.stdout.rpartition("\n")
+    body, _, status = output.rpartition("\n")
     try:
         return int(status), json.loads(body)
     except json.JSONDecodeError:
@@ -146,24 +141,16 @@ def _project_client(cluster: Cluster, project: str) -> dict[str, Any]:
             "scope": "kc-admin-api",
         }
     )
-    token = cluster.kubectl(
-        "exec",
-        "--stdin",
-        f"--namespace={_SESSIONS}",
+    token = curl(
+        cluster,
         _POD,
-        "--",
-        "curl",
-        "--silent",
-        "--max-time",
-        "30",
         "--data",
         "@-",
         f"{_KEYCLOAK}/realms/heartwood/protocol/openid-connect/token",
         text_input=form,
     )
-    assert token.returncode == 0, token.stderr
     url = f"{_KEYCLOAK}/admin/realms/heartwood/clients?clientId=hw-proj-{project}"
-    status, clients = _call(cluster, "GET", url, json.loads(token.stdout)["access_token"])
+    status, clients = _call(cluster, "GET", url, json.loads(token)["access_token"])
     assert status == 200, clients
     (client,) = clients
     assert isinstance(client, dict)

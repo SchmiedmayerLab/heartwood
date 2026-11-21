@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from identity import curl
 from kube import Cluster
 
 _SESSIONS = "heartwood-sessions"
@@ -50,8 +51,10 @@ def _pod(name: str, image: str, labels: dict[str, str]) -> dict[str, Any]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
+                    "volumeMounts": [{"name": "scratch", "mountPath": "/scratch"}],
                 }
             ],
+            "volumes": [{"name": "scratch", "emptyDir": {"medium": "Memory"}}],
         },
     }
 
@@ -72,14 +75,9 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
         "create", "token", "hub", f"--namespace={_SESSIONS}", "--audience=heartwood-control"
     )
     assert token.returncode == 0, token.stderr
-    result = cluster.kubectl(
-        "exec",
-        "--stdin",
-        f"--namespace={_SESSIONS}",
+    output = curl(
+        cluster,
         "hw-session-probe",
-        "--",
-        "curl",
-        "--silent",
         "--max-time",
         "240",
         "--request",
@@ -91,8 +89,7 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
         f"{_CONTROL}/v1/researchers/{subject}/projects/{project}/launch",
         text_input=f"Authorization: Bearer {token.stdout.strip()}",
     )
-    assert result.returncode == 0, result.stderr
-    body, _, status = result.stdout.rpartition("\n")
+    body, _, status = output.rpartition("\n")
     return int(status), json.loads(body) if body else None
 
 
