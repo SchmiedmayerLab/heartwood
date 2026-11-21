@@ -242,6 +242,7 @@ In `identity-proxy` mode the forwarded client, host, protocol, port and prefix h
 The host, the first protocol value, the first port value and the prefix must match the external origin and base path when present; `X-Real-IP` and `X-Forwarded-Server` are accepted and unused.
 A top-level `GET` navigation to the gateway's root, `identity/login` or `oauth_callback` may arrive from another site in that mode, because a sign-in returns through the identity provider.
 Heartwood does not terminate public TLS.
+With `--tls-certificate` and `--tls-key`, `heartwood gateway serve` accepts only TLS connections on its port, so a proxy can reach it over TLS and must verify its certificate; the options require an `https` public origin.
 Outside `identity-proxy` mode Heartwood does not authenticate end users; the platform proxy must do so and strip client-supplied forwarding and identity headers.
 
 ## Launch Capability

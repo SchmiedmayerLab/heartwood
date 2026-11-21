@@ -26,6 +26,7 @@ from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, create_app
 from heartwood_platform.control.budgets import Allocation, Category, Ledger
+from heartwood_platform.control.gateway_certificates import GatewayCertificates
 from heartwood_platform.control.hosted import (
     WORKER_WORKSPACE,
     HostedGateway,
@@ -135,6 +136,15 @@ class SessionNamespaceSettings(_Settings):
     openshell_repository: str = ""
 
 
+class GatewayTlsSettings(_Settings):
+    """How the control service signs the serving certificates of the session gateways."""
+
+    # The issuing CA that the init container writes, as tls.crt and tls.key.
+    issuer_directory: Path
+    # The headless Service of the gateway pods in the gateway namespace.
+    service: str = Field(pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
 class Settings(_Settings):
     """The configuration file of the control service."""
 
@@ -156,6 +166,7 @@ class Settings(_Settings):
     # The files of each session's hosted gateway.
     hosted: HostedGatewaySettings
     sessions: SessionNamespaceSettings
+    gateway_tls: GatewayTlsSettings
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
     inference: InferenceSettings
@@ -329,6 +340,11 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         session_reservation=Decimal(settings.inference.session_reservation),
         inference=_inference(settings, settings.sessions.platform_ca_file),
         project_data=project_data,
+        certificates=GatewayCertificates(
+            settings.gateway_tls.issuer_directory,
+            settings.gateway_tls.service,
+            namespaces.gateway_namespace,
+        ),
     )
     return create_app(
         launches,

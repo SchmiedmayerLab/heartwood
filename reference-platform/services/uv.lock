@@ -512,6 +512,7 @@ name = "heartwood-reference-platform"
 version = "0.5.1"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastmcp" },
     { name = "heartwood-schemas" },
     { name = "httpx" },
@@ -533,6 +534,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastmcp", specifier = "==4.1.6" },
     { name = "heartwood-schemas", editable = "../../packages/schemas" },
     { name = "httpx", specifier = ">=0.28.1" },

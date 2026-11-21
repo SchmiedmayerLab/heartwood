@@ -386,7 +386,7 @@ At each launch the control service brings the namespace `hw-s-<session>` to the 
 7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions` and waits until the OpenShell gateway is ready.
 8. It gives the session its keys of the model route, see [Model Route](#model-route), and replaces the Secret `hw-gw-<session>`.
 
-The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, the platform CA certificate `platform-ca.crt`, the deployment's actor key `actor-key`, and the session's discovery key `model-discovery-key`.
+The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, the platform CA certificate `platform-ca.crt`, the deployment's actor key `actor-key`, the session's discovery key `model-discovery-key`, and the gateway's serving key and certificate `gateway-tls.key` and `gateway-tls.crt`.
 `launch.json` is the reply to the launch request: the session, the launch context, the namespace with its UID, the UID of `kube-system`, the gateway ServiceAccount and the OpenShell endpoint.
 The reply carries no credential.
 
@@ -417,9 +417,25 @@ The proxy reads its certificate when it starts, so restart it after such a chang
 The Service has no HTTP port, and no connection reaches the proxy's HTTP port, which would only redirect to HTTPS.
 The proxy serves its API on port 8001 over HTTPS with the same certificate, and the Hub calls it at `proxy-api` trusting the platform CA alone.
 Clients of the proxy, such as the cluster tests, verify it against the platform CA, and a researcher's browser opens it only when it trusts the platform CA.
-The proxy forwards requests to the Hub on port 8081 and to the gateways on port 8888 without TLS, inside the pod network, where the network policies admit only the proxy and the Hub.
-JupyterHub serves its own API over TLS only with its internal TLS, which also requires TLS of each server and a Secret per server.
-A gateway serves plain HTTP, and TLS on port 8888 would need a certificate for each gateway pod, which no platform component signs.
+The proxy forwards requests to the Hub on port 8081 and to the gateways on port 8888 over TLS.
+It verifies both against the platform CA alone and presents its own certificate as a client certificate, which `proxy-tls` carries with the CA certificate `ca.crt`.
+The proxy forwards the researcher's `Host` header unchanged, and a module that `NODE_OPTIONS` preloads makes it verify each certificate against the host of the route's target.
+
+The Hub serves port 8081, its pages and its API, only over TLS with the certificate in the Secret `hub-tls`, which the chart signs with the platform CA for the names of the Service `hub` and for `localhost`.
+`files/hub/heartwood_hub.py` passes the certificate, its key and the platform CA to JupyterHub through the key, certificate and CA settings of its internal TLS.
+JupyterHub then requires a client certificate of the platform CA on that port; the configuration replaces JupyterHub's TLS context, which would also trust the certificate authorities of the Hub image's system store.
+JupyterHub's full internal TLS mode stays off: it creates certificate authorities of its own, and KubeSpawner then creates a Secret and a Service for each server.
+The idle culler in the Hub's pod reaches the Hub at `localhost` with the Hub's certificate.
+kubelet cannot present a client certificate, so the Hub has no liveness or readiness probe; the start hook of its container waits up to 300 seconds until the Hub answers over TLS, so the pod becomes ready only then.
+kubelet does not restart a Hub that stops answering after it started.
+
+Each gateway serves HTTPS on port 8888 with its own certificate.
+A gateway pod has the host name `hw-gw-<session>` under the headless Service `hw-gateways` in `heartwood-sessions`, and the proxy and the Hub reach it as `hw-gw-<session>.hw-gateways.heartwood-sessions.svc.cluster.local`.
+At each start, an init container of the control service creates an issuing CA that the platform CA signs, valid for at most 825 days and no longer than the platform CA.
+Its name constraints permit only DNS names under `hw-gateways.heartwood-sessions.svc` and `hw-gateways.heartwood-sessions.svc.cluster.local` and no IP address, and its extended key usage permits only server certificates, so TLS clients reject a certificate that it signs for another name, and the Hub rejects one that it signs as a client certificate.
+Only that init container mounts the key of the platform CA; it writes the issuing CA into a memory volume of the control service's pod, and a restart of the control service creates a new one.
+At each launch of a session, the control service signs a new key and certificate for the gateway's two names, valid for 30 days, and writes them with the issuing CA's certificate into the session's Secret, so a relaunch replaces them.
+The idle culler stops a server 27 days after its start, whether or not it is used, and its next start receives a new certificate.
 
 Each project of a researcher is one named server whose name is the project.
 The spawn form offers a server only the project of its name, after the Hub asks the control service for the researcher's projects with a projected token of the audience `heartwood-control`.
@@ -446,12 +462,12 @@ The server's volume claim, the session namespace and the OpenShell gateway stay,
 Deleting a named server deletes the session at the control service and the server's volume claim.
 
 The Role `heartwood-hub-spawner` in `heartwood-sessions` grants the Hub what KubeSpawner needs: pods `create`, `delete`, `list` and `watch`, volume claims `create`, `delete` and `get`, and events `list` and `watch`.
-It grants no access to Secrets or Services; KubeSpawner touches Secrets and Services only with internal TLS or per-server Services, which the chart leaves off.
+It grants no access to Secrets or Services; KubeSpawner touches Secrets and Services only with JupyterHub's internal TLS mode or per-server Services, which the chart leaves off.
 The Hub remains a trusted platform component: it can start the gateway of any session with that session's ServiceAccount and Secret, and delete pods and volume claims in `heartwood-sessions`.
 
 `heartwood-hub-pods` applies to the Hub's ServiceAccount in `heartwood-sessions`:
 
-- A pod carries its session label and the role label `hosted-gateway`, and uses the ServiceAccount `hw-gw-<session>` of that session.
+- A pod carries its session label and the role label `hosted-gateway`, uses the ServiceAccount `hw-gw-<session>` of that session, and has the host name `hw-gw-<session>` under the Service `hw-gateways`.
 - A pod runs one init container and one container of `images.hostedGateway`; the init container runs only `heartwood-hosted-configure`, and the container only `heartwood gateway serve` with the fixed arguments above.
 - A pod carries only the labels of a JupyterHub server and its session labels, and only annotations under `hub.jupyter.org/`.
 - A pod mounts only its session's Secret, a memory volume, a temporary volume, the volume claim `hw-home-<session>` and the standard ServiceAccount token volume, and each container mounts exactly the volumes, paths and subdirectories of the layout above, so only the init container mounts the Secret and the copies stay in the memory volume.
@@ -588,7 +604,7 @@ versitygw accepts connections from its bootstrap Job, from the hook Jobs `heartw
 Keycloak also accepts connections from the data service.
 The data service accepts connections from `heartwood-sessions` and from the control service, and the control service also accepts connections from the data service.
 The policy `heartwood-jobs` lets the job service accept connections on port 8443 from `heartwood-sessions` only.
-The proxy accepts researchers' HTTPS connections on port 8443 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
+The proxy accepts researchers' HTTPS connections on port 8443 from anywhere and configuration from the Hub on port 8001, and the Hub accepts TLS connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
 
 ### Session Roles and Admission Policies

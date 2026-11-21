@@ -217,7 +217,11 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "worker-policy.json",
         "launch-context.json",
         "model-discovery-key",
+        "gateway-tls.crt",
+        "gateway-tls.key",
     }
+    # The gateway's certificate chains to the platform CA through the issuing CA.
+    assert files["gateway-tls.crt"].count("-----BEGIN CERTIFICATE-----") == 2
     platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
     assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]
     actor_key = _json(cluster, "secret", "heartwood-actor-key", f"--namespace={_PLATFORM}")

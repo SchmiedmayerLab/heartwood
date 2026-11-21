@@ -33,6 +33,7 @@ from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.budgets import Allocation, Ledger
+from heartwood_platform.control.gateway_certificates import GatewayCertificates
 from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
@@ -41,6 +42,7 @@ from heartwood_platform.control.registry import NotAMemberError, Project, Regist
 from heartwood_platform.control.researchers import read_key, researcher_id
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
+from test_gateway_certificates import issuer_directory, synthetic_authority
 from test_hosted import HOSTED
 
 from heartwood.schemas import PlatformLaunchContext
@@ -161,6 +163,12 @@ class Platform:
             ledger=self.ledger,
             session_reservation=Decimal(1),
             inference=self.inference,
+            certificates=GatewayCertificates(
+                issuer_directory(directory / "issuer", synthetic_authority(), _NOW),
+                "hw-gateways",
+                "heartwood-sessions",
+                clock=lambda: _NOW,
+            ),
         )
         self.client = TestClient(
             create_app(
@@ -249,6 +257,10 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
     secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{launch['session']}"]
     files = {name: base64.b64decode(value).decode() for name, value in secret["data"].items()}
     assert json.loads(files.pop("launch.json")) == launch
+    certificate, key = files.pop("gateway-tls.crt"), files.pop("gateway-tls.key")
+    assert certificate.count("-----BEGIN CERTIFICATE-----") == 2
+    assert key.startswith("-----BEGIN PRIVATE KEY-----")
+    assert key not in json.dumps(launch)
     assert files == {
         "model-discovery-key": f"discovery-key-of-{launch['session']}",
         "keycloak-client-secret": "secret-of-uuid-1",
@@ -268,7 +280,12 @@ def test_relaunch_reuses_the_session_and_researchers_share_the_project_client(
 ) -> None:
     first = platform.launch(_BOB, "demo")
 
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{first['session']}"]
+    key = secret["data"]["gateway-tls.key"]
     assert platform.launch(_BOB, "demo")["session"] == first["session"]
+    # A relaunch writes a new key and certificate of the gateway.
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{first['session']}"]
+    assert secret["data"]["gateway-tls.key"] != key
     assert platform.launch(_ALICE, "demo")["session"] != first["session"]
     assert len(platform.keycloak.clients) == 1
     assert len(platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"]) == 2
@@ -432,6 +449,10 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "container_default_requests": {"cpu": "100m"},
             "platform_ca_file": "/etc/heartwood-control/platform-ca/ca.crt",
             "actor_key_file": "/etc/heartwood-control/actor-key/actor-key",
+        },
+        "gateway_tls": {
+            "issuer_directory": "/var/run/heartwood-control/gateway-issuer",
+            "service": "hw-gateways",
         },
         "projects": [project],
         "synthetic_prices": SYNTHETIC_PRICES,
