@@ -48,7 +48,8 @@ def test_generic_image_packages_one_no_weight_runtime() -> None:
     assert "heartwood-install-llama-cpp /opt/llama.cpp" in dockerfile
     assert "llama-${version}-bin-ubuntu-x64.tar.gz" in llama_installer
     assert "llama-${version}-bin-ubuntu-arm64.tar.gz" in llama_installer
-    assert "for package in ca-certificates curl git jq libgomp1 libssl3t64 tmux; do" in dockerfile
+    assert 'for package in ca-certificates curl git jq libgomp1 "${openssl_package}" tmux; do' in dockerfile
+    assert 'jammy) openssl_package=libssl3 ;; *) openssl_package=libssl3t64 ;;' in dockerfile
     assert "sha256sum --check --strict" in llama_installer
     assert 'chmod 755 "${staging}"' in llama_installer
     llama_profile = profiles["profiles"]["llama-cpp-cpu"]
@@ -132,7 +133,8 @@ def test_platform_image_adds_heartwood_without_replacing_terra_runtime() -> None
         "AS heartwood-runtime-base"
     ) in dockerfile
     assert 'PATH="/opt/llama.cpp:${PATH}"' in dockerfile
-    assert "for package in ca-certificates curl git jq libgomp1 libssl3t64 tmux; do" in dockerfile
+    assert 'for package in ca-certificates curl git jq libgomp1 "${openssl_package}" tmux; do' in dockerfile
+    assert 'jammy) openssl_package=libssl3 ;; *) openssl_package=libssl3t64 ;;' in dockerfile
     assert "dpkg-query --show --showformat='${db:Status-Abbrev}'" in dockerfile
     assert 'if [ -n "${missing_packages}" ]; then' in dockerfile
     assert "/opt/heartwood/.venv/bin:${PATH}" not in dockerfile
