@@ -345,6 +345,27 @@ def test_a_failed_rotation_keeps_the_previous_key_with_its_budget(route: Route) 
     assert route.worker_key()[0] != old
 
 
+def test_a_rotation_whose_new_key_is_refused_unblocks_the_previous_key(route: Route) -> None:
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+    old, _ = route.worker_key()
+    handler = route.proxy.handler
+
+    def refuse_generate(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/key/generate":
+            return httpx.Response(500)
+        return handler(request)
+
+    route.proxy.handler = refuse_generate  # type: ignore[method-assign]
+    route.inference._proxy._client._transport = httpx.MockTransport(refuse_generate)
+
+    with pytest.raises(InferenceGatewayError):
+        route.inference.rotate("abc", "demo", _ROUTE)
+
+    token, key = route.worker_key()
+    assert token == old
+    assert key["max_budget"] == pytest.approx(0.002416)
+
+
 def test_spending_that_does_not_stop_changing_is_not_recorded(route: Route) -> None:
     route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
     token, _ = route.worker_key()

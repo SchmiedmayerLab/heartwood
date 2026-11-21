@@ -217,23 +217,18 @@ def test_a_key_beyond_its_budget_is_refused_and_its_spending_is_recorded(proxy: 
 
 
 def _launch(proxy: Proxy) -> dict[str, Any]:
-    """Launch the first researcher's session of demo; a launch can be repeated."""
-    for _ in range(3):
-        try:
-            status, launch = request(
-                proxy.cluster,
-                proxy.pod,
-                "PUT",
-                launch_url(FIRST, "demo"),
-                spawner_token(proxy.cluster),
-            )
-        except AssertionError:
-            # The request ended after its time limit while the session's gateway started.
-            continue
-        assert status == 200, launch
-        assert isinstance(launch, dict)
-        return launch
-    raise AssertionError("the launch did not complete")
+    """Launch the first researcher's session of demo, which waits for its gateway."""
+    status, launch = request(
+        proxy.cluster,
+        proxy.pod,
+        "PUT",
+        launch_url(FIRST, "demo"),
+        spawner_token(proxy.cluster),
+        max_time=300,
+    )
+    assert status == 200, launch
+    assert isinstance(launch, dict)
+    return launch
 
 
 @pytest.fixture(scope="module")

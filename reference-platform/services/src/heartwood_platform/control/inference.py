@@ -283,15 +283,17 @@ class ManagedInference:
         with localcontext(prec=_PRECISION):
             carried = keys.carried + spend
             budget = max(keys.max_budget - carried, Decimal(0))
-        key = self._generate(session, project, budget)
+        key: str | None = None
         try:
+            key = self._generate(session, project, budget)
             self._providers.apply(route.endpoint, route.client, key, replace=True)
         except BaseException:
             # The provider keeps the previous key, which gets its budget back.
             self._proxy.update_key(
                 keys.token, max_budget=max(keys.max_budget - keys.carried, Decimal(0))
             )
-            self._proxy.delete_key(key_hash(key))
+            if key is not None:
+                self._proxy.delete_key(key_hash(key))
             raise
         rotated = _Keys(key_hash(key), keys.discovery, keys.retired, keys.max_budget, carried, None)
         self._store(session, rotated)
