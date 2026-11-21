@@ -365,12 +365,22 @@ def test_openshell_inputs_name_the_canonical_repository() -> None:
         "https://codeload.github.com/ai-openshell/openshell/"
     )
     releases = "https://github.com/ai-openshell/openshell/releases/download/"
-    cli = {item["url"]: item["sha256"] for item in gateway["cli"].values()}
-    assert all(url.startswith(releases) for url in cli)
-    for dockerfile in ("images/Dockerfile", "reference-platform/services/Dockerfile"):
+    cli = gateway["cli"]
+    assert all(item["url"].startswith(releases) for item in cli.values())
+    for dockerfile, stage_prefix in (
+        ("images/Dockerfile", "hosted-openshell-cli"),
+        ("reference-platform/services/Dockerfile", "openshell-cli"),
+    ):
         content = (_ROOT / dockerfile).read_text()
-        pins = re.findall(r"ADD --checksum=sha256:([0-9a-f]{64}) \\\n\s+(\S*openshell\S*)", content)
-        assert {url: digest for digest, url in pins} == cli, dockerfile
+        for arch in ("amd64", "arm64"):
+            stage = f"{stage_prefix}-{arch}"
+            pins = re.findall(
+                rf"^FROM scratch AS {stage}\n"
+                r"ADD --checksum=sha256:([0-9a-f]{64}) \\\n\s+(\S+) /openshell\.tar\.gz$",
+                content,
+                re.MULTILINE,
+            )
+            assert pins == [(cli[arch]["sha256"], cli[arch]["url"])], (dockerfile, stage)
 
 
 @pytest.fixture
