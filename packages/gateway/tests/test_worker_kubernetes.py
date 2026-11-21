@@ -48,6 +48,7 @@ def _settings(root: Path, **changes: object) -> KubernetesWorkerDeployment:
             "kubectl_cli": root / "kubectl",
             "kubeconfig": root / "kubeconfig",
             "namespace": _NAMESPACE,
+            "image_repository": "registry.test/heartwood/worker",
             "supervisor_image_digest": _SUPERVISOR_IMAGE,
             "sandbox_image_digest": _SANDBOX_IMAGE,
             "workspace": "hw",

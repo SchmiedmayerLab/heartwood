@@ -194,6 +194,26 @@ Every other listed field must be present with its accepted value.
 `admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, both policies, and the namespace for qualification evidence, without environment, commands, or pod labels and annotations.
 It keeps the namespace's Pod Security labels.
 
+### Kubernetes Worker Staging
+
+With the `openshell-kubernetes` driver, `KubernetesWorkerVolumes` in `heartwood.gateway.worker_kubernetes` stages the snapshots into two persistent volume claims, `hw-attempt-<attempt>-inputs` and `hw-attempt-<attempt>-skills`, in the manifest's `namespace`.
+The table lists each step next to the Docker step.
+
+| Step | Docker | Kubernetes |
+|---|---|---|
+| Volumes | Two Docker volumes with the project, attempt, and role labels and the two OpenShell approval labels | Two claims with the same labels, storage class `heartwood-attempt`, access mode `ReadWriteOnce`, 256 MiB each, and no data source |
+| Staging process | A container that never starts while the copy runs: no network, read-only root filesystem, all capabilities dropped except `FOWNER`, `no-new-privileges`, user `0` | Pod `hw-staging-<attempt>` from the worker image by digest: service account `hw-staging` without a mounted token, user and group `10002`, `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem, CPU and memory limits, only the two claims as volumes, and a ten minute lifetime |
+| Network | `--network=none` | Every NetworkPolicy of the namespace that selects the pod's labels must have no ingress and no egress rule, and together they must cover both directions; otherwise nothing is created |
+| Copy | `docker container cp`, then `chmod -R a+rX` in the container | A tar stream of directories and regular files through `kubectl exec` into `tar` in the pod; files belong to user `10002`, are readable by every user, and keep whether they are executable. The worker image's Python then reports the SHA-256 digest of each claim's tree, over every path, type, permission set, file size and file content, and staging stops unless it equals the digest of the archive that was sent. A top-level `lost+found` directory that the claim's filesystem creates is not compared when the snapshot has no entry of that name and the directory is empty and belongs to user `0` with no permission for other users; any other such entry stops staging |
+| Completion | The container exited with status `0` and kept its identity | The pod kept its identity, is still running, and its container did not restart; then the pod is deleted and its absence is awaited |
+| Identity | Volume and container labels are read back after creation and before removal | Claim and pod labels and UIDs are read back after creation, and the labels again before removal; a deletion request selects by name and by the labels |
+| Read-only use | The worker mounts each volume read-only | The driver configuration names each claim read-only on the volume and on the mount |
+| Removal | No container of the attempt may be listed; then the staging container and the volumes are removed | For up to 90 seconds the Sandbox resource `<workspace>--hw-<first 16 hex characters of the attempt>` and every pod of the attempt must become absent; then the staging pod and the claims are deleted and their absence is awaited |
+
+A pod counts as the attempt's when it has the workload pod's or the supervisor pod's name, the attempt's labels, an owner reference to the attempt's Sandbox resource, or the sandbox identifier in `openshell.ai/boundary-pair` or `openshell.ai/sandbox-id`.
+A failed or unreadable `kubectl` request stops staging, and staging is never repeated for an attempt; revocation removes what was created.
+A missing or unreadable listing is never read as absence.
+
 ### Worker Attempt Ownership
 
 A worker attempt is a durable record in the paired session and audit journal with the phases `prepared`, `active`, `fenced`, and `revoked`.

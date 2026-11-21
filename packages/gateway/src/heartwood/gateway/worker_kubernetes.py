@@ -4,22 +4,30 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Admission of a Kubernetes worker by reading its pods, policies and namespace with `kubectl`."""
+"""Staging, admission and evidence of absence of a Kubernetes worker through `kubectl`."""
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 import posixpath
 import re
 import subprocess
-from pathlib import PurePosixPath
+import tarfile
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
 from typing import Any
 
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptIntent
 from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
-from heartwood.gateway.worker_volumes import _native_limits
+from heartwood.gateway.worker_volumes import (
+    _native_limits,
+    attachable_labels,
+    require_private_snapshots,
+)
 
 _WORKER_ID = 10001
 _PAIR = "openshell.ai/boundary-pair"
@@ -119,6 +127,71 @@ _RECORDED_CONTAINER_FIELDS = (
     "restartPolicy",
 )
 _ABSENT_RECORD = "<absent>"
+
+# What the platform provides in the namespace for staging: a service account that grants
+# nothing, and the storage class of the attempt's claims.
+_STAGING_SERVICE_ACCOUNT = "hw-staging"
+# Another identity than the worker's, so the worker does not own the staged files.
+_STAGING_ID = 10002
+_STAGING_CONTAINER = "stage"
+_STORAGE_CLASS = "heartwood-attempt"
+# Inputs and Skills are each limited to 64 MiB before staging.
+_CLAIM_STORAGE = "256Mi"
+_STAGING_LIMITS = {"cpu": "1", "memory": "256Mi"}
+# The staging pod ends itself after this time if the gateway process ends first.
+_STAGING_SECONDS = 600
+_STAGING_READY_SECONDS = 120
+# The worker image's interpreter, which reports the digest of each staged tree.
+_STAGING_PYTHON = "/opt/heartwood/.venv/bin/python"
+# A filesystem's own directory for recovered blocks, such as on Persistent Disk. Below a
+# claim's root it is skipped only when the snapshot has no entry of that name and it is an
+# empty directory that belongs to user 0 with no permission for other users, which the
+# staging user cannot create.
+_LOST_AND_FOUND = "lost+found"
+# Reports the digest of the tree below a claim's mount point as `_tree_digest` computes it
+# for an archive, and fails on any entry that is not a directory or a regular file.
+_TREE_DIGEST_SCRIPT = """\
+import hashlib, os, stat, sys
+
+root, skip = sys.argv[1], sys.argv[2] == "skip-lost-found"
+owner = 0
+lines = []
+
+def visit(directory, prefix):
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            path = prefix + entry.name
+            info = entry.stat(follow_symlinks=False)
+            if skip and path == "lost+found" and stat.S_ISDIR(info.st_mode):
+                if info.st_uid != owner or info.st_mode & 0o007:
+                    sys.exit("staged tree holds a lost+found directory of another owner")
+                with os.scandir(entry.path) as recovered:
+                    if any(recovered):
+                        sys.exit("staged tree holds a lost+found directory that is not empty")
+                continue
+            mode = stat.S_IMODE(info.st_mode) & 0o777
+            if stat.S_ISDIR(info.st_mode):
+                lines.append(f"{path}\\0d\\0{mode:o}\\0\\0\\n")
+                visit(entry.path, path + "/")
+            elif stat.S_ISREG(info.st_mode):
+                content = hashlib.sha256()
+                with open(entry.path, "rb") as file:
+                    for block in iter(lambda: file.read(1 << 20), b""):
+                        content.update(block)
+                lines.append(f"{path}\\0f\\0{mode:o}\\0{info.st_size}\\0{content.hexdigest()}\\n")
+            else:
+                sys.exit("staged tree holds an entry that is neither a directory nor a file")
+
+visit(root, "")
+print(hashlib.sha256("".join(sorted(lines)).encode()).hexdigest())
+"""
+_REMOVAL_SECONDS = 60
+# The supervisor pod can stay for its termination grace period after the sandbox gateway
+# reports the deletion.
+_ABSENCE_SECONDS = 90
+_POLICY = "networkpolicy.networking.k8s.io"
+_CLAIM = "persistentvolumeclaim"
+_SANDBOX_RESOURCE = "sandbox.agents.x-k8s.io"
 
 
 class _Absent:
@@ -316,7 +389,7 @@ def _supervisor_volume(volume: dict[str, Any], sandbox_id: str) -> bool:
     )
 
 
-def _kubectl(settings: KubernetesWorkerDeployment, *args: str) -> bytes:
+def _kubectl(settings: KubernetesWorkerDeployment, *args: str, stdin: bytes | None = None) -> bytes:
     """Use the explicit cluster configuration without inherited Kubernetes or proxy settings."""
     try:
         with TemporaryDirectory(prefix="worker-kubectl-") as home:
@@ -334,6 +407,8 @@ def _kubectl(settings: KubernetesWorkerDeployment, *args: str) -> bytes:
                 ],
                 env={"PATH": os.defpath, "HOME": home},
                 cwd=home,
+                # Without input the tool reads nothing from the gateway's own standard input.
+                input=b"" if stdin is None else stdin,
                 capture_output=True,
                 timeout=60,
                 check=False,
@@ -410,6 +485,104 @@ def _reported(value: object) -> object:
     return _ABSENT_RECORD if value is _ABSENT else value
 
 
+def _parsed(output: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(output)
+    except (ValueError, UnicodeError, RecursionError):
+        raise WorkerAttemptError("native resource inspection was incomplete") from None
+    if not isinstance(value, dict):
+        raise WorkerAttemptError("native resource inspection was incomplete")
+    return value
+
+
+def _selects(selector: object, labels: dict[str, str]) -> bool:
+    """Decide whether a label selector selects a pod with these labels, as the API does."""
+    incomplete = WorkerAttemptError("native resource inspection was incomplete")
+    if not isinstance(selector, dict) or set(selector) - {"matchLabels", "matchExpressions"}:
+        raise incomplete
+    required = selector.get("matchLabels", {})
+    if not isinstance(required, dict):
+        raise incomplete
+    if any(labels.get(name) != value for name, value in required.items()):
+        return False
+    for expression in _objects(selector, "matchExpressions"):
+        name, operator = expression.get("key"), expression.get("operator")
+        values = expression.get("values", [])
+        if not isinstance(name, str) or not isinstance(values, list):
+            raise incomplete
+        if operator in ("In", "NotIn"):
+            selected = (labels.get(name) in values) == (operator == "In")
+        elif operator in ("Exists", "DoesNotExist"):
+            selected = (name in labels) == (operator == "Exists")
+        else:
+            raise incomplete
+        if not selected:
+            return False
+    return True
+
+
+def _allows_traffic(policy: dict[str, Any]) -> bool:
+    """Report a policy with any ingress or egress rule; a rule can only allow traffic."""
+    spec = _field(policy, "spec")
+    return bool(_objects(spec, "ingress")) or bool(_objects(spec, "egress"))
+
+
+def _archive(source: Path) -> bytes:
+    """Pack a staged snapshot's directories and regular files, readable by every user.
+
+    A file keeps whether it is executable, as `chmod a+rX` keeps it on the Docker path.
+    """
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for path in sorted(source.rglob("*")):
+            directory = path.is_dir() and not path.is_symlink()
+            if not directory and not (path.is_file() and not path.is_symlink()):
+                raise WorkerAttemptError("worker staging requires canonical private snapshots")
+            member = tarfile.TarInfo(path.relative_to(source).as_posix())
+            member.type = tarfile.DIRTYPE if directory else tarfile.REGTYPE
+            member.mode = 0o755 if directory or path.stat().st_mode & 0o111 else 0o644
+            if directory:
+                archive.addfile(member)
+                continue
+            content = path.read_bytes()
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+    return stream.getvalue()
+
+
+def _tree_digest(archive: bytes) -> str:
+    """Return the digest of the tree that extracting `archive` creates.
+
+    Each directory and regular file contributes its path, type, permission bits and, for
+    a file, its size and SHA-256, so a missing, shortened or changed entry changes it.
+    """
+    lines = []
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as members:
+        for member in members:
+            mode = member.mode & 0o777
+            if member.isdir():
+                lines.append(f"{member.name}\0d\0{mode:o}\0\0\n")
+                continue
+            if not member.isreg():
+                raise WorkerAttemptError("worker staging requires canonical private snapshots")
+            content = members.extractfile(member)
+            if content is None:
+                raise WorkerAttemptError("worker staging requires canonical private snapshots")
+            digest = hashlib.sha256(content.read()).hexdigest()
+            lines.append(f"{member.name}\0f\0{mode:o}\0{member.size}\0{digest}\n")
+    try:
+        return hashlib.sha256("".join(sorted(lines)).encode()).hexdigest()
+    except UnicodeEncodeError:
+        # A name that is not UTF-8 cannot be compared with what the pod reports.
+        raise WorkerAttemptError("worker staging requires canonical private snapshots") from None
+
+
+def _top_level_names(archive: bytes) -> set[str]:
+    """Return the names of an archive's entries directly below its root."""
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as members:
+        return {member.name.split("/", 1)[0] for member in members}
+
+
 class KubernetesWorkerAdmission:
     """Read one attempt's pods, network policies and namespace, and decide on listed values."""
 
@@ -430,20 +603,18 @@ class KubernetesWorkerAdmission:
         # The driver names the Sandbox resource and its workload pod after both.
         self.pod_name = f"{settings.workspace}--{self.worker_name}"
 
-    def command(self, *args: str) -> bytes:
+    def command(self, *args: str, stdin: bytes | None = None) -> bytes:
         """Use the explicit cluster configuration without inherited Kubernetes settings."""
-        return _kubectl(self.settings, *args)
+        return _kubectl(self.settings, *args, stdin=stdin)
 
     def _get(self, resource: str, kind: str, name: str) -> dict[str, Any]:
         """Read one object; a missing, unreadable or differently named object is refused."""
-        output = self.command("get", resource, name, "--output=json")
-        try:
-            value = json.loads(output)
-        except (ValueError, UnicodeError, RecursionError):
-            raise WorkerAttemptError("native resource inspection was incomplete") from None
+        return self._object(self.command("get", resource, name, "--output=json"), kind, name)
+
+    def _object(self, output: bytes, kind: str, name: str) -> dict[str, Any]:
+        value = _parsed(output)
         if (
-            not isinstance(value, dict)
-            or value.get("kind") != kind
+            value.get("kind") != kind
             or _field(value, "metadata", "name") != name
             or (
                 kind != "Namespace"
@@ -698,3 +869,304 @@ class KubernetesWorkerAdmission:
             or _field(observed["workload_policy"], "spec") != _FENCE_SPEC
         ):
             raise WorkerAttemptError("native worker network policies do not match admission")
+
+
+class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
+    """Own the attempt's claims and staging pod, and observe its worker's absence."""
+
+    def __init__(self, settings: KubernetesWorkerDeployment, intent: WorkerAttemptIntent) -> None:
+        """Retain identities before provisioning any Kubernetes resource."""
+        super().__init__(settings, intent)
+        self._staging_attempted = False
+        self.staging_name = f"hw-staging-{intent.attempt_id.hex}"
+        # The identity the cluster gave each claim of this attempt, by mount.
+        self.claims: dict[str, str] = {}
+
+    def _find(self, resource: str, kind: str, name: str) -> dict[str, Any] | None:
+        """Read one object, or nothing when the cluster answers that it does not exist."""
+        output = self.command("get", resource, name, "--ignore-not-found", "--output=json")
+        return self._object(output, kind, name) if output.strip() else None
+
+    def _list(self, resource: str) -> list[dict[str, Any]]:
+        """Read every object of one kind in the namespace."""
+        listing = _parsed(self.command("get", resource, "--output=json"))
+        items = _objects(listing, "items")
+        # An answer without a list of items is never read as an empty namespace.
+        if (
+            not str(listing.get("kind", "")).endswith("List")
+            or not isinstance(listing.get("items"), list)
+            or any(
+                _field(item, "metadata", "namespace") != self.settings.namespace for item in items
+            )
+        ):
+            raise WorkerAttemptError("native resource inspection was incomplete")
+        return items
+
+    def _owned(self, observed: dict[str, Any], *, role: str) -> str:
+        """Require the attempt's complete identity and return the object's own identity."""
+        labels, uid = _field(observed, "metadata", "labels"), _field(observed, "metadata", "uid")
+        expected = {**self.labels, "heartwood.role": role}
+        if (
+            not isinstance(labels, dict)
+            or any(labels.get(name) != value for name, value in expected.items())
+            or not isinstance(uid, str)
+            or not uid
+        ):
+            raise WorkerAttemptError("native resource does not belong to this worker attempt")
+        return uid
+
+    def _delete(self, resource: str, name: str, *, role: str) -> None:
+        """Request deletion of the object under a name only if it carries the attempt's labels."""
+        selector = ",".join(
+            f"{label}={value}" for label, value in {**self.labels, "heartwood.role": role}.items()
+        )
+        self.command(
+            "delete",
+            resource,
+            "--selector=" + selector,
+            "--field-selector=metadata.name=" + name,
+            "--wait=false",
+            "--ignore-not-found",
+        )
+
+    def _await_removal(self, resource: str, kind: str, names: tuple[str, ...]) -> None:
+        deadline = monotonic() + _REMOVAL_SECONDS
+        while any(self._find(resource, kind, name) is not None for name in names):
+            if monotonic() >= deadline:
+                raise WorkerAttemptError("native resource remains after its deletion")
+            sleep(0.5)
+
+    def _require_isolation(self, labels: dict[str, str]) -> None:
+        """Require the namespace's policies to deny a pod with these labels all traffic."""
+        selecting = [
+            policy
+            for policy in self._list(_POLICY)
+            if _selects(_field(policy, "spec", "podSelector"), labels)
+        ]
+        denied = {
+            kind
+            for policy in selecting
+            for kind in ("Ingress", "Egress")
+            if isinstance(types := _field(policy, "spec", "policyTypes"), list) and kind in types
+        }
+        if denied != {"Ingress", "Egress"} or any(_allows_traffic(policy) for policy in selecting):
+            raise WorkerAttemptError("worker staging requires a pod without network access")
+
+    def _claim(self, name: str) -> dict[str, Any]:
+        return {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": name,
+                "namespace": self.settings.namespace,
+                "labels": {
+                    **self.labels,
+                    "heartwood.role": "projection",
+                    **attachable_labels(self.settings.workspace),
+                },
+            },
+            "spec": {
+                "accessModes": ["ReadWriteOnce"],
+                "storageClassName": _STORAGE_CLASS,
+                "resources": {"requests": {"storage": _CLAIM_STORAGE}},
+            },
+        }
+
+    def _staging_pod(self) -> dict[str, Any]:
+        """A pod that only holds the attempt's claims while the gateway copies into them."""
+        return {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": self.staging_name,
+                "namespace": self.settings.namespace,
+                "labels": {**self.labels, "heartwood.role": "staging"},
+            },
+            "spec": {
+                "restartPolicy": "Never",
+                "activeDeadlineSeconds": _STAGING_SECONDS,
+                # A grace period of zero would remove the pod before its container stopped.
+                "terminationGracePeriodSeconds": 1,
+                "serviceAccountName": _STAGING_SERVICE_ACCOUNT,
+                "automountServiceAccountToken": False,
+                "enableServiceLinks": False,
+                "securityContext": {
+                    "runAsNonRoot": True,
+                    "runAsUser": _STAGING_ID,
+                    "runAsGroup": _STAGING_ID,
+                    "fsGroup": _STAGING_ID,
+                    "seccompProfile": {"type": "RuntimeDefault"},
+                },
+                "containers": [
+                    {
+                        "name": _STAGING_CONTAINER,
+                        "image": self.settings.image,
+                        "command": ["/bin/sleep", str(_STAGING_SECONDS)],
+                        "securityContext": {
+                            "allowPrivilegeEscalation": False,
+                            "capabilities": {"drop": ["ALL"]},
+                            "readOnlyRootFilesystem": True,
+                        },
+                        "resources": {"limits": _STAGING_LIMITS, "requests": _STAGING_LIMITS},
+                        "volumeMounts": [
+                            {"name": mount, "mountPath": f"/{mount}"} for mount in self.names
+                        ],
+                    }
+                ],
+                "volumes": [
+                    {"name": mount, "persistentVolumeClaim": {"claimName": claim}}
+                    for mount, claim in self.names.items()
+                ],
+            },
+        }
+
+    def _running_staging_pod(self) -> str:
+        """Wait until the staging pod runs and return its identity."""
+        deadline = monotonic() + _STAGING_READY_SECONDS
+        while True:
+            pod = self._get("pod", "Pod", self.staging_name)
+            uid = self._owned(pod, role="staging")
+            phase = _field(pod, "status", "phase")
+            if phase == "Running":
+                return uid
+            if phase != "Pending" or monotonic() >= deadline:
+                raise WorkerAttemptError("worker projection preparation did not complete")
+            sleep(0.5)
+
+    def stage(self, sources: dict[str, Path]) -> None:
+        """Copy verified private snapshots before the untrusted worker is created."""
+        if self._staging_attempted:
+            raise WorkerAttemptError("worker staging cannot repeat an uncertain transfer")
+        self._staging_attempted = True
+        require_private_snapshots(sources, self.names)
+        archives = {mount: _archive(source) for mount, source in sources.items()}
+        # Computed before any cluster request, so a snapshot that cannot be compared stops
+        # staging before a claim exists.
+        expected = {mount: _tree_digest(archive) for mount, archive in archives.items()}
+        skipped = {
+            mount: _LOST_AND_FOUND not in _top_level_names(archive)
+            for mount, archive in archives.items()
+        }
+        self._require_isolation({**self.labels, "heartwood.role": "staging"})
+        if self._find("pod", "Pod", self.staging_name) is not None:
+            raise WorkerAttemptError("worker staging pod already exists")
+        for name in self.names.values():
+            if self._find(_CLAIM, "PersistentVolumeClaim", name) is not None:
+                raise WorkerAttemptError("worker projection volume already exists")
+        for mount, name in self.names.items():
+            self.command("create", "--filename=-", stdin=json.dumps(self._claim(name)).encode())
+            claim = self._get(_CLAIM, "PersistentVolumeClaim", name)
+            self.claims[mount] = self._owned(claim, role="projection")
+            # A claim copied from another claim or snapshot would carry its content.
+            if _field(claim, "spec", "storageClassName") != _STORAGE_CLASS or any(
+                _field(claim, "spec", source) is not _ABSENT
+                for source in ("dataSource", "dataSourceRef")
+            ):
+                raise WorkerAttemptError("worker projection volume does not match its request")
+        self.command("create", "--filename=-", stdin=json.dumps(self._staging_pod()).encode())
+        staging = self._running_staging_pod()
+        for mount, archive in archives.items():
+            self.command(
+                "exec",
+                self.staging_name,
+                "--container=" + _STAGING_CONTAINER,
+                "--stdin",
+                "--",
+                "tar",
+                "--extract",
+                "--file=-",
+                "--directory=/" + mount,
+                stdin=archive,
+            )
+            # Standard input can reach the pod incomplete, and tar accepts an archive cut
+            # at a member boundary, so the staged tree is compared with what was sent.
+            reported = self.command(
+                "exec",
+                self.staging_name,
+                "--container=" + _STAGING_CONTAINER,
+                "--",
+                _STAGING_PYTHON,
+                "-I",
+                "-B",
+                "-c",
+                _TREE_DIGEST_SCRIPT,
+                "/" + mount,
+                "skip-lost-found" if skipped[mount] else "keep-lost-found",
+            )
+            if reported.decode(errors="replace").strip() != expected[mount]:
+                raise WorkerAttemptError("worker projection does not match the staged snapshot")
+        finished = self._get("pod", "Pod", self.staging_name)
+        statuses = _objects(_field(finished, "status"), "containerStatuses")
+        if (
+            self._owned(finished, role="staging") != staging
+            or _field(finished, "status", "phase") != "Running"
+            or [status.get("restartCount") for status in statuses] != [0]
+        ):
+            raise WorkerAttemptError("worker projection preparation did not complete")
+        self._remove_staging()
+
+    def driver_config(self) -> dict[str, Any]:
+        """Supply only the two attempt-owned claims, read-only on the volume and the mount."""
+        return {
+            "volumes": [
+                {"name": mount, "persistent_volume_claim": {"claim_name": claim, "read_only": True}}
+                for mount, claim in self.names.items()
+            ],
+            "containers": {
+                _AGENT: {
+                    "volume_mounts": [
+                        {"name": mount, "mount_path": f"/{mount}", "read_only": True}
+                        for mount in self.names
+                    ]
+                }
+            },
+        }
+
+    def _remove_staging(self) -> None:
+        pod = self._find("pod", "Pod", self.staging_name)
+        if pod is None:
+            return
+        self._owned(pod, role="staging")
+        self._delete("pod", self.staging_name, role="staging")
+        self._await_removal("pod", "Pod", (self.staging_name,))
+
+    def _worker_remains(self, sandbox_id: str | None) -> bool:
+        """Report the Sandbox resource or any pod of the attempt, by every identity they carry."""
+        if self._find(_SANDBOX_RESOURCE, "Sandbox", self.pod_name) is not None:
+            return True
+        for pod in self._list("pod"):
+            metadata = _field(pod, "metadata")
+            labels = _field(metadata, "labels")
+            labels = labels if isinstance(labels, dict) else {}
+            owners = [owner.get("name") for owner in _objects(metadata, "ownerReferences")]
+            names = [self.pod_name, *(["os-supervisor-" + sandbox_id] if sandbox_id else [])]
+            if (
+                _field(metadata, "name") in names
+                or self.pod_name in owners
+                or (
+                    sandbox_id is not None
+                    and sandbox_id in (labels.get(_PAIR), labels.get(_SANDBOX))
+                )
+                or (
+                    all(labels.get(name) == value for name, value in self.labels.items())
+                    and labels.get("heartwood.role") != "staging"
+                )
+            ):
+                return True
+        return False
+
+    def remove_after_revocation(self, sandbox_id: str | None = None) -> None:
+        """Require independently observed worker absence before removing owned projections."""
+        deadline = monotonic() + _ABSENCE_SECONDS
+        while self._worker_remains(sandbox_id):
+            if monotonic() >= deadline:
+                raise WorkerAttemptError("native worker remains after control-plane revocation")
+            sleep(1)
+        self._remove_staging()
+        for name in self.names.values():
+            claim = self._find(_CLAIM, "PersistentVolumeClaim", name)
+            if claim is None:
+                continue
+            self._owned(claim, role="projection")
+            self._delete(_CLAIM, name, role="projection")
+        self._await_removal(_CLAIM, "PersistentVolumeClaim", tuple(self.names.values()))
