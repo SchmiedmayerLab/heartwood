@@ -202,10 +202,11 @@ sessions:
 # in the sessions namespace. Researchers sign in to the Hub and to their gateways through
 # Keycloak.
 hub:
-  # Origin under which researchers open the Hub's proxy. Gateways redirect their sign-in
-  # to <publicOrigin>/user/<subject>/<project>/oauth_callback. The default is the
-  # in-cluster address of the proxy Service.
-  publicOrigin: "http://proxy-public.heartwood-platform.svc.cluster.local"
+  # HTTPS origin under which researchers open the Hub's proxy. Gateways redirect their
+  # sign-in to <publicOrigin>/user/<subject>/<project>/oauth_callback. The default is the
+  # in-cluster address of the proxy Service. The proxy serves a certificate of the
+  # platform CA for the names of its Services and the host of this origin.
+  publicOrigin: "https://proxy-public.heartwood-platform.svc.cluster.local"
   # Networks from which gateways accept proxied requests: the pod network that holds the
   # proxy. Required: a gateway does not start without at least one range. Network
   # policies admit only the proxy and the Hub to the gateway pods.
@@ -301,10 +302,22 @@ jupyterhub:
       - name: control-token
         mountPath: /var/run/secrets/heartwood/control
         readOnly: true
+  # The proxy serves researchers and its API over HTTPS with the certificate in the
+  # Secret proxy-tls, which the platform chart signs with the platform CA. Its Service
+  # has no HTTP port.
   proxy:
+    https:
+      enabled: true
+      type: secret
+      secret:
+        name: proxy-tls
     service:
       type: ClusterIP
+      disableHttpPort: true
     chp:
+      extraCommandLineFlags:
+        - --api-ssl-key=/etc/chp/tls/tls.key
+        - --api-ssl-cert=/etc/chp/tls/tls.crt
       image:
         name: quay.io/jupyterhub/configurable-http-proxy
         tag: "5.4.0@sha256:7977d796d372642aa9eb962ff36590b3019f8f24493fcf9f1d07d2c81e8e6080"
