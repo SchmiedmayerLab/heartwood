@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,13 @@ from typing import Any
 
 _GATEWAY = "session"
 _TIMEOUT_SECONDS = 60
+# Right after a new session's OpenShell gateway is ready, and while a restarted one starts,
+# the tool can fail to connect to it for a few seconds, likely until its Service and
+# network policy are in effect. A request that cannot connect is repeated with growing
+# pauses until this many seconds have passed since the first attempt.
+_CONNECT_SECONDS = 60.0
+_CONNECT_FIRST_PAUSE_SECONDS = 0.5
+_CONNECT_LONGEST_PAUSE_SECONDS = 8.0
 
 
 class ProviderError(Exception):
@@ -78,16 +86,19 @@ class ProviderRoute:
         }
 
 
-Runner = Callable[[Sequence[str], dict[str, str]], subprocess.CompletedProcess[str]]
+# The arguments, the environment and the seconds that the tool may run.
+Runner = Callable[[Sequence[str], dict[str, str], float], subprocess.CompletedProcess[str]]
 
 
-def _run(arguments: Sequence[str], environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    arguments: Sequence[str], environment: dict[str, str], timeout: float
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(arguments),
         env=environment,
         capture_output=True,
         text=True,
-        timeout=_TIMEOUT_SECONDS,
+        timeout=timeout,
         check=False,
     )
 
@@ -101,12 +112,26 @@ class OpenShellProviders:
         route: ProviderRoute,
         scratch: Path,
         run: Runner = _run,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Run ``cli`` with registrations in temporary directories under ``scratch``."""
         self._cli = cli
         self._route = route
         self._scratch = scratch
         self._runner = run
+        self._sleep = sleep
+        self._clock = clock
+
+    def _call(
+        self, arguments: Sequence[str], environment: dict[str, str], timeout: float
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            return self._runner(arguments, environment, timeout)
+        except subprocess.TimeoutExpired:
+            raise ProviderError(
+                f"the OpenShell tool did not finish within {timeout:.0f} seconds"
+            ) from None
 
     def _session(
         self, directory: Path, endpoint: str, client: dict[str, str]
@@ -120,15 +145,22 @@ class OpenShellProviders:
         base = {"PATH": os.defpath, "HOME": str(directory), "XDG_CONFIG_HOME": str(directory)}
 
         def run(
-            *arguments: str, workspace: bool = True, **environment: str
+            *arguments: str,
+            workspace: bool = True,
+            timeout: float = _TIMEOUT_SECONDS,
+            **environment: str,
         ) -> subprocess.CompletedProcess[str]:
             scope = ["--gateway", _GATEWAY]
             if workspace:
                 scope += ["--workspace", self._route.workspace]
-            return self._runner([str(self._cli), *arguments, *scope], {**base, **environment})
+            return self._call(
+                [str(self._cli), *arguments, *scope], {**base, **environment}, timeout
+            )
 
-        added = self._runner(
-            [str(self._cli), "gateway", "add", endpoint, "--name", _GATEWAY, "--local"], base
+        added = self._call(
+            [str(self._cli), "gateway", "add", endpoint, "--name", _GATEWAY, "--local"],
+            base,
+            _TIMEOUT_SECONDS,
         )
         _require(added, "register the session's OpenShell gateway")
         return run
@@ -144,7 +176,10 @@ class OpenShellProviders:
             directory = Path(name)
             run = self._session(directory, endpoint, client)
             route = self._route
-            if run("workspace", "get", route.workspace, workspace=False).returncode != 0:
+            found = self._connected(run, "workspace", "get", route.workspace, workspace=False)
+            if _unreachable(found):
+                _require(found, "reach the session's OpenShell gateway")
+            if found.returncode != 0:
                 _require(
                     run("workspace", "create", "--name", route.workspace, workspace=False),
                     "create the workspace",
@@ -180,16 +215,59 @@ class OpenShellProviders:
                 )
                 _require(updated, "update the provider")
 
+    def _connected(
+        self,
+        run: Callable[..., subprocess.CompletedProcess[str]],
+        *arguments: str,
+        workspace: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the tool, again with growing pauses while it cannot connect to the gateway.
+
+        No pause and no attempt extends beyond ``_CONNECT_SECONDS`` after the first
+        attempt, except by the one second that an attempt may always take. The last
+        result is returned.
+        """
+        deadline = self._clock() + _CONNECT_SECONDS
+        pause = _CONNECT_FIRST_PAUSE_SECONDS
+        while True:
+            timeout = max(min(_TIMEOUT_SECONDS, deadline - self._clock()), 1.0)
+            result = run(*arguments, workspace=workspace, timeout=timeout)
+            if not _unreachable(result) or deadline - self._clock() <= pause:
+                return result
+            self._sleep(pause)
+            pause = min(pause * 2, _CONNECT_LONGEST_PAUSE_SECONDS)
+
     def exists(self, endpoint: str, client: dict[str, str]) -> bool:
-        """Return whether the session's OpenShell gateway holds the provider."""
+        """Return whether the session's OpenShell gateway holds the provider.
+
+        Only the gateway's answer that the provider is not found means that it lost the
+        provider. A gateway that cannot be reached, for example while it restarts, or any
+        other failure raises ``ProviderError``, so that a running session keeps its key.
+        """
         with TemporaryDirectory(dir=self._scratch, prefix="openshell-") as name:
             run = self._session(Path(name), endpoint, client)
-            return run("provider", "get", self._route.name).returncode == 0
+            found = self._connected(run, "provider", "get", self._route.name)
+            if found.returncode == 0:
+                return True
+            if _unreachable(found):
+                raise _error(found, "reach the session's OpenShell gateway")
+            if "not found" in found.stderr:
+                return False
+            raise _error(found, "look up the provider")
+
+
+def _unreachable(result: subprocess.CompletedProcess[str]) -> bool:
+    """Whether the tool could not connect to the gateway at all."""
+    return result.returncode != 0 and "connect error" in result.stderr
+
+
+def _error(result: subprocess.CompletedProcess[str], action: str) -> ProviderError:
+    # The tool reports errors without credentials; its last line names the cause.
+    lines = result.stderr.strip().splitlines()
+    cause = lines[-1][:300] if lines else f"exit status {result.returncode}"
+    return ProviderError(f"could not {action}: {cause}")
 
 
 def _require(result: subprocess.CompletedProcess[str], action: str) -> None:
     if result.returncode != 0:
-        # The tool reports errors without credentials; its last line names the cause.
-        lines = result.stderr.strip().splitlines()
-        cause = lines[-1][:300] if lines else f"exit status {result.returncode}"
-        raise ProviderError(f"could not {action}: {cause}")
+        raise _error(result, action)
