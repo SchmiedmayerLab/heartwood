@@ -648,12 +648,21 @@ def test_a_filesystem_recovery_directory_in_a_claim_is_not_staged_content(
     volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
 ) -> None:
     # Group permissions are what fsGroup adds to the filesystem's own directory.
+    cluster.extra["inputs"] = {"lost+found": (0o770, None)}
+    volumes.stage(sources)
+    assert cluster.names("pod") == []
+
+
+def test_a_recovery_directory_with_content_is_not_skipped(
+    volumes: KubernetesWorkerVolumes, cluster: _Cluster, sources: dict[str, Path]
+) -> None:
     cluster.extra["inputs"] = {
         "lost+found": (0o770, None),
         "lost+found/recovered": (0o600, b"block\n"),
     }
-    volumes.stage(sources)
-    assert cluster.names("pod") == []
+    with pytest.raises(WorkerAttemptError, match="requires reconciliation"):
+        volumes.stage(sources)
+    assert "skills" not in cluster.copied
 
 
 def test_a_recovery_directory_open_to_other_users_is_not_skipped(
