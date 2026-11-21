@@ -16,7 +16,7 @@ container mount that Secret.
 {{- $image := .Values.images.hostedGateway -}}
 {{- $sources := .Values.hub.trustedProxySources -}}
 {{- $mounts := include "heartwood.hubMounts" . | fromJson -}}
-{{- $fixed := list "heartwood" "gateway" "serve" "--deployment" "/etc/heartwood/deployment/deployment.toml" "--ingress-mode" "identity-proxy" "--host" "0.0.0.0" "--port" "8888" "--tls-certificate" "/etc/heartwood/deployment/gateway-tls.crt" "--tls-key" "/etc/heartwood/deployment/gateway-tls.key" "--public-origin" .Values.hub.publicOrigin "--base-path" -}}
+{{- $fixed := list "heartwood" "gateway" "serve" "--deployment" "/etc/heartwood/deployment/deployment.toml" "--ingress-mode" "identity-proxy" "--host" "0.0.0.0" "--port" "8888" "--tls-certificate" "/etc/heartwood/deployment/gateway-tls.crt" "--tls-key" "/etc/heartwood/deployment/gateway-tls.key" "--public-origin" -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -98,6 +98,8 @@ spec:
         {{- range $index, $value := $fixed }}
         && object.spec.containers[0].args[{{ $index }}] == {{ $value | toJson }}
         {{- end }}
+        && object.spec.containers[0].args[17] == '--base-path'
+        && object.spec.containers[0].args[16] == 'https://' + object.spec.containers[0].args[18].split('/')[2] + '.' + object.spec.containers[0].args[18].split('/')[3] + '.{{ .Values.hub.projectDomain }}'
         && object.spec.containers[0].args[18].matches('^/user/r[0-9a-f]{32}/[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$')
         {{- range $index, $source := $sources }}
         && object.spec.containers[0].args[{{ add 19 (mul 2 $index) }}] == '--trusted-proxy-source'

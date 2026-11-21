@@ -44,6 +44,7 @@ import ssl
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 # A directory mount of the chart's ConfigMap, which kubelet updates after an upgrade.
 SETTINGS = Path("/usr/local/etc/heartwood/hub/config/settings.json")
@@ -78,6 +79,13 @@ def launch_path(researcher: str, project: str) -> str | None:
     return f"/v1/researchers/{researcher}/projects/{project}/launch"
 
 
+def project_host(domain: str, researcher: str, project: str) -> str:
+    """Return the DNS name of a researcher's named project server."""
+    if launch_path(researcher, project) is None:
+        raise ValueError("Invalid researcher or project in gateway route.")
+    return f"{researcher}.{project}.{domain}"
+
+
 def profiles(projects: list[str], server: str) -> list[dict[str, Any]]:
     """Offer the project of a named server, when the researcher is a member of it."""
     return [
@@ -103,7 +111,7 @@ def gateway_arguments(settings: dict[str, Any], researcher: str, project: str) -
         "--tls-key",
         GATEWAY_KEY,
         "--public-origin",
-        settings["public_origin"],
+        "https://" + project_host(settings["project_domain"], researcher, project),
         "--base-path",
         f"/user/{researcher}/{project}",
     ]
@@ -236,6 +244,7 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     from jupyterhub import app as hub_application
     from jupyterhub.app import JupyterHub
     from jupyterhub.proxy import ConfigurableHTTPProxy
+    from jupyterhub.user import User
     from kubespawner import KubeSpawner
     from tornado import web
     from tornado.httpclient import AsyncHTTPClient, HTTPRequest
@@ -294,6 +303,8 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         path = launch_path(researcher, project)
         if path is None:
             raise web.HTTPError(400, "Start a named server for one of your projects.")
+        if any(current.get(key) != settings[key] for key in ("project_domain", "public_origin")):
+            raise web.HTTPError(503, "Restart the Hub to activate the new public routes.")
         status, launch = await control("PUT", path)
         if status in {403, 404}:
             raise web.HTTPError(403, "You are not a member of this project.")
@@ -301,6 +312,10 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
             raise web.HTTPError(409, "The project's budget has no amount left for a session.")
         if status != 200 or not isinstance(launch, dict):
             raise web.HTTPError(502, "The platform could not prepare the session.")
+        host = project_host(settings["project_domain"], researcher, project)
+        callback = f"https://{host}/user/{researcher}/{project}/oauth_callback"
+        if launch.get("redirect_uri") != callback:
+            raise web.HTTPError(502, "The platform registered a different project callback.")
         pod = pod_settings(launch, current)
         resources = current["resources"]
         spawner.image = current["gateway_image"]
@@ -332,10 +347,37 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         ]
         spawner.args = gateway_arguments(current, researcher, project)
 
+    original_server_url = User.server_url
+
+    def server_url(user: Any, server_name: str = "") -> str:  # noqa: ANN401
+        if launch_path(user.name, server_name):
+            host = project_host(settings["project_domain"], user.name, server_name)
+            return f"https://{host}/user/{user.name}/{server_name}/"
+        return original_server_url(user, server_name)
+
+    User.server_url = server_url
     proxy_clients: list[Any] = []
 
     class HeartwoodProxy(ConfigurableHTTPProxy):  # type: ignore[misc]
         """The Hub's proxy, whose API the Hub calls over HTTPS, trusting the platform CA alone."""
+
+        def _routespec_to_chp_path(self, routespec: str) -> str:
+            # JupyterHub tracks servers by path. CHP looks up host plus path.
+            path = routespec.rstrip("/")
+            if not path:
+                return "/" + str(urlsplit(origin).hostname)
+            match = re.fullmatch(r"/user/([^/]+)/([^/]+)", path)
+            if match is None:
+                raise ValueError("Unexpected Hub proxy route.")
+            host = project_host(settings["project_domain"], *match.groups())
+            return f"/{host}{path}"
+
+        def _routespec_from_chp_path(self, chp_path: str) -> str:
+            _, _, path = chp_path.lstrip("/").partition("/")
+            logical = "/" + path.strip("/")
+            if self._routespec_to_chp_path(logical) == chp_path.rstrip("/"):
+                return logical.rstrip("/") + "/"
+            return chp_path
 
         async def api_request(
             self,
@@ -375,6 +417,7 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
                     raise web.HTTPError(502, "The platform could not remove the session.")
             await super().delete_forever()
 
+    c.JupyterHub.cookie_host_prefix_enabled = True
     c.JupyterHub.authenticator_class = "generic-oauth"
     c.GenericOAuthenticator.client_id = settings["client_id"]
     c.GenericOAuthenticator.client_secret = (

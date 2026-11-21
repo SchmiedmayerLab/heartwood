@@ -141,7 +141,7 @@ def test_the_arguments_of_the_hook_match_the_admission_policy(
     ]
     assert f"size(object.spec.containers[0].args) == {len(arguments)}" in expression
     for index, value in enumerate(arguments):
-        if index != 18:
+        if index not in {16, 18}:
             assert f"args[{index}] == {json.dumps(value)}" in expression or (
                 f"args[{index}] == '{value}'" in expression
             )
@@ -371,6 +371,8 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
     jupyterhub = types.ModuleType("jupyterhub")
     proxy = types.ModuleType("jupyterhub.proxy")
     proxy.ConfigurableHTTPProxy = ConfigurableHTTPProxy  # type: ignore[attr-defined]
+    user = types.ModuleType("jupyterhub.user")
+    user.User = type("User", (), {"server_url": lambda _self, _name: "/"})
     app = types.ModuleType("jupyterhub.app")
     app.JupyterHub = JupyterHub  # type: ignore[attr-defined]
     pycurl = types.ModuleType("pycurl")
@@ -383,6 +385,7 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         ("jupyterhub", jupyterhub),
         ("jupyterhub.proxy", proxy),
         ("jupyterhub.app", app),
+        ("jupyterhub.user", user),
         ("pycurl", pycurl),
     ):
         monkeypatch.setitem(sys.modules, name, module)
@@ -411,7 +414,10 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
             ],
         }
     ]
-    _module().configure(config, settings)
+    module = _module()
+    module.SETTINGS = tmp_path / "settings.json"
+    module.SETTINGS.write_text(json.dumps(settings))
+    module.configure(config, settings)
     return _Hub(
         config,
         settings,
@@ -423,6 +429,46 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         Client,
         app,
     )
+
+
+@pytest.mark.parametrize("change", ["project_domain", "public_origin", "shared-callback", "valid"])
+def test_spawn_checks_effective_public_route(
+    hub: _Hub, tmp_path: Path, change: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    current = dict(hub.settings)
+    if change in ("project_domain", "public_origin"):
+        current[change] = "changed.example.test"
+    (tmp_path / "settings.json").write_text(json.dumps(current))
+    host = _module().project_host(hub.settings["project_domain"], _RESEARCHER, "demo")
+    origin = hub.settings["public_origin"] if change == "shared-callback" else f"https://{host}"
+
+    async def fetch(_client: object, _request: object, **_kwargs: object) -> types.SimpleNamespace:
+        assert change not in ("project_domain", "public_origin")
+        launch = {
+            "redirect_uri": f"{origin}/user/{_RESEARCHER}/demo/oauth_callback",
+            "session": _SESSION,
+            "gateway_service_account": "hw-gw-session",
+        }
+        return types.SimpleNamespace(code=200, body=json.dumps(launch))
+
+    monkeypatch.setattr(hub.client, "fetch", fetch)
+    spawner = types.SimpleNamespace(
+        user=types.SimpleNamespace(name=_RESEARCHER),
+        name="demo",
+        user_options={},
+        pvc_name="",
+        extra_labels={},
+    )
+    hook = hub.config.KubeSpawner.pre_spawn_hook
+    if change == "valid":
+        asyncio.run(hook(spawner))
+        assert f"https://{host}" in spawner.args
+    else:
+        with pytest.raises(hub.http_error, match=r"(public routes|project callback)"):
+            asyncio.run(hook(spawner))
+        assert not hasattr(spawner, "image")
 
 
 def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(hub: _Hub) -> None:
@@ -484,7 +530,24 @@ def test_the_proxy_serves_https_with_a_certificate_of_the_platform_ca(
         "proxy-public.heartwood-platform.svc.cluster.local",
         "proxy-api.heartwood-platform.svc.cluster.local",
         origin.hostname,
+        "*.demo." + settings["project_domain"],
     } <= names
+    for project, valid in (("demo", True), ("unregistered", False)):
+        host = f"{_RESEARCHER}.{project}.{settings['project_domain']}"
+        verified = subprocess.run(
+            [
+                "openssl",
+                "verify",
+                "-CAfile",
+                str(authority),
+                "-verify_hostname",
+                host,
+                str(serving),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        assert (verified.returncode == 0) == valid
     # The proxy serves researchers and its API with the certificate, and its Service
     # offers no HTTP port.
     proxy = _named(objects, "Deployment", "proxy")["spec"]["template"]["spec"]
@@ -531,6 +594,24 @@ def test_the_public_origin_must_be_https_with_a_host_name(origin: str) -> None:
     )
     assert result.returncode != 0
     assert "publicOrigin" in result.stderr
+
+
+def test_proxy_routes_distinguish_projects_and_researchers(hub: _Hub) -> None:
+    proxy = hub.config.JupyterHub.proxy_class()
+    origins = set()
+    for researcher, project in (
+        (_RESEARCHER, "demo"),
+        (_RESEARCHER, "other"),
+        ("r" + "1" * 32, "demo"),
+    ):
+        path = f"/user/{researcher}/{project}/"
+        host = f"{researcher}.{project}.{hub.settings['project_domain']}"
+        route = proxy._routespec_to_chp_path(path)
+        assert route == f"/{host}{path.rstrip('/')}"
+        assert proxy._routespec_from_chp_path(route) == path
+        origins.add(host)
+    assert len(origins) == 3
+    assert proxy._routespec_from_chp_path(proxy._routespec_to_chp_path("/")) == "/"
 
 
 def test_the_hub_calls_the_proxy_api_over_https_trusting_the_platform_ca(hub: _Hub) -> None:
@@ -635,13 +716,15 @@ def test_the_proxy_reaches_the_hub_and_the_gateways_over_tls_trusting_the_platfo
     (container,) = proxy["containers"]
     command = container["command"]
     for argument in (
-        "--default-target=https://hub:8081",
-        "--error-target=https://hub:8081/hub/error",
+        "--host-routing",
+        "--default-target=$(HEARTWOOD_NO_TARGET)",
+        "--error-target=$(HEARTWOOD_NO_TARGET)",
         "--client-ssl-key=/etc/chp/tls/tls.key",
         "--client-ssl-cert=/etc/chp/tls/tls.crt",
         "--client-ssl-ca=/etc/chp/tls/ca.crt",
     ):
         assert argument in command
+    assert {"name": "HEARTWOOD_NO_TARGET", "value": ""} in container["env"]
     assert not [argument for argument in command if argument.startswith("--insecure")]
     secret = _named(objects, "Secret", "proxy-tls")
     assert secret["data"]["ca.crt"] == _named(objects, "Secret", "platform-ca")["data"]["tls.crt"]

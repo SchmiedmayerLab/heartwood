@@ -364,6 +364,13 @@ class IdentityAccess:
         headers: Mapping[str, tuple[str, ...]],
     ) -> AccessResponse | None:
         """Start a sign-in, complete one, or send the index document's reader to sign in."""
+        if method == "POST" and path == "/logout":
+            cookies = (self._cookie(LOGIN_COOKIE, "", 0), self._cookie(SIGN_IN_COOKIE, "", 0))
+            with self._lock:
+                for value in headers.get(CAPABILITY_HEADER, ()):
+                    if self._logins.pop(value.strip(), None) is not None:
+                        return AccessResponse(204, cookies=cookies)
+            return AccessResponse(401, check_id=self.refusal_check, cookies=cookies)
         if method != "GET":
             return None
         try:

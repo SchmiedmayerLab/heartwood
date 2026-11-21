@@ -286,7 +286,8 @@ def test_researchers_are_named_by_identifier_under_a_kept_key(
     )
     secret = _named(objects, "Secret", "heartwood-researcher-ids")
 
-    assert configuration["redirect_uri_template"].endswith(
+    assert configuration["redirect_uri_template"] == (
+        "https://{researcher}.{project}.projects.heartwood.test"
         "/user/{researcher}/{project}/oauth_callback"
     )
     assert len(base64.b64decode(secret["data"]["key"])) >= 32

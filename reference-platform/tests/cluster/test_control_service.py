@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import pytest
+from hub import project_url
 from identity import curl, researcher
 from kube import PROBE_CA, Cluster
 
@@ -221,7 +222,7 @@ def test_launch_outside_the_registry_is_refused(cluster: Cluster) -> None:
     assert not _redirect_uri_is_registered(
         cluster,
         "other",
-        f"https://proxy-public.heartwood-platform.svc.cluster.local/user/{researcher(_SECOND)}/other/oauth_callback",
+        project_url(f"/user/{researcher(_SECOND)}/other/oauth_callback"),
     )
 
 

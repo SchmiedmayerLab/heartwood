@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import json
 import secrets
+import subprocess
+import sys
 import threading
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -16,6 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 from fakes import (
     AUDIENCE,
     HUB,
@@ -212,6 +215,40 @@ def test_spawner_lists_the_projects_of_a_researcher(platform: Platform) -> None:
     assert projects(_ALICE) == {"projects": ["demo", "other"]}
     assert projects(_BOB) == {"projects": ["demo"]}
     assert projects("unknown") == {"projects": []}
+
+
+def test_hosted_nonmember_own_launch_is_refused_before_provisioning(platform: Platform) -> None:
+    values_path = _OBJECTS.parents[1] / "values-kind.yaml"
+    root = Path(__file__).resolve().parents[3]
+    fixture = root / "packages/webui/tests/hosted-memberships.py"
+    override = json.loads(subprocess.check_output([sys.executable, fixture, values_path]))
+    subjects = {
+        r["username"]: r["subject"] for r in yaml.safe_load(values_path.read_text())["researchers"]
+    }
+    first, second = subjects["researcher-one"], subjects["researcher-two"]
+    platform.registry.synchronize(
+        [
+            Project(p["id"], p["billingAttributionRef"], p["policyRef"], frozenset(p["members"]))
+            for p in override["projects"]
+        ]
+    )
+    for subject, expected in ((first, ["demo", "other", "small"]), (second, ["demo", "other"])):
+        response = platform.client.get(f"/v1/researchers/{_id(subject)}/projects", headers=_HUB)
+        assert response.status_code == 200
+        assert response.json()["projects"] == expected
+    platform.launch(second, "other")
+    sessions = platform.registry.session_ids()
+    kube_calls = len(platform.kubernetes.calls)
+    client_calls = len(platform.keycloak.requests)
+    response = platform.client.put(
+        f"/v1/researchers/{_id(second)}/projects/small/launch", headers=_HUB
+    )
+    assert response.status_code == 403
+    assert response.json() == {"error": "not a member of the project"}
+    assert platform.registry.session(second, "small") is None
+    assert platform.registry.session_ids() == sessions
+    assert len(platform.kubernetes.calls) == kube_calls
+    assert len(platform.keycloak.requests) == client_calls
 
 
 def test_launch_returns_the_registry_binding_and_prepares_the_project_client(

@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from hub import ORIGIN, Browser, gateway_pods, wait_for_gateway
+from hub import Browser, gateway_pods, project_url, wait_for_gateway
 from identity import (
     CONTROL,
     FIRST,
@@ -216,7 +216,7 @@ def test_an_operator_rotates_the_project_client_secret(server: Server, cluster: 
         username="researcher-one",
         client_id="hw-proj-other",
         client_secret=current,
-        redirect_uri=f"{ORIGIN}{_base()}/oauth_callback",
+        redirect_uri=project_url(_base() + "/oauth_callback"),
     )
     for client_secret, expected in ((previous, 401), (current, 200)):
         status, _ = exchange(

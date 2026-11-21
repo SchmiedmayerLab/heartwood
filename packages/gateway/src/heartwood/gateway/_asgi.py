@@ -137,6 +137,33 @@ class GatewayAsgiApp:
         if owned is not None:
             await _send_access_response(send, owned)
             return
+        route = _session_events_stream_route(request.path)
+        if route is not None and method == "GET":
+            try:
+                valid = await self._subscription_access(headers)
+            except AccessUnavailableError:
+                await _send_access_response(
+                    send, AccessResponse(503, check_id="gateway-identity-provider")
+                )
+                return
+            if valid is None:
+                await self._send_access_required(send)
+                return
+            try:
+                route = validate_session_id(route)
+            except ValueError as error:
+                await _send_json_response(send, status_code=422, body={"error": str(error)})
+                return
+            try:
+                after = _optional_int(_query_values(request.query_string).get("after", [None])[0])
+            except ValueError:
+                await _send_json_response(send, status_code=400, body={"error": "invalid after"})
+                return
+            await self._handle_sse(
+                session_id=route, after_sequence=after, receive=receive, send=send, valid=valid
+            )
+            return
+
         requires_capability = _is_gateway_api_path(request.path)
         actor_id: str | None = None
         if requires_capability:
@@ -150,22 +177,6 @@ class GatewayAsgiApp:
             if actor_id is None:
                 await self._send_access_required(send)
                 return
-        route = _session_events_stream_route(request.path)
-        if route is not None and method == "GET":
-            try:
-                route = validate_session_id(route)
-            except ValueError as error:
-                await _send_json_response(send, status_code=422, body={"error": str(error)})
-                return
-            try:
-                after = _optional_int(_query_values(request.query_string).get("after", [None])[0])
-            except ValueError:
-                await _send_json_response(send, status_code=400, body={"error": "invalid after"})
-                return
-            await self._handle_sse(
-                session_id=route, after_sequence=after, receive=receive, send=send
-            )
-            return
 
         try:
             body = await _read_http_body(receive)
@@ -243,6 +254,7 @@ class GatewayAsgiApp:
         *,
         session_id: str,
         after_sequence: int | None,
+        valid: Callable[[], bool],
         receive: AsgiReceive,
         send: AsgiSend,
     ) -> None:
@@ -282,16 +294,20 @@ class GatewayAsgiApp:
                 }
             )
             last_sequence = snapshot.projection.revision
+            if not valid():
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+                return
             await _send_sse_events(
                 send,
                 snapshot.events,
                 projection=snapshot.projection.safe_dict(),
             )
 
-            while not stream.closed:
+            while not stream.closed and valid():
                 signal = await _wait_for_stream_signal(
                     stream.receive_next,
                     receive,
+                    check_revocation=valid is not _always_active,
                     disconnect_type="http.disconnect",
                 )
                 if signal == "disconnect":
@@ -305,6 +321,8 @@ class GatewayAsgiApp:
                         )
                     )
                     last_sequence = snapshot.projection.revision
+                    if not valid():
+                        break
                     await _send_sse_events(
                         send,
                         snapshot.events,
@@ -337,13 +355,13 @@ class GatewayAsgiApp:
 
         await send({"type": "websocket.accept"})
         try:
-            authorized = await asyncio.to_thread(
-                self.access.principal, _scope_headers(scope)
-            ) is not None or await self._authorize_socket(receive)
+            valid = await self._subscription_access(_scope_headers(scope))
+            if valid is None:
+                valid = await self._authorize_socket(receive)
         except AccessUnavailableError:
             await send({"type": "websocket.close", "code": 1013})
             return
-        if not authorized:
+        if valid is None:
             await send({"type": "websocket.close", "code": 1008})
             return
         try:
@@ -359,16 +377,20 @@ class GatewayAsgiApp:
             return
         try:
             last_sequence = snapshot.projection.revision
+            if not valid():
+                await send({"type": "websocket.close", "code": 1008})
+                return
             await _send_websocket_events(
                 send,
                 snapshot.events,
                 projection=snapshot.projection.safe_dict(),
             )
 
-            while not stream.closed:
+            while not stream.closed and valid():
                 signal = await _wait_for_stream_signal(
                     stream.receive_next,
                     receive,
+                    check_revocation=valid is not _always_active,
                     disconnect_type="websocket.disconnect",
                 )
                 if signal == "disconnect":
@@ -382,6 +404,8 @@ class GatewayAsgiApp:
                         )
                     )
                     last_sequence = snapshot.projection.revision
+                    if not valid():
+                        break
                     await _send_websocket_events(
                         send,
                         snapshot.events,
@@ -391,40 +415,66 @@ class GatewayAsgiApp:
             pass
         finally:
             stream.close()
-        await send({"type": "websocket.close", "code": 1012})
+        await send({"type": "websocket.close", "code": 1012 if valid() else 1008})
 
-    async def _authorize_socket(self, receive: AsgiReceive) -> bool:
+    async def _subscription_access(
+        self, headers: Mapping[str, tuple[str, ...]]
+    ) -> Callable[[], bool] | None:
+        """Bind a browser stream to the single capability that admitted it."""
+        for capability in headers.get(CAPABILITY_HEADER, ()):
+            credential = {CAPABILITY_HEADER: (capability,)}
+            if self.access.principal(credential) is not None:
+                if isinstance(self.access, IdentityAccess):
+                    return partial(self._capability_active, credential)
+                return _always_active
+        if (
+            await asyncio.to_thread(
+                self.access.principal, {"authorization": headers.get("authorization", ())}
+            )
+            is not None
+        ):
+            return _always_active
+        return None
+
+    def _capability_active(self, credential: dict[str, tuple[str, ...]]) -> bool:
+        return self.access.principal(credential) is not None
+
+    async def _authorize_socket(self, receive: AsgiReceive) -> Callable[[], bool] | None:
         try:
             async with asyncio.timeout(_AUTH_FRAME_TIMEOUT_SECONDS):
                 message = await receive()
                 if message.get("type") == "websocket.connect":
                     message = await receive()
         except TimeoutError:
-            return False
+            return None
         raw = message.get("text")
         if (
             message.get("type") != "websocket.receive"
             or not isinstance(raw, str)
             or len(raw.encode("utf-8")) > _MAX_AUTH_FRAME_BYTES
         ):
-            return False
+            return None
         try:
             payload = json.loads(raw)
         except (ValueError, RecursionError):
-            return False
+            return None
         if (
             not isinstance(payload, dict)
             or set(payload) != {"type", "capability"}
             or payload["type"] != "authenticate"
             or not isinstance(payload["capability"], str)
         ):
-            return False
-        return self.access.principal({CAPABILITY_HEADER: (payload["capability"],)}) is not None
+            return None
+        return await self._subscription_access({CAPABILITY_HEADER: (payload["capability"],)})
 
     async def _send_access_required(self, send: AsgiSend, *, status_code: int = 401) -> None:
         await _send_access_response(
             send, AccessResponse(status_code, check_id=self.access.refusal_check)
         )
+
+
+def _always_active() -> bool:
+    return True
 
 
 async def _read_http_body(receive: AsgiReceive) -> bytes:
@@ -479,19 +529,21 @@ async def _send_sse_events(
 
 async def _send_access_response(send: AsgiSend, response: AccessResponse) -> None:
     """Send a redirect, or a refusal that carries only its stable diagnostic."""
-    if response.location is None:
+    if response.location is None and response.status_code != 204:
         diagnostic = diagnostic_for(response.check_id or "gateway-capability")
         await _send_json_response(
             send,
             status_code=response.status_code,
             body={"code": diagnostic.code, "error": diagnostic.next_action},
+            cookies=response.cookies,
         )
         return
     headers = [
-        (b"location", response.location.encode("ascii")),
         (b"cache-control", b"no-store"),
         (b"referrer-policy", b"no-referrer"),
     ]
+    if response.location is not None:
+        headers.append((b"location", response.location.encode("ascii")))
     headers.extend((b"set-cookie", cookie.encode("ascii")) for cookie in response.cookies)
     await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
     await send({"type": "http.response.body", "body": b""})
@@ -509,6 +561,7 @@ async def _send_json_response(
     *,
     status_code: int,
     body: Mapping[str, JsonValue],
+    cookies: tuple[str, ...] = (),
 ) -> None:
     await send(
         {
@@ -516,6 +569,7 @@ async def _send_json_response(
             "status": status_code,
             "headers": [
                 (b"content-type", b"application/json"),
+                *((b"set-cookie", cookie.encode("ascii")) for cookie in cookies),
                 (b"cache-control", b"no-store"),
                 (b"x-content-type-options", b"nosniff"),
                 (b"referrer-policy", b"no-referrer"),
@@ -593,6 +647,7 @@ async def _wait_for_stream_signal(
     receive_message: AsgiReceive,
     *,
     disconnect_type: str,
+    check_revocation: bool = False,
 ) -> Literal["disconnect", "message", "update"]:
     update_task: asyncio.Future[object] = asyncio.ensure_future(receive_update())
     message_task: asyncio.Future[AsgiMessage] = asyncio.ensure_future(receive_message())
@@ -601,6 +656,7 @@ async def _wait_for_stream_signal(
         done, _pending = await asyncio.wait(
             tasks,
             return_when=asyncio.FIRST_COMPLETED,
+            timeout=1.0 if check_revocation else None,
         )
         if message_task in done:
             message = message_task.result()

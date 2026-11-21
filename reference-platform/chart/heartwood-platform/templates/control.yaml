@@ -50,7 +50,7 @@ SPDX-License-Identifier: MIT
 {{- if .Values.projects -}}
 {{- $_ := set $hosted "jobs_url" (printf "https://heartwood-jobs.%s.svc.cluster.local:8443" .Release.Namespace) -}}
 {{- end -}}
-{{- $redirect := printf "%s/user/{researcher}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
+{{- $redirect := printf "https://{researcher}.{project}.%s/user/{researcher}/{project}/oauth_callback" .Values.hub.projectDomain -}}
 {{- /* Project data volumes are attached to the sandboxes of the hosted gateways' workspace, research. */ -}}
 {{- $store := include "heartwood.selector" (dict "context" . "component" "versitygw") | fromYaml -}}
 {{- $projectData := dict "data_url" (printf "https://heartwood-data.%s.svc.cluster.local:8443" .Release.Namespace) "token_file" "/var/run/secrets/heartwood/data/token" "copy_image" .Values.images.platformServices "storage_class" "heartwood-project-data" "workspace" "research" "mount_path" "/data" "object_store_namespace" .Release.Namespace "object_store_labels" $store "object_store_port" 7070 -}}
