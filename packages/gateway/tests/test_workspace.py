@@ -121,6 +121,8 @@ class _ReconcilingWorkspaceService:
     def replay_events(self) -> tuple[SessionEvent, ...]:
         return tuple(self.events)
 
+    replay_complete_reports = replay_events
+
     def reconcile(self) -> tuple[SessionEvent, ...]:
         self.reconcile_calls += 1
         if not self.started or self.reconciled:
