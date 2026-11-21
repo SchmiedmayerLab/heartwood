@@ -217,7 +217,7 @@ The driver's policy `openshell-sandbox-supervisors` allows supervisor pods all e
 
 ### Published Images
 
-For each main-branch commit that passes native qualification and the Kubernetes qualification and whose native evidence is attested, the [Native Qualification workflow](https://github.com/SchmiedmayerLab/heartwood/blob/main/.github/workflows/native-qualification.yml) publishes the images of the Kubernetes worker path to the GitHub Container Registry for `linux/amd64`:
+For each main-branch commit that passes native qualification and whose native evidence is attested, the [Native Qualification workflow](https://github.com/SchmiedmayerLab/heartwood/blob/main/.github/workflows/native-qualification.yml) publishes the images of the Kubernetes worker path to the GitHub Container Registry for `linux/amd64`:
 
 | Image | Content | Chart value |
 |---|---|---|
@@ -231,7 +231,9 @@ For each main-branch commit that passes native qualification and the Kubernetes 
 The workflow pushes each image once under the tag `sha-<commit>` and refuses to replace an existing tag.
 Registry tags can be moved by anyone with write access to the package, so a deployment names each image by digest.
 The images are built from the candidate wheels and the gateway build that the run qualified, with the same build steps.
-They are built again for publication, so their digests differ from those of the images the qualification ran.
+The Kubernetes qualification jobs install the published digests on kind. A successful main-branch qualification run confirms the cluster checks passed for those digests.
+For runtimes that report a platform manifest or configuration digest, supply `hub.worker.runtimeImages` from the cluster's trusted image inventory. The gateway uses the scheduled node name, container role and requested reference to select the evidence. It hashes the manifest bytes and checks the Linux/amd64 child and its config digest. Refresh the inventory when replacing nodes or rotating images. A deployment without this inventory requires the runtime to report the full requested reference.
+
 Each digest has a GitHub build provenance attestation of that run.
 The run's artifact `published-images-<commit>` records the digests and the worker image's interpreter, and has an attestation of its own.
 

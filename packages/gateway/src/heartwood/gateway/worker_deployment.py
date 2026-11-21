@@ -128,6 +128,23 @@ class KubernetesProjectData(BaseModel):
         return self
 
 
+class RuntimeImageEvidence(BaseModel):
+    """Content-addressed manifests and the configuration reported by the node runtime."""
+
+    model_config = _CONFIG
+    role: Literal["worker", "sandbox", "supervisor"]
+    manifests: dict[str, str]
+    config_id: ImageDigest
+
+
+class NodeImageEvidence(BaseModel):
+    """Operator-provided evidence for the named node in this deployment."""
+
+    model_config = _CONFIG
+    platform: Literal["linux/amd64"]
+    images: dict[str, RuntimeImageEvidence]
+
+
 class KubernetesWorkerDeployment(_WorkerSettings):
     """A Kubernetes deployment: sandboxes run as pods in one namespace of one cluster."""
 
@@ -153,6 +170,7 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     )
     # Images the driver adds to every sandbox: the supervisor pod's image and the sandbox
     # runtime that the workload pod's first init container installs.
+    runtime_images: dict[str, NodeImageEvidence] | None = None
     supervisor_image_digest: ImageDigest
     sandbox_image_digest: ImageDigest
     project_data: KubernetesProjectData | None = None

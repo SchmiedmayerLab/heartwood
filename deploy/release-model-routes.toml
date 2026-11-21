@@ -5,3 +5,4 @@
 # Capable-model routes for which every release states its agent safety drill results,
 # each named MODEL@HOST as qualification evidence records it.
 routes = []
+hosts = ["gke"]

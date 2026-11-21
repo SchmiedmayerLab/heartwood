@@ -40,6 +40,9 @@ SPDX-License-Identifier: MIT
 {{- fail "hub.modelRoute.binaries names /agnhost, the program of the stand-in worker image, while hub.worker.image is another image; pass the worker image's interpreter in hub.modelRoute.binaries" -}}
 {{- end -}}
 {{- $hostedWorker := dict "image" (required "hub.worker.image must name the worker image by digest" $worker.image) "policy" $worker.policy "cpu" $worker.cpu "memory" $worker.memory -}}
+{{- if hasKey $worker "runtimeImages" -}}
+{{- $_ := set $hostedWorker "runtime_images" $worker.runtimeImages -}}
+{{- end -}}
 {{- $litellm := printf "https://litellm.%s.svc.cluster.local:4000" .Release.Namespace -}}
 {{- $routeModels := list -}}
 {{- range .Values.inference.models -}}

@@ -411,6 +411,12 @@ def qualify(
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
     if profile is not None:
+        execution = uuid4().hex
+        if "GITHUB_RUN_ID" in os.environ:
+            execution = (
+                f"{os.environ['GITHUB_RUN_ID']}.{os.environ['GITHUB_RUN_ATTEMPT']}.{execution}"
+            )
+        environment["HW_QUALIFICATION_EXECUTION_ID"] = execution
         profile_path = output / "requested-model-profile.json"
         profile_path.write_text(json.dumps(profile.mapping(), indent=2) + "\n")
         profile_path.chmod(0o600)
@@ -513,6 +519,7 @@ def qualify(
         "qualification_kind": "capable-model-native" if profile else "synthetic-native",
         "release_version": release_version,
         "source": source,
+        **({"execution_id": environment["HW_QUALIFICATION_EXECUTION_ID"]} if profile else {}),
         "started_at": started_at,
         "finished_at": timestamp(),
         "invocation": invocation,

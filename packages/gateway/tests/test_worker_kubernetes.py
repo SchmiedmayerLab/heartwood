@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -509,6 +510,114 @@ def test_admission_accepts_the_driver_objects_and_reads_each_once(
     assert calls.count(listing) == 1
     assert sorted(f"{call[1]}/{call[2]}" for call in calls if call != listing) == sorted(objects)
     assert all(call[0] == "get" for call in calls)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        "index",
+        "child",
+        "config",
+        "arm-child",
+        "arm-config",
+        "unrelated",
+        "other-repo",
+        "other-request",
+        "wrong-role",
+        "missing-node",
+        "missing-proof",
+        "corrupt-manifest",
+        "wrong-config",
+    ],
+)
+def test_worker_admission_checks_node_specific_manifest_chains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reported: str
+) -> None:
+    config = "sha256:" + "1" * 64
+    other_config = "sha256:" + "2" * 64
+    media = "application/vnd.oci.image.manifest.v1+json"
+    manifests: dict[str, str] = {}
+
+    def blob(document: dict[str, Any]) -> str:
+        raw = json.dumps(document)
+        digest = "sha256:" + hashlib.sha256(raw.encode()).hexdigest()
+        manifests[digest] = raw
+        return digest
+
+    child, arm = [
+        blob({"mediaType": media, "schemaVersion": 2, "config": {"digest": digest}})
+        for digest in (config, other_config)
+    ]
+    root = blob(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "mediaType": media,
+                    "digest": digest,
+                    "platform": {"architecture": arch, "os": "linux"},
+                }
+                for digest, arch in [(child, "amd64"), (arm, "arm64")]
+            ],
+        }
+    )
+    if reported == "corrupt-manifest":
+        manifests[child] += " "
+    repositories = (
+        "registry.test/heartwood/worker",
+        "ghcr.io/nvidia/openshell/sandbox",
+        "ghcr.io/nvidia/openshell/supervisor",
+    )
+    proofs = {
+        repo + "@" + root: {
+            "role": role if reported != "wrong-role" else "worker",
+            "manifests": manifests,
+            "config_id": other_config if reported == "wrong-config" else config,
+        }
+        for repo, role in zip(repositories, ("worker", "sandbox", "supervisor"), strict=True)
+    }
+    settings = _settings(
+        tmp_path,
+        image_digest=root,
+        sandbox_image_digest=root,
+        supervisor_image_digest=root,
+        runtime_images={"node-1": {"platform": "linux/amd64", "images": proofs}}
+        if reported != "missing-proof"
+        else None,
+    )
+    admission = KubernetesWorkerAdmission(
+        settings, _intent().model_copy(update={"image_digest": root})
+    )
+    objects = _objects(admission)
+    for pod in (_workload(objects), _supervisor(objects)):
+        pod["spec"]["nodeName"] = "other" if reported == "missing-node" else "node-1"
+        for group, statuses in [
+            ("containers", "containerStatuses"),
+            ("initContainers", "initContainerStatuses"),
+        ]:
+            for container in pod["spec"].get(group, []):
+                repo = container["image"].split("@")[0]
+                container["image"] = repo + "@" + root
+                status = next(
+                    item for item in pod["status"][statuses] if item["name"] == container["name"]
+                )
+                status["imageID"] = {
+                    "index": container["image"],
+                    "config": "containerd://" + config,
+                    "arm-child": repo + "@" + arm,
+                    "arm-config": other_config,
+                    "unrelated": _IMAGE,
+                    "other-repo": "other.test/image@" + child,
+                }.get(reported, repo + "@" + child)
+                if reported == "other-request" and container["name"] == "agent":
+                    container["image"] = repositories[1] + "@" + root
+    _serve(admission, monkeypatch, objects)
+    if reported in {"index", "child", "config"}:
+        admission.inspect_worker(_SANDBOX_ID)
+    else:
+        with pytest.raises(WorkerAttemptError, match="image does not match admission"):
+            admission.inspect_worker(_SANDBOX_ID)
 
 
 _AGENT = ("spec", "containers", 0)

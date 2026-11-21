@@ -53,6 +53,7 @@ class _Settings(BaseModel):
 class HostedWorkerSettings(_Settings):
     """The worker that a hosted gateway launches in its session namespace."""
 
+    runtime_images: dict[str, Any] | None = None
     image: ImageReference
     # The sandbox policy of the workers.
     policy: dict[str, Any]
@@ -111,6 +112,8 @@ def _toml(value: object) -> str:
     # JSON strings, numbers, booleans and arrays of them are valid TOML values. Characters
     # outside ASCII stay literal, because TOML refuses the surrogate pairs of JSON escapes;
     # JSON escapes the other control characters, and TOML needs DEL escaped too.
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_toml(key)} = {_toml(item)}" for key, item in value.items()) + "}"
     return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
@@ -315,6 +318,11 @@ class HostedGateway:
                         "namespace": namespace,
                         "image_repository": repository,
                         "image_digest": digest,
+                        **(
+                            {"runtime_images": worker.runtime_images}
+                            if worker.runtime_images is not None
+                            else {}
+                        ),
                         "supervisor_image_digest": self._supervisor,
                         "sandbox_image_digest": self._sandbox,
                         "workspace": WORKER_WORKSPACE,

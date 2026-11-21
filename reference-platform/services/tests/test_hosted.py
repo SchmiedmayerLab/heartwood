@@ -287,3 +287,20 @@ def test_the_manifest_offers_the_data_catalog_and_the_job_service_with_exchanged
         launch_context=_LAUNCH,
     )
     assert "mcp_destinations" not in tomllib.loads(files["deployment.toml"])
+
+
+def test_hosted_manifest_carries_node_bound_image_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    images = {
+        "kind-node": {
+            "platform": "linux/amd64",
+            "images": {
+                HOSTED["worker"]["image"]: {
+                    "role": "worker",
+                    "manifests": {"sha256:" + "a" * 64: '{"schemaVersion":2}'},
+                    "config_id": "sha256:" + "b" * 64,
+                }
+            },
+        }
+    }
+    monkeypatch.setitem(HOSTED["worker"], "runtime_images", images)
+    assert tomllib.loads(_files()["deployment.toml"])["worker"]["runtime_images"] == images

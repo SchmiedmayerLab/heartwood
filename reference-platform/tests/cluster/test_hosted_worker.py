@@ -20,9 +20,13 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -98,6 +102,32 @@ def test_an_approved_tool_call_runs_in_the_worker_through_the_model_route(
         "--output=json",
     )
     assert json.loads(pods.stdout)["items"], pods.stderr
+    if record := os.environ.get("PUBLISHED_IMAGE_RECORD"):
+        # The approval pauses the worker while all six production containers are running.
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parents[2] / "tools/qualification_images.py"),
+                "observe",
+                "--context",
+                cluster.context,
+                "--stage",
+                os.environ["QUALIFICATION_STAGE"],
+                "--run",
+                os.environ["GITHUB_RUN_ID"],
+                "--attempt",
+                os.environ["GITHUB_RUN_ATTEMPT"],
+                "--session",
+                small.session,
+                "--record",
+                record,
+                "--evidence",
+                str(Path(record).with_name("observed-images.json")),
+                "--commit",
+                os.environ["GITHUB_SHA"],
+            ],
+            check=True,
+        )
     small.command("approve", {"target_type": "action-set", "target_id": group})
 
     # The execution names the approved call; it records no command or output.
