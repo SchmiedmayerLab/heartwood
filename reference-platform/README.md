@@ -49,7 +49,7 @@ An exception that no longer matches a finding also fails the check.
 
 ## Chart
 
-The chart `chart/heartwood-platform` installs the platform into the namespace `heartwood-platform` and creates the namespace `heartwood-sessions`.
+The chart `chart/heartwood-platform` installs the platform into the namespace `heartwood-platform` and creates the namespace `heartwood-sessions`, and with the Funnel executor one namespace `hw-jobs-<project>` for each project.
 The platform is for synthetic and open data only.
 
 | Component | Content |
@@ -61,11 +61,13 @@ The platform is for synthetic and open data only.
 | Synthetic model | With `inference.syntheticModel.enabled`, a deterministic model behind LiteLLM for tests |
 | Local model | With `inference.localModel.enabled`, `llama-server` from `images.modelRuntime` behind LiteLLM |
 | Data service | One StatefulSet that serves HTTPS on port 8443, with the project data catalog, the DRS read endpoints and the MCP catalog tools |
+| Job service | With `projects`, one StatefulSet that serves HTTPS on port 8443, with the MCP tools of batch tasks, see [Job Service](#job-service) |
+| Job executors | With `jobs.executor` set to `funnel`, one Funnel server from `images.funnel` for each project in `hw-jobs-<project>`, see [Job Executors](#job-executors) |
 | versitygw | S3-compatible object store that serves HTTPS on port 7070, with one bucket `hw-project-<id>` for each entry in `projects` |
 | JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
-| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `heartwood-data-tls`, `versitygw-tls`, `litellm-tls`, `synthetic-model-tls` and `llama-server-tls` with the serving certificates of those services |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `heartwood-data-tls`, `versitygw-tls`, `litellm-tls`, `heartwood-jobs-tls`, `synthetic-model-tls` and `llama-server-tls` with the serving certificates of those services, and the Secret `funnel-server-tls` of each project's Funnel server |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
-| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services`, `heartwood-hub-pods` and `heartwood-project-data-copy` |
+| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services`, `heartwood-hub-pods`, `heartwood-project-data-copy` and `heartwood-funnel-worker-jobs` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
@@ -552,14 +554,15 @@ It exists to test the route and is not suited to research tasks.
 
 ### Network Policies
 
-Both namespaces deny ingress by default.
+The namespaces `heartwood-platform` and `heartwood-sessions` deny ingress by default, and each namespace `hw-jobs-<project>` denies ingress and egress apart from the allowances in [Job Executors](#job-executors).
 PostgreSQL accepts connections from Keycloak and LiteLLM.
-Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service and from its bootstrap Job.
-The control service accepts connections from `heartwood-sessions` and from the Hub.
+Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service, from the job service and from its bootstrap Job.
+The control service accepts connections from `heartwood-sessions`, from the Hub and from the job service.
 LiteLLM accepts connections on port 4000 from the control service, from the supervisors of session sandboxes and from the gateway pods in `heartwood-sessions`, and the synthetic model and `llama-server` accept connections from LiteLLM.
-versitygw accepts connections from its bootstrap Job, from the data bootstrap Job and from pods with the label `heartwood.platform/role=project-data-copy` in session namespaces.
+versitygw accepts connections from its bootstrap Job, from the hook Jobs `heartwood-jobs-store` and `heartwood-bucket-policies`, from the data bootstrap Job, from the job service, from Funnel workers in namespaces with the label `heartwood.platform/jobs` and from pods with the label `heartwood.platform/role=project-data-copy` in session namespaces.
 Keycloak also accepts connections from the data service.
 The data service accepts connections from `heartwood-sessions` and from the control service, and the control service also accepts connections from the data service.
+The policy `heartwood-jobs` lets the job service accept connections on port 8443 from `heartwood-sessions` only.
 The proxy accepts researchers' connections on port 8000 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
 
