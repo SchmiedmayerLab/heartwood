@@ -456,8 +456,7 @@ def test_a_batch_job_runs_through_the_reviewed_operation_path(
     assert review["kind"] == "submit"
     proposal = review["proposal"]
     assert _COHORT in json.dumps(proposal["data_scope"])
-    # Jobs reserve no budget on this platform, which the proposal states.
-    assert "This deployment reserves no budget for jobs." in json.dumps(proposal)
+    assert f"of budget {platform.demo.project}-compute" in json.dumps(proposal)
     # The researcher approved the call, the submission and the release of the result.
     assert record["approved"] == ["worker-call", "outside-operation", "outside-result"]
     operation = record["observation"]["operation"]

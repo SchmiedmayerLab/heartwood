@@ -394,3 +394,34 @@ def estimate(
         pricing_assumptions=tuple(assumptions),
         focus_evidence=tuple(_evidence(used[key]) for key in sorted(used)),
     )
+
+
+class UnpricedError(ValueError):
+    """The price sheet has no price in effect for the work; the message says why."""
+
+
+@dataclass(frozen=True)
+class TaskRate:
+    """The price and quantity of one pricing unit for batch run time."""
+
+    unit_price: Decimal
+    seconds_per_unit: Decimal
+
+    def cost(self, seconds: int) -> Decimal:
+        """Round the price of the duration up to six decimal places."""
+        with localcontext(prec=_PRECISION):
+            return Decimal(_amount(Decimal(seconds) * self.unit_price / self.seconds_per_unit))
+
+
+def task_rate(sheet: PriceSheet, runtime_profile_ref: str, at: datetime) -> TaskRate:
+    """Return the effective rate for the profile's task duration."""
+    profile = sheet.profile(runtime_profile_ref)
+    if profile is None:
+        raise UnpricedError(f"Runtime profile {runtime_profile_ref} has no price.")
+    if profile.kind != "batch":
+        raise UnpricedError(f"Runtime profile {runtime_profile_ref} prices no batch work.")
+    (rate,) = profile.rates
+    price = sheet.price(rate.sku_price_id)
+    if not price.effective(at):
+        raise UnpricedError(f"SKU price {price.sku_price_id} is not in effect.")
+    return TaskRate(Decimal(price.unit_price), Decimal(rate.quantity_per_pricing_unit))

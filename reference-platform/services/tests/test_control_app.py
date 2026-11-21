@@ -10,6 +10,7 @@ import base64
 import json
 import secrets
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -104,7 +105,7 @@ class FakeInference:
 
 
 class Platform:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, prices: PriceSheet | None = None) -> None:
         self.key = SigningKey()
         self.keycloak = FakeKeycloak()
         self.reviews = TokenReviews()
@@ -141,7 +142,8 @@ class Platform:
             ),
             self.registry.session_ids,
         )
-        self.ledger = Ledger(directory / "control.sqlite3", clock=lambda: _NOW)
+        prices = prices or PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES))
+        self.ledger = Ledger(directory / "control.sqlite3", prices.denomination, clock=lambda: _NOW)
         self.ledger.synchronize(
             [
                 Allocation("demo", "inference", Decimal(5)),
@@ -167,11 +169,12 @@ class Platform:
                 launches,
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
-                PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
+                prices,
                 self.ledger,
                 clock=lambda: _NOW,
                 operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
                 contexts=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({_DATA, JOBS})),
+                jobs=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({JOBS})),
             )
         )
 
@@ -507,7 +510,10 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     sessions = SlowSessions()
     keycloak = FakeKeycloak()
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
-    ledger = Ledger(tmp_path / "control.sqlite3")
+    ledger = Ledger(
+        tmp_path / "control.sqlite3",
+        PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)).denomination,
+    )
     ledger.synchronize([Allocation("demo", "inference", Decimal(5))])
     launches = LaunchService(
         registry,
@@ -710,7 +716,10 @@ def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> 
         "reference-platform",
         _TEMPLATE,
         lambda _: shared,
-        ledger=Ledger(tmp_path / "control.sqlite3"),
+        ledger=Ledger(
+            tmp_path / "control.sqlite3",
+            PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)).denomination,
+        ),
         session_reservation=Decimal(1),
     )
 
@@ -764,3 +773,110 @@ def test_the_data_and_job_services_read_the_launch_context_of_a_members_session(
         ).status_code
         == 405
     )
+
+
+@pytest.mark.parametrize("token", ["data-token", "operator-token", "hub-token"])
+def test_only_jobs_can_access_job_budgets(platform: Platform, token: str) -> None:
+    body = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 10}
+    headers = {"Authorization": f"Bearer {token}"}
+    path = "/v1/projects/demo/job-reservations/op"
+    for method, endpoint in (
+        ("POST", "/v1/projects/demo/job-quotes"),
+        ("PUT", path),
+        ("POST", path + "/settlement"),
+    ):
+        assert (
+            platform.client.request(method, endpoint, json=body, headers=headers).status_code == 401
+        )
+    assert platform.ledger.balances("demo")[0].revision == 1
+
+
+def test_job_accounting_replays_at_the_original_rate(platform: Platform) -> None:
+    headers = {"Authorization": "Bearer jobs-token"}
+    path = "/v1/projects/demo/job-reservations/op"
+    body = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 60}
+
+    held = platform.client.put(path, json=body, headers=headers)
+    assert held.status_code == 200
+    assert held.json()["amount"] == "0.018"
+    replay = {**body, "runtime_profile_ref": "removed-profile"}
+    assert platform.client.put(path, json=replay, headers=headers).json() == held.json()
+    assert platform.ledger.balances("demo")[0].revision == 2
+    settlement = path + "/settlement"
+    # The executor can run past the maximum admissible limit.
+    settled = platform.client.post(settlement, json={**replay, "seconds": 604801}, headers=headers)
+    assert settled.status_code == 200
+    assert settled.json()["incurred"] == "181.4403"
+    assert platform.client.post(settlement, json=body, headers=headers).json() == settled.json()
+    assert platform.client.put(path, json=body, headers=headers).json()["error"] == "settled"
+    balance = platform.ledger.balances("demo")[0]
+    assert (balance.reserved, balance.spent, balance.revision) == (
+        Decimal(0),
+        Decimal("181.4403"),
+        3,
+    )
+
+
+def test_release_before_reserve_fences_an_operation_without_an_allocation(
+    platform: Platform,
+) -> None:
+    path = "/v1/projects/other/job-reservations/op"
+    headers = {"Authorization": "Bearer jobs-token"}
+    body = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 10}
+    settled = platform.client.post(path + "/settlement", json=body, headers=headers)
+    assert settled.json()["incurred"] == "0"
+    platform.ledger.synchronize([Allocation("other", "compute", Decimal(1))])
+    assert platform.client.put(path, json=body, headers=headers).json()["error"] == "settled"
+    assert platform.ledger.balances("other")[0].available == 1
+
+
+def test_competing_jobs_cannot_partially_reserve_the_last_funds(platform: Platform) -> None:
+    platform.ledger.synchronize([Allocation("demo", "compute", Decimal("0.02"))])
+    start = threading.Barrier(2)
+
+    def reserve(operation: str) -> int:
+        start.wait(timeout=5)
+        response = platform.client.put(
+            f"/v1/projects/demo/job-reservations/{operation}",
+            json={"runtime_profile_ref": "synthetic-batch-small", "seconds": 60},
+            headers={"Authorization": "Bearer jobs-token"},
+        )
+        return response.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(reserve, ("op-1", "op-2"))) == [200, 409]
+    balance = platform.ledger.balances("demo")[0]
+    assert balance.job_reservations == (1, Decimal("0.018"))
+    assert balance.available == Decimal("0.002")
+
+
+def test_restarted_ledger_keeps_its_denomination_and_original_job_rate(tmp_path: Path) -> None:
+    headers = {"Authorization": "Bearer jobs-token"}
+    path = "/v1/projects/demo/job-reservations/original"
+    usage = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 60}
+    platform = Platform(tmp_path)
+    held = platform.client.put(path, json=usage, headers=headers).json()
+    assert held["amount"] == "0.018"
+    assert held["denomination"] == {"kind": "currency", "unit": "USD"}
+    config = json.loads(json.dumps(SYNTHETIC_PRICES))
+    for sku in config["sku_prices"]:
+        sku["PricingCurrency"] = "EUR"
+    with pytest.raises(ValueError, match="Ledger denomination is currency USD"):
+        Platform(tmp_path, PriceSheet.model_validate_json(json.dumps(config)))
+    for sku in config["sku_prices"]:
+        sku["PricingCurrency"] = "USD"
+        if sku["SkuId"] == "synthetic-batch-small":
+            sku["UnitPrice"] = "0.20"
+    for profile in config["runtime_profiles"]:
+        if profile["runtime_profile_ref"] == "synthetic-batch-small":
+            profile["rates"][0]["quantity_per_pricing_unit"] = "10"
+    platform = Platform(tmp_path, PriceSheet.model_validate_json(json.dumps(config)))
+    assert platform.client.put(path, json=usage, headers=headers).json() == held
+    billed = platform.client.post(
+        path + "/settlement", json={**usage, "seconds": 10}, headers=headers
+    ).json()
+    assert billed["incurred"] == "0.003"
+    assert billed["denomination"] == held["denomination"]
+    assert platform.client.post(path + "/settlement", json=usage, headers=headers).json() == billed
+    fresh = platform.client.put(path + "-new", json=usage, headers=headers).json()
+    assert Decimal(fresh["amount"]) == Decimal("1.2")

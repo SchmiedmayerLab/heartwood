@@ -57,7 +57,9 @@ SPDX-License-Identifier: MIT
 {{- /* The data service and the job service read launch contexts for their operation observations, and so may the accounts in control.contextCallers. */ -}}
 {{- $services := list (printf "system:serviceaccount:%s:heartwood-data" .Release.Namespace) (printf "system:serviceaccount:%s:heartwood-jobs" .Release.Namespace) -}}
 {{- $contextCallers := concat $services .Values.control.contextCallers | uniq -}}
-{{- dict "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" $contextCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- /* Only the job service reserves and settles the compute budgets of batch tasks. */ -}}
+{{- $jobCallers := list (printf "system:serviceaccount:%s:heartwood-jobs" .Release.Namespace) -}}
+{{- dict "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" $contextCallers "job_callers" $jobCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same

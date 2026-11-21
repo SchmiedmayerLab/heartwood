@@ -227,6 +227,7 @@ def test_the_job_service_is_reached_by_gateways_and_uses_no_api_token(
         "system:serviceaccount:heartwood-platform:heartwood-data",
         "system:serviceaccount:heartwood-platform:heartwood-jobs",
     ]
+    assert control["job_callers"] == ["system:serviceaccount:heartwood-platform:heartwood-jobs"]
     # Hosted gateways offer the job service's tools at its Service name.
     assert control["hosted"]["jobs_url"] == (
         "https://heartwood-jobs.heartwood-platform.svc.cluster.local:8443"

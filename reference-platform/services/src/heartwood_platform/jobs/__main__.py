@@ -25,7 +25,7 @@ from heartwood_platform.common.tokens import ResearcherTokens
 from heartwood_platform.control.app import ProjectId
 from heartwood_platform.jobs.app import create_jobs_app
 from heartwood_platform.jobs.objects import ProjectBucket, StoreObjects
-from heartwood_platform.jobs.platform import ControlContexts
+from heartwood_platform.jobs.platform import ControlBudgets, ControlContexts
 from heartwood_platform.jobs.records import Records
 from heartwood_platform.jobs.service import (
     IMAGE,
@@ -162,13 +162,23 @@ def build(settings: Settings) -> tuple[Starlette, JobService]:
     store = httpx.Client(
         timeout=5, verify=ssl.create_default_context(cafile=settings.store.ca_file)
     )
+
+    def control_token() -> str:
+        return _read(settings.control.token_file)
+
     service = JobService(
         Records(settings.database),
         executors,
         policies,
         StoreObjects(settings.store.endpoint, settings.store.region, buckets, store),
-        # The control service offers no job reservations to other services yet.
-        None,
+        ControlBudgets(
+            httpx.Client(
+                base_url=settings.control.url,
+                verify=ssl.create_default_context(cafile=settings.control.ca_file),
+                timeout=30,
+            ),
+            control_token,
+        ),
         ServiceSettings(
             images=settings.images,
             start_deadline_seconds=settings.start_deadline_seconds,
@@ -189,11 +199,7 @@ def build(settings: Settings) -> tuple[Starlette, JobService]:
             raise httpx.DecodingError("the key set is not an object")
         return document
 
-    contexts = ControlContexts(
-        settings.control.url,
-        settings.control.ca_file,
-        lambda: _read(settings.control.token_file),
-    )
+    contexts = ControlContexts(settings.control.url, settings.control.ca_file, control_token)
     application = create_jobs_app(
         service, ResearcherTokens(settings.issuer, settings.audience, keys), contexts
     )

@@ -20,13 +20,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from pydantic import TypeAdapter
+
 # submit: a task submission; cancel: a cancellation that names another operation;
 # absent: an identifier that was asked about before it was received, refused for good.
 type Kind = Literal["submit", "cancel", "absent"]
-# A submission is first recorded as SUBMITTING, before the executor is called, so a task
+# RESERVING precedes budget admission. SUBMITTING precedes the executor call, so a task
 # whose creation reply was lost is found again by its operation tag. DENIED records a
 # refusal by entitlement or budget; the other states are TES states.
 type RecordState = str
+type AttemptTimes = tuple[tuple[datetime | None, datetime | None], ...]
+_ATTEMPTS = TypeAdapter(AttemptTimes)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS operation (
@@ -46,6 +50,8 @@ CREATE TABLE IF NOT EXISTS operation (
     gpu_count INTEGER NOT NULL,
     max_runtime_seconds INTEGER NOT NULL,
     reservation TEXT,
+    incurred TEXT,
+    attempts TEXT NOT NULL,
     settled INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     started_at TEXT,
@@ -79,11 +85,15 @@ class Operation:
     ram_gb: float
     gpu_count: int
     max_runtime_seconds: int
+    # The amount of the compute budget that the submission reserved, and what its task
+    # incurred at settlement, each with its unit and budget, as the observations state them.
     reservation: str | None
+    incurred: str | None
     settled: bool
     created_at: datetime
     started_at: datetime | None
     ended_at: datetime | None
+    attempts: AttemptTimes = ()
 
 
 _COLUMNS = [item.name for item in fields(Operation)]
@@ -94,11 +104,14 @@ def _row(row: tuple[object, ...]) -> Operation:
     for name in ("created_at", "started_at", "ended_at"):
         value = values[name]
         values[name] = None if value is None else datetime.fromisoformat(str(value))
+    values["attempts"] = _ATTEMPTS.validate_json(str(values["attempts"]))
     values["settled"] = bool(values["settled"])
     return Operation(**values)  # type: ignore[arg-type]
 
 
 def _value(value: object) -> object:
+    if isinstance(value, tuple):
+        return _ATTEMPTS.dump_json(value).decode()
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, bool):
@@ -117,6 +130,11 @@ class Records:
         """Open the database at a path and create its tables."""
         self._path = path
         with self._transaction() as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(operation)")}
+            if columns and columns != set(_COLUMNS):
+                raise ValueError(
+                    "Incompatible jobs database. Preserve it and start with a fresh jobs database."
+                )
             for statement in _SCHEMA.split(";"):
                 connection.execute(statement)
 
@@ -158,7 +176,8 @@ class Records:
         try:
             with self._transaction() as connection:
                 connection.execute(
-                    f"INSERT INTO operation VALUES ({', '.join('?' for _ in _COLUMNS)})",
+                    f"INSERT INTO operation ({', '.join(_COLUMNS)}) "
+                    f"VALUES ({', '.join('?' for _ in _COLUMNS)})",
                     [_value(getattr(operation, name)) for name in _COLUMNS],
                 )
         except sqlite3.IntegrityError:
