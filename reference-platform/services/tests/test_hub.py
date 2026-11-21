@@ -314,6 +314,8 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
     jupyterhub = types.ModuleType("jupyterhub")
     proxy = types.ModuleType("jupyterhub.proxy")
     proxy.ConfigurableHTTPProxy = ConfigurableHTTPProxy  # type: ignore[attr-defined]
+    pycurl = types.ModuleType("pycurl")
+    pycurl.CAPATH = "CAPATH"  # type: ignore[attr-defined]
     for name, module in (
         ("tornado", tornado),
         ("tornado.web", web),
@@ -321,6 +323,7 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         ("kubespawner", kubespawner),
         ("jupyterhub", jupyterhub),
         ("jupyterhub.proxy", proxy),
+        ("pycurl", pycurl),
     ):
         monkeypatch.setitem(sys.modules, name, module)
     settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
@@ -407,14 +410,18 @@ def test_the_proxy_serves_https_with_a_certificate_of_the_platform_ca(
     assert api["ports"] == [{"protocol": "TCP", "port": 8001}]
 
 
-def test_the_public_origin_must_be_https() -> None:
+@pytest.mark.parametrize(
+    "origin",
+    ["http://proxy-public.heartwood-platform.svc.cluster.local", "https://10.0.0.5"],
+)
+def test_the_public_origin_must_be_https_with_a_host_name(origin: str) -> None:
     result = subprocess.run(
         [
             *_TEMPLATE,
             "--values",
             str(_CHART / "values-kind.yaml"),
             "--set",
-            "hub.publicOrigin=http://proxy-public.heartwood-platform.svc.cluster.local",
+            f"hub.publicOrigin={origin}",
         ],
         capture_output=True,
         text=True,
@@ -430,7 +437,8 @@ def test_the_hub_calls_the_proxy_api_over_https_trusting_the_platform_ca(hub: _H
     assert hub.config.ConfigurableHTTPProxy.api_url == hub.settings["proxy_api_url"]
     proxy = hub.config.JupyterHub.proxy_class()
     asyncio.run(proxy.api_request("", method="GET"))
-    asyncio.run(proxy.api_request("/user/a", method="DELETE"))
+    # A client that a caller passes is replaced.
+    asyncio.run(proxy.api_request("/user/a", method="DELETE", client=object()))
     (first, client), (second, again) = hub.proxy_requests
     assert (first, second) == ("GET ", "DELETE /user/a")
     # One client for every request, which trusts the platform CA alone.
@@ -439,4 +447,12 @@ def test_the_hub_calls_the_proxy_api_over_https_trusting_the_platform_ca(hub: _H
     defaults = client.options["defaults"]
     assert defaults["ca_certs"] == hub.settings["ca_file"]
     assert defaults["validate_cert"] is True
-    assert defaults["prepare_curl_callback"] is not None
+    # libcurl reads no certificate directory besides the CA file.
+    unset: list[str] = []
+
+    class Curl:
+        def unsetopt(self, option: str) -> None:
+            unset.append(option)
+
+    defaults["prepare_curl_callback"](Curl())
+    assert unset == ["CAPATH"]

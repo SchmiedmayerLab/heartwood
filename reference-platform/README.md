@@ -192,12 +192,15 @@ The Hub trusts the platform CA alone for Keycloak and the control service, witho
 Every account of the realm may sign in; the control service decides which projects a researcher may start.
 
 The proxy serves researchers only over HTTPS, on port 443 of the Service `proxy-public`, with the certificate in the Secret `proxy-tls`.
-The chart signs that certificate with the platform CA for the names of the Services `proxy-public` and `proxy-api`, in the same four forms as Keycloak's, and for the host of `hub.publicOrigin`, which must be an `https` origin; a change of these names replaces the certificate at the next upgrade.
+The chart signs that certificate with the platform CA for the names of the Services `proxy-public` and `proxy-api`, in the same four forms as Keycloak's, and for the host of `hub.publicOrigin`, which must be an `https` origin with a DNS host name.
+A change of these names or of the platform CA replaces the certificate at the next upgrade.
+The proxy reads its certificate when it starts, so restart it after such a change with `kubectl rollout restart deployment/proxy --namespace heartwood-platform`.
 The Service has no HTTP port, and no connection reaches the proxy's HTTP port, which would only redirect to HTTPS.
 The proxy serves its API on port 8001 over HTTPS with the same certificate, and the Hub calls it at `proxy-api` trusting the platform CA alone.
-Clients of the proxy, such as the cluster tests, verify it against the platform CA alone, and a researcher's browser opens it only when it trusts the platform CA.
+Clients of the proxy, such as the cluster tests, verify it against the platform CA, and a researcher's browser opens it only when it trusts the platform CA.
 The proxy forwards requests to the Hub on port 8081 and to the gateways on port 8888 without TLS, inside the pod network, where the network policies admit only the proxy and the Hub.
 JupyterHub serves its own API over TLS only with its internal TLS, which also requires TLS of each server and a Secret per server.
+A gateway serves plain HTTP, and TLS on port 8888 would need a certificate for each gateway pod, which no platform component signs.
 
 Each project of a researcher is one named server whose name is the project.
 The spawn form offers a server only the project of its name, after the Hub asks the control service for the researcher's projects with a projected token of the audience `heartwood-control`.
