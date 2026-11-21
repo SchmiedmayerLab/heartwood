@@ -8,9 +8,11 @@
 
 extends: default
 
-# Helm templates are not YAML until they are rendered.
+# Helm templates are not YAML until they are rendered, and the Funnel Job templates
+# are not YAML until Funnel renders them.
 ignore:
   - reference-platform/chart/heartwood-platform/templates/
+  - reference-platform/chart/heartwood-platform/files/funnel/
 
 rules:
   line-length:

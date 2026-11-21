@@ -1,0 +1,92 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+A Funnel worker may create only executor Jobs of its own task, in the shape that the
+executor template renders. The worker's identity is the ServiceAccount funnel-worker of
+its jobs namespace, and its token is bound to its pod, whose name is the task's worker Job
+name, the task identifier, with a suffix. A Job of another task, or one that mounts any
+claim other than the task's workspace claim, is refused. Pod Security restricted covers
+host namespaces, capabilities and privilege escalation.
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-funnel-worker-jobs
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+  matchConditions:
+    - name: created-by-a-funnel-worker
+      expression: >-
+        request.userInfo.username == 'system:serviceaccount:' + request.namespace + ':funnel-worker'
+  variables:
+    - name: pod
+      expression: object.spec.template.spec
+    - name: labels
+      expression: "has(object.spec.template.metadata.labels) ? object.spec.template.metadata.labels : {}"
+    - name: task
+      expression: "'heartwood.platform/task' in variables.labels ? variables.labels['heartwood.platform/task'] : ''"
+    # The name of the pod that the worker's token is bound to.
+    - name: workerPod
+      expression: >-
+        'authentication.kubernetes.io/pod-name' in request.userInfo.extra &&
+        size(request.userInfo.extra['authentication.kubernetes.io/pod-name']) == 1
+        ? request.userInfo.extra['authentication.kubernetes.io/pod-name'][0] : ''
+  validations:
+    - expression: request.operation == 'CREATE'
+      message: workers may not change Jobs
+    - expression: variables.task.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      message: worker-created Jobs must name their task
+    - expression: variables.workerPod.matches('^' + variables.task + '-[a-z0-9]{5}$')
+      message: worker-created Jobs must belong to the task of the worker's pod
+    - expression: object.metadata.name.matches('^' + variables.task + '-[0-9]+$')
+      message: worker-created Jobs must be named after their task
+    - expression: >-
+        has(object.metadata.labels) && object.metadata.labels == variables.labels
+        && variables.labels == {'heartwood.platform/role': 'funnel-executor', 'heartwood.platform/task': variables.task}
+      message: worker-created Jobs must carry exactly the executor labels of their task
+    - expression: has(variables.pod.serviceAccountName) && variables.pod.serviceAccountName == 'funnel-executor'
+      message: worker-created Jobs must run as funnel-executor
+    - expression: has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false
+      message: worker-created Jobs must not mount a ServiceAccount token
+    - expression: has(variables.pod.hostUsers) && variables.pod.hostUsers == false
+      message: worker-created Jobs must use a user namespace
+    - expression: >-
+        !has(variables.pod.volumes) || variables.pod.volumes.all(v,
+        has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName == variables.task + '-workspace')
+      message: worker-created Jobs may mount only their task's workspace claim
+    - expression: >-
+        !has(variables.pod.initContainers) && !has(variables.pod.ephemeralContainers)
+        && !has(variables.pod.imagePullSecrets) && size(variables.pod.containers) == 1
+      message: worker-created Jobs have one container and no init or ephemeral containers or pull secrets
+    - expression: "variables.pod.containers.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))"
+      message: worker-created Jobs must not reference Secrets or ConfigMaps in their environment
+    - expression: "!has(variables.pod.nodeName) && !has(variables.pod.hostname) && !has(variables.pod.subdomain)"
+      message: worker-created Jobs must not choose their node or host name
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-funnel-worker-jobs
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-funnel-worker-jobs
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        heartwood.platform/jobs: "true"

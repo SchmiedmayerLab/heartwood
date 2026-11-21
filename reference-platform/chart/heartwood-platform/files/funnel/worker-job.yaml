@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{.TaskId}}
+  namespace: {{.JobsNamespace}}
+  labels:
+    heartwood.platform/role: funnel-worker
+    heartwood.platform/task: "{{.TaskId}}"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        heartwood.platform/role: funnel-worker
+        heartwood.platform/task: "{{.TaskId}}"
+    spec:
+      serviceAccountName: funnel-worker
+      automountServiceAccountToken: true
+      hostUsers: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: {{.Image}}
+          imagePullPolicy: IfNotPresent
+          args: [worker, run, --config, /etc/funnel/worker.yaml, --taskID, "{{.TaskId}}"]
+          env:
+            # Presigned URLs name the object store over HTTPS; the worker trusts the
+            # platform CA alone.
+            - name: SSL_CERT_FILE
+              value: /etc/platform-ca/ca.crt
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/funnel
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/platform-ca
+              readOnly: true
+            - name: credential
+              mountPath: /etc/funnel-task
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: funnel-worker-config
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+        - name: credential
+          secret:
+            secretName: "{{.WorkerCredentialSecret}}"
+            defaultMode: 0400

@@ -53,7 +53,8 @@
         "openshellRepository",
         "hostedGateway",
         "litellm",
-        "modelRuntime"
+        "modelRuntime",
+        "funnel"
       ],
       "properties": {
         "postgresql": {
@@ -92,6 +93,9 @@
               "$ref": "#/$defs/image"
             }
           ]
+        },
+        "funnel": {
+          "$ref": "#/$defs/image"
         }
       }
     },
@@ -183,6 +187,9 @@
                 }
               }
             }
+          },
+          "gpu": {
+            "type": "boolean"
           }
         }
       }
@@ -339,7 +346,8 @@
         "storage",
         "serviceCallers",
         "operatorCallers",
-        "inference"
+        "inference",
+        "contextCallers"
       ],
       "properties": {
         "platformId": {
@@ -373,6 +381,13 @@
               "description": "Amount of its project's inference budget that each session reserves at its first launch, or what is left of it.",
               "$ref": "#/$defs/decimal"
             }
+          }
+        },
+        "contextCallers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
           }
         }
       }
@@ -948,6 +963,89 @@
               }
             }
           }
+        }
+      }
+    },
+    "jobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executor",
+        "storage",
+        "executorStorage",
+        "workspaceStorage",
+        "taskImages",
+        "startDeadlineSeconds",
+        "quota",
+        "limits",
+        "drsHost"
+      ],
+      "properties": {
+        "executor": {
+          "description": "The TES executor of the job service.",
+          "enum": [
+            "funnel"
+          ]
+        },
+        "storage": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(m|k|Ki|M|Mi|G|Gi|T|Ti)?$"
+        },
+        "executorStorage": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(m|k|Ki|M|Mi|G|Gi|T|Ti)?$"
+        },
+        "workspaceStorage": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(m|k|Ki|M|Mi|G|Gi|T|Ti)?$"
+        },
+        "taskImages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/image"
+          }
+        },
+        "startDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 30
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxCpuCores",
+            "maxRamGb",
+            "maxDiskGb",
+            "maxRuntimeSeconds"
+          ],
+          "properties": {
+            "maxCpuCores": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxRamGb": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxDiskGb": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "maxRuntimeSeconds": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "drsHost": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+(:[0-9]+)?$"
         }
       }
     }

@@ -1,0 +1,309 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- if .Values.projects }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "heartwood-jobs-store" -}}
+{{- $store := dict -}}
+{{- range .Values.projects -}}
+{{- $key := printf "%s-secret-key" .id -}}
+{{- if and $existing (hasKey ($existing.data | default dict) $key) -}}
+{{- $_ := set $store $key (index $existing.data $key | b64dec) -}}
+{{- else -}}
+{{- $_ := set $store $key (randAlphaNum 40) -}}
+{{- end -}}
+{{- $_ := set $store (printf "%s-access-key" .id) (printf "hw-jobs-%s" .id) -}}
+{{- end -}}
+{{- $projects := list -}}
+{{- $limits := .Values.jobs.limits -}}
+{{- range .Values.projects -}}
+{{- $executor := dict "url" (printf "https://funnel-server.hw-jobs-%s.svc:8000" .id) "ca_file" "/etc/heartwood-jobs/platform-ca/ca.crt" "user" "jobsvc" "password_file" (printf "/etc/heartwood-jobs/executors/%s" .id) -}}
+{{- $account := dict "bucket" (printf "hw-project-%s" .id) "access_key_file" (printf "/etc/heartwood-jobs/store/%s-access-key" .id) "secret_key_file" (printf "/etc/heartwood-jobs/store/%s-secret-key" .id) -}}
+{{- $projects = append $projects (dict "id" .id "executor" $executor "store" $account "gpu" (.gpu | default false) "max_cpu_cores" $limits.maxCpuCores "max_ram_gb" $limits.maxRamGb "max_disk_gb" $limits.maxDiskGb "max_runtime_seconds" $limits.maxRuntimeSeconds) -}}
+{{- end -}}
+{{- $keycloak := include "heartwood.keycloakUrl" . -}}
+{{- $configuration := dict "database" "/var/lib/heartwood-jobs/jobs.sqlite3" "audience" "heartwood-jobs" "issuer" (printf "%s/realms/heartwood" $keycloak) "keys_url" "https://keycloak:8443/realms/heartwood/protocol/openid-connect/certs" "keys_ca_file" "/etc/heartwood-jobs/platform-ca/ca.crt" "tls" (dict "certificate_file" "/etc/heartwood-jobs/tls/tls.crt" "key_file" "/etc/heartwood-jobs/tls/tls.key") "control" (dict "url" "https://heartwood-control:8443" "ca_file" "/etc/heartwood-jobs/platform-ca/ca.crt" "token_file" "/var/run/secrets/heartwood/control/token") "store" (dict "endpoint" (printf "https://versitygw.%s.svc.cluster.local:7070" .Release.Namespace) "ca_file" "/etc/heartwood-jobs/platform-ca/ca.crt") "images" .Values.jobs.taskImages "start_deadline_seconds" .Values.jobs.startDeadlineSeconds "cpu_profile" "synthetic-batch-small" "gpu_profile" "synthetic-batch-gpu" "drs_host" .Values.jobs.drsHost "projects" $projects -}}
+# The job service's object store account for each project's bucket.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: heartwood-jobs-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- range $name, $value := $store }}
+  {{ $name }}: {{ $value | b64enc }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  configuration.json: |
+    {{- toPrettyJson $configuration | nindent 4 }}
+  # The bucket policies that the store bootstrap sets: each project's job account reads
+  # the project's objects and writes below results/.
+  bucket-policies.json: |
+    {{- $policies := dict -}}
+    {{- range .Values.projects }}
+    {{- $bucket := printf "hw-project-%s" .id }}
+    {{- $statement := list (dict "Effect" "Allow" "Principal" (dict "AWS" (list (printf "hw-jobs-%s" .id))) "Action" (list "s3:GetObject") "Resource" (list (printf "arn:aws:s3:::%s/*" $bucket))) (dict "Effect" "Allow" "Principal" (dict "AWS" (list (printf "hw-jobs-%s" .id))) "Action" (list "s3:PutObject") "Resource" (list (printf "arn:aws:s3:::%s/results/*" $bucket))) }}
+    {{- $_ := set $policies $bucket (dict "Version" "2012-10-17" "Statement" $statement) }}
+    {{- end }}
+    {{- toPrettyJson $policies | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: heartwood-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: heartwood-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 4 }}
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+# One replica: the operation records are one SQLite database, and each project's
+# operations are serialized inside the process.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: heartwood-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  serviceName: heartwood-jobs
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 8 }}
+      annotations:
+        checksum/configuration: {{ toPrettyJson $configuration | sha256sum }}
+    spec:
+      serviceAccountName: heartwood-jobs
+      # The service reads only the projected token for the control service.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      containers:
+        - name: jobs
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.jobs, /etc/heartwood-jobs/configuration.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: configuration
+              mountPath: /etc/heartwood-jobs
+              readOnly: true
+            - name: executors
+              mountPath: /etc/heartwood-jobs/executors
+              readOnly: true
+            - name: store
+              mountPath: /etc/heartwood-jobs/store
+              readOnly: true
+            - name: tls
+              mountPath: /etc/heartwood-jobs/tls
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/heartwood-jobs/platform-ca
+              readOnly: true
+            - name: control-token
+              mountPath: /var/run/secrets/heartwood/control
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/heartwood-jobs
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: configuration
+          configMap:
+            name: heartwood-jobs
+            items:
+              - key: configuration.json
+                path: configuration.json
+        - name: executors
+          secret:
+            secretName: heartwood-jobs-executors
+        - name: store
+          secret:
+            secretName: heartwood-jobs-store
+        - name: tls
+          secret:
+            secretName: heartwood-jobs-tls
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        # The job service's token for the control service.
+        - name: control-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: heartwood-control
+                  expirationSeconds: 3600
+                  path: token
+        # In memory, because the service copies its serving key here when it reloads it.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "heartwood.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.jobs.storage }}
+---
+# Creates each project's job account in the object store and sets the bucket policies.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: heartwood-jobs-store
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "versitygw-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      initContainers:
+        - name: accounts
+          image: {{ .Values.images.versitygw }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              for project in "$@"; do
+                access="hw-jobs-${project}"
+                secret="$(cat "/etc/heartwood-jobs/store/${project}-secret-key")"
+                if versitygw admin list-users | grep -q "^${access} "; then
+                  versitygw admin update-user --access "${access}" --secret "${secret}" --role user
+                else
+                  versitygw admin create-user --access "${access}" --secret "${secret}" --role user
+                fi
+              done
+            - accounts
+            {{- range .Values.projects }}
+            - {{ .id }}
+            {{- end }}
+          env:
+            {{- include "heartwood.versitygwAdmin" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: store
+              mountPath: /etc/heartwood-jobs/store
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/platform-ca
+              readOnly: true
+      containers:
+        - name: policies
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.jobs.store_policies, /etc/heartwood-jobs/bucket-policies.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          env:
+            - name: STORE_ENDPOINT
+              value: https://versitygw:7070
+            {{- include "heartwood.versitygwAdmin" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: policies
+              mountPath: /etc/heartwood-jobs
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/platform-ca
+              readOnly: true
+      volumes:
+        - name: store
+          secret:
+            secretName: heartwood-jobs-store
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: policies
+          configMap:
+            name: heartwood-jobs
+            items:
+              - key: bucket-policies.json
+                path: bucket-policies.json
+{{- end }}

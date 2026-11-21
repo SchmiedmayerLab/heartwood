@@ -1,0 +1,413 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+One Funnel instance for each project, in the namespace hw-jobs-<project>: the server, its
+database volume, the identities and Roles of server, worker and executor, the network
+policies, the quota, and the Secrets the server and the job service share. The server
+serves TLS from the platform CA on both ports, issues each task's worker a credential
+bound to that task, and accepts the job service's credential as its only Basic user.
+*/ -}}
+{{- if .Values.projects }}
+{{- $image := required "images.funnel must name the Funnel image by digest" .Values.images.funnel -}}
+{{- $apiServer := include "heartwood.apiServer" . | fromJsonArray -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "heartwood-jobs-executors" -}}
+{{- $passwords := dict -}}
+{{- range .Values.projects -}}
+{{- $key := .id -}}
+{{- if and $existing (hasKey ($existing.data | default dict) $key) -}}
+{{- $_ := set $passwords $key (index $existing.data $key | b64dec) -}}
+{{- else -}}
+{{- $_ := set $passwords $key (randAlphaNum 40) -}}
+{{- end -}}
+{{- end }}
+# The job service's Basic credential at each project's executor, under the project's identifier.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: heartwood-jobs-executors
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- range $project, $password := $passwords }}
+  {{ $project }}: {{ $password | b64enc }}
+  {{- end }}
+{{- range $project := .Values.projects }}
+{{- $namespace := printf "hw-jobs-%s" $project.id }}
+{{- $host := printf "funnel-server.%s.svc" $namespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+    heartwood.platform/jobs: "true"
+    heartwood.platform/project: {{ $project.id }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: jobs
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml $.Values.jobs.quota | nindent 4 }}
+---
+# Every pod of the namespace denies ingress and egress unless a policy below allows it.
+# Executor pods get no allowance.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: funnel-server
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      heartwood.platform/role: funnel-server
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              heartwood.platform/role: funnel-worker
+      ports:
+        - protocol: TCP
+          port: 9090
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" $ "component" "jobs") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    {{- include "heartwood.jobsEgress" (dict "context" $ "apiServer" $apiServer) | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: funnel-worker
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      heartwood.platform/role: funnel-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              heartwood.platform/role: funnel-server
+      ports:
+        - protocol: TCP
+          port: 9090
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" $ "component" "versitygw") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 7070
+    {{- include "heartwood.jobsEgress" (dict "context" $ "apiServer" $apiServer) | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: funnel-server
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: funnel-worker
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: funnel-executor
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+automountServiceAccountToken: false
+---
+# The server creates and removes each task's worker Job, workspace claim and credential
+# Secret. It reads no Secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: funnel-server
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, list, get, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: funnel-server
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: funnel-server
+subjects:
+  - kind: ServiceAccount
+    name: funnel-server
+    namespace: {{ $namespace }}
+---
+# A worker creates its task's executor Jobs, which the admission policy
+# heartwood-funnel-worker-jobs confines, and follows their pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: funnel-worker
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [watch]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: funnel-worker
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: funnel-worker
+subjects:
+  - kind: ServiceAccount
+    name: funnel-worker
+    namespace: {{ $namespace }}
+---
+{{- $workerKeyExisting := lookup "v1" "Secret" $namespace "funnel-worker-key" }}
+# The key from which the server derives each task's worker credential.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: funnel-worker-key
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+type: Opaque
+data:
+  {{- if and $workerKeyExisting (hasKey ($workerKeyExisting.data | default dict) "key") }}
+  key: {{ index $workerKeyExisting.data "key" }}
+  {{- else }}
+  key: {{ randAlphaNum 64 | b64enc }}
+  {{- end }}
+---
+{{- $storage := dict "metadata" (dict "name" "workspace") "spec" (dict "accessModes" (list "ReadWriteOnce") "resources" (dict "requests" (dict "storage" $.Values.jobs.workspaceStorage))) }}
+{{- with $.Values.storageClassName }}
+{{- $_ := set $storage.spec "storageClassName" . }}
+{{- end }}
+{{- $disabled := dict "Disabled" true }}
+{{- $backends := dict "AmazonS3" $disabled "GoogleStorage" $disabled "Swift" $disabled "FTPStorage" $disabled "HTTPStorage" (dict "Disabled" false) }}
+{{- $server := dict "HostName" $host "HTTPPort" "8000" "RPCPort" "9090" "TLSCertFile" "/etc/funnel-tls/tls.crt" "TLSKeyFile" "/etc/funnel-tls/tls.key" "TaskAccess" "OwnerOrAdmin" "WorkerCredentialKeyFile" "/etc/funnel-worker-key/key" "BasicAuth" (list (dict "User" "jobsvc" "Password" (index $passwords $project.id) "Admin" true)) }}
+{{- $kubernetes := dict "Namespace" $namespace "JobsNamespace" $namespace "WorkerImage" $image "ReconcileRate" "30s" "Storage" (dict "WorkspaceVolume" "workspace" "volumeClaimTemplates" (list $storage)) "WorkerTemplate" ($.Files.Get "files/funnel/worker-job.yaml") }}
+{{- $serverConfig := merge (dict "Compute" "kubernetes" "Database" "boltdb" "EventWriters" (list "boltdb" "log") "BoltDB" (dict "Path" "/var/lib/funnel/funnel.db") "Logger" (dict "Level" "info") "Server" $server "Worker" (dict "WorkDir" "/tmp/funnel-work") "Kubernetes" $kubernetes) $backends }}
+# The server's configuration, with the job service's password.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: funnel-server-config
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+type: Opaque
+data:
+  server.yaml: {{ toYaml $serverConfig | b64enc }}
+---
+{{- $workerKubernetes := dict "Namespace" $namespace "JobsNamespace" $namespace "ServiceAccount" "funnel-executor" "ExecutorTemplate" ($.Files.Get "files/funnel/executor-job.yaml") }}
+{{- $rpc := dict "ServerAddress" (printf "%s:9090" $host) "TLSCAFile" "/etc/platform-ca/ca.crt" "CredentialFile" "/etc/funnel-task/credential" }}
+{{- $workerConfig := merge (dict "Compute" "kubernetes" "Database" "rpc" "EventWriters" (list "log") "Logger" (dict "Level" "info") "RPCClient" $rpc "Worker" (dict "WorkDir" "/tmp/funnel-work") "Kubernetes" $workerKubernetes) $backends }}
+# The worker's configuration. It holds no credential; each worker reads its task's
+# credential from the Secret that its Job mounts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: funnel-worker-config
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+data:
+  worker.yaml: |
+    {{- toYaml $workerConfig | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: funnel-server
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  selector:
+    heartwood.platform/role: funnel-server
+  ports:
+    - name: https
+      port: 8000
+      targetPort: 8000
+    - name: rpc
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: funnel-db
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- include "heartwood.storageClass" $ | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ $.Values.jobs.executorStorage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: funnel-server
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      heartwood.platform/role: funnel-server
+  template:
+    metadata:
+      labels:
+        heartwood.platform/role: funnel-server
+      annotations:
+        checksum/configuration: {{ toYaml $serverConfig | sha256sum }}
+    spec:
+      serviceAccountName: funnel-server
+      # The server creates and removes the Jobs, claims and Secrets of its tasks.
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      containers:
+        - name: server
+          image: {{ $image }}
+          args: [server, run, --config, /etc/funnel/server.yaml]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" $ | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: https
+              containerPort: 8000
+            - name: rpc
+              containerPort: 9090
+          readinessProbe:
+            tcpSocket:
+              port: https
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/funnel
+              readOnly: true
+            - name: tls
+              mountPath: /etc/funnel-tls
+              readOnly: true
+            - name: worker-key
+              mountPath: /etc/funnel-worker-key
+              readOnly: true
+            - name: db
+              mountPath: /var/lib/funnel
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: funnel-server-config
+        - name: tls
+          secret:
+            secretName: funnel-server-tls
+        - name: worker-key
+          secret:
+            secretName: funnel-worker-key
+        - name: db
+          persistentVolumeClaim:
+            claimName: funnel-db
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}
+{{- end }}

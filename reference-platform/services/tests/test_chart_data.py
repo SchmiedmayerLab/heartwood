@@ -151,14 +151,21 @@ def test_the_object_store_accepts_only_its_jobs_and_copy_pods(
         for source in sources
         if "namespaceSelector" not in source
     }
-    assert components == {"versitygw-bootstrap", "data-bootstrap"}
-    (session,) = [source for source in sources if "namespaceSelector" in source]
-    assert session == {
-        "namespaceSelector": {
-            "matchExpressions": [{"key": "heartwood.platform/session", "operator": "Exists"}]
+    # The job service checks that the inputs of a task exist.
+    assert components == {"versitygw-bootstrap", "data-bootstrap", "jobs"}
+    # Copy pods in session namespaces and Funnel workers in jobs namespaces.
+    assert [source for source in sources if "namespaceSelector" in source] == [
+        {
+            "namespaceSelector": {
+                "matchExpressions": [{"key": "heartwood.platform/session", "operator": "Exists"}]
+            },
+            "podSelector": {"matchLabels": {"heartwood.platform/role": "project-data-copy"}},
         },
-        "podSelector": {"matchLabels": {"heartwood.platform/role": "project-data-copy"}},
-    }
+        {
+            "namespaceSelector": {"matchLabels": {"heartwood.platform/jobs": "true"}},
+            "podSelector": {"matchLabels": {"heartwood.platform/role": "funnel-worker"}},
+        },
+    ]
 
 
 def test_the_data_service_reaches_keycloak_for_its_signing_keys(
@@ -204,7 +211,12 @@ def test_the_data_service_reviews_tokens_and_holds_only_the_read_account(
             for variable in container.get("env", [])
         )
     }
-    assert holders == {"versitygw", "versitygw-bootstrap", "heartwood-data-bootstrap"}
+    assert holders == {
+        "versitygw",
+        "versitygw-bootstrap",
+        "heartwood-data-bootstrap",
+        "heartwood-jobs-store",
+    }
 
 
 def test_the_control_service_fills_project_data_with_the_services_image(
@@ -267,12 +279,12 @@ def test_project_data_is_attached_to_the_workspace_of_hosted_gateways(
         ControlSettings.model_validate_json(json.dumps(configuration))
 
 
-def test_only_the_data_service_reads_launch_contexts_from_the_control_service(
+def test_the_data_service_reads_launch_contexts_from_the_control_service(
     objects: list[dict[str, Any]],
 ) -> None:
     data = "system:serviceaccount:heartwood-platform:heartwood-data"
     configuration = _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
-    assert ControlSettings.model_validate_json(configuration).context_callers == {data}
+    assert data in ControlSettings.model_validate_json(configuration).context_callers
     settings = _configuration(objects)
     assert settings.control.url == "https://heartwood-control:8443"
     spec = _named(objects, "StatefulSet", "heartwood-data")["spec"]["template"]["spec"]
