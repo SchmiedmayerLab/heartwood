@@ -155,6 +155,29 @@ def test_openshell_sandbox_role_creates_and_reads_config_maps_only(
     assert rule == {"apiGroups": [""], "resources": ["configmaps"], "verbs": ["get", "create"]}
 
 
+def test_session_gateway_role_grants_what_the_worker_adapter_uses(
+    objects: list[dict[str, Any]],
+) -> None:
+    # The adapter reads objects one request at a time and deletes without waiting, so it
+    # never watches.
+    rules = _named(objects, "ClusterRole", "heartwood-session-gateway")["rules"]
+    assert rules == [
+        {
+            "apiGroups": [""],
+            "resources": ["pods", "persistentvolumeclaims"],
+            "verbs": ["create", "delete", "get", "list"],
+        },
+        {"apiGroups": [""], "resources": ["pods/exec"], "verbs": ["create"]},
+        {
+            "apiGroups": ["networking.k8s.io"],
+            "resources": ["networkpolicies"],
+            "verbs": ["get", "list"],
+        },
+        {"apiGroups": ["agents.x-k8s.io"], "resources": ["sandboxes"], "verbs": ["get", "list"]},
+        {"apiGroups": [""], "resources": ["namespaces"], "verbs": ["get"]},
+    ]
+
+
 def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[str, Any]]) -> None:
     configuration = json.loads(
         _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]

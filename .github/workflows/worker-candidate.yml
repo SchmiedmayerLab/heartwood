@@ -38,6 +38,7 @@ jobs:
             while IFS= read -r path; do
               case "${path}" in
                 .github/workflows/worker-candidate.yml | \
+                  .github/workflows/kubernetes-qualification.yml | \
                   .github/workflows/pull-request-validation.yml)
                   required=true
                   ;;

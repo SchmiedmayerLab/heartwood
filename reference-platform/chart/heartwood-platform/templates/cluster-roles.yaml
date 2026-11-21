@@ -109,7 +109,8 @@ roleRef:
   kind: ClusterRole
   name: heartwood-openshell-node-reader
 ---
-# Rights of one Heartwood gateway in its session namespace.
+# Rights of one Heartwood gateway in its session namespace. The worker adapter reads
+# objects one request at a time and never watches.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -119,7 +120,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [pods, persistentvolumeclaims]
-    verbs: [create, delete, get, list, watch]
+    verbs: [create, delete, get, list]
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [create]
@@ -128,7 +129,7 @@ rules:
     verbs: [get, list]
   - apiGroups: [agents.x-k8s.io]
     resources: [sandboxes]
-    verbs: [get, list, watch]
+    verbs: [get, list]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get]

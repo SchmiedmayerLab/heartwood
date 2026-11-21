@@ -67,7 +67,7 @@ Every image in `values.yaml` is pinned by digest or has no default, and `values.
 `images.openshellGateway` has no default either.
 `values-kind.yaml` sets it to the published OpenShell 0.1.9 gateway and `sessions.stagingImages` to a small test image.
 Both are stand-ins, used when the chart is rendered or installed without the built images.
-An installation with the built images sets `images.openshellGateway` to the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and lists the worker image by digest in `sessions.stagingImages`.
+The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches and with the worker image and the replacement worker image of the qualification by digest in `sessions.stagingImages`.
 `images.openshellRepository` names a repository, such as a mirror, from which session pods pull the OpenShell supervisor and sandbox runtime images under their upstream names and digests; empty pulls them from `ghcr.io/nvidia/openshell`.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
@@ -228,6 +228,7 @@ bash reference-platform/cluster/delete-cluster.sh heartwood
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
 `push-image.sh` pushes a local image to that registry and prints the reference by digest under which the cluster pulls it.
+Given a repository as a third argument, it copies an image named by digest from a remote registry to that repository in the cluster's registry, with every platform of its index, and prints the reference under the same digest.
 `network-policy-controls.sh` runs a reachable-connection control and two blocked-connection controls, one denied by an ingress policy and one by an egress policy.
 A blocked control passes only after three consecutive connection timeouts.
 The reachable control then runs again, and after the policies are deleted both blocked pods must connect.
@@ -240,3 +241,33 @@ The cluster tests send each admission policy admitted requests and one denied re
 They also check which connections the network policies allow, and call the control service as a stand-in for the spawner.
 A launched session is checked for its namespace objects, its RoleBindings, a ready OpenShell gateway, an unchanged state after a second launch, and complete removal.
 Requests sent from the control service's pod with its own token show that the admission policy confines it.
+
+### Worker Qualification
+
+`deploy/qualify-kubernetes-worker.py` runs the managed worker on the OpenShell Kubernetes driver in a session that the control service provisions.
+It needs the candidate wheels and the gateway build of `deploy/build-worker-candidate.py`, Python 3.12 or later, and the tools above.
+The commands below replace the chart installation and the cluster tests of the previous block.
+
+```bash
+bash images/worker/build-candidate-images.sh test-results/worker-candidate "$(git rev-parse HEAD)"
+python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
+  --worker-image heartwood-worker:qualification --runtime-image heartwood-runtime:qualification \
+  --gateway-artifacts test-results/gateway-candidate --output test-results/kubernetes-qualification/worker
+gateway="$(jq --raw-output .image_references.gateway test-results/kubernetes-qualification/worker/images.json)"
+worker="$(jq --raw-output .image_references.worker test-results/kubernetes-qualification/worker/images.json)"
+openshell="$(jq --raw-output .openshell_repository test-results/kubernetes-qualification/worker/images.json)"
+staging="$(jq --compact-output '[.image_references.worker, .image_references.replacement_worker]' \
+  test-results/kubernetes-qualification/worker/images.json)"
+bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
+  --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
+  --set-json "sessions.stagingImages=${staging}"
+(cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
+  --cluster-context kind-heartwood --staging-image "${worker}")
+python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \
+  --output test-results/kubernetes-qualification/worker
+```
+
+`images` verifies the gateway build, packages the gateway image, builds the controller image and pushes both with the worker image to the cluster's registry.
+It also copies the supervisor and sandbox runtime images of the OpenShell release to the cluster's registry under their digests, so the cluster pulls every image of a worker from there, and builds and pushes the symbolic link workspace and replacement worker images of the Docker qualification.
+`run` launches a session as the spawner would, starts the controller pod with that session's gateway ServiceAccount, runs the cases and removes the session.
+[Kubernetes Driver Qualification](../documentation/architecture/testing.md#kubernetes-driver-qualification) lists the cases and the evidence.

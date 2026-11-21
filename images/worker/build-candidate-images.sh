@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 # Builds the worker and runtime candidate images from candidate wheels and checks that
-# both start. The native qualification job builds its two images with it.
+# both start. The Docker and the Kubernetes qualification use the same two images.
 # WHEELS holds the directories `first` and `application-first` that
 # deploy/build-worker-candidate.py wrote.
 # Usage: build-candidate-images.sh WHEELS REVISION [TAG]

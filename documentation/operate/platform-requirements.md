@@ -16,7 +16,7 @@ Hosting, isolated workers, inference and research services are independent capab
 | Capability | Requested from the platform | Heartwood status |
 |---|---|---|
 | Run the application | A release artifact, durable storage and an authenticated researcher route | Current; interfaces depend on the platform adapter |
-| Isolate complete workers | A Docker engine and sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only gateway build |
+| Isolate complete workers | A Docker engine or a Kubernetes namespace, and a sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress | Current for the OpenShell Docker reference adapter and for the OpenShell Kubernetes driver under the [Kubernetes worker path](#kubernetes-worker-path) requirements; qualified only against the qualification-only gateway build, the Kubernetes driver on a kind cluster |
 | Use approved inference | Authorized model discovery and an inference endpoint with streaming and native tool calls | Current through built-in and configured routes; connection-manifest startup unavailable |
 | Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft profile and offline checks; no built-in connector |
 | Execute research workflows | Native submission, status, results and cancellation with independent authorization | Draft profile; [platform job operations](platform-contract.md#platform-job-operations) through an MCP job service, otherwise the trusted Python [outside operation](platform-contract.md#outside-operation-admission) interface with a platform-specific adapter |
@@ -156,6 +156,60 @@ Request mandatory filesystem and process controls, resource limits and default-d
 Qualification must cover private and metadata addresses, alternate routes, redirects, peer workers, management endpoints and process inheritance on the selected infrastructure.
 No Docker socket, infrastructure credential, research-directory mount or state mount belongs in the worker.
 The reference adapter needs an operator-controlled Docker engine; it does not hand Docker administration to the researcher or agent.
+
+### Kubernetes Worker Path
+
+With `driver = "openshell-kubernetes"`, the worker of a session runs as pods that the OpenShell Kubernetes driver creates in one namespace.
+Heartwood reads those pods, their NetworkPolicies and the namespace through the Kubernetes API before it admits a worker; the [accepted values](../architecture/system.md#kubernetes-worker-admission) are listed with the Docker values.
+The worker's `/workspace` on this driver does not persist across a container restart ([Managed Native Worker](../architecture/system.md#managed-native-worker)).
+The platform provides what follows.
+The reference platform chart in `reference-platform/chart` provides each namespace and gateway item for a session, and the [Kubernetes driver qualification](../architecture/testing.md#kubernetes-driver-qualification) runs against it on a kind cluster.
+
+The cluster and its nodes:
+
+| Requirement | Reason |
+|---|---|
+| A network plugin that enforces ingress and egress NetworkPolicy | The worker's network confinement is the driver's NetworkPolicies. The Kubernetes API does not report enforcement, so run a blocked-connection control with a reachable control on the cluster. |
+| The Agent Sandbox controller with the `sandboxes.agents.x-k8s.io` resource | The driver creates each sandbox as a Sandbox resource. |
+| A kubelet process limit for each pod (`podPidsLimit`) | A pod does not show a process limit, so admission cannot read one. |
+| Nodes with cgroup v2 | The container runtime then gives each container a private cgroup namespace, which a pod does not show. |
+| The container runtime's default AppArmor profile or SELinux policy on every node | The pods carry no profile field; the `restricted` Pod Security level refuses an unconfined profile. |
+| A registry from which the nodes pull the worker image and the OpenShell supervisor and sandbox runtime images by digest | The manifest names the worker image as `image_repository` and `image_digest`, and admission compares the digest each container runs with the manifest. |
+| A container runtime that supports `supplementalGroupsPolicy: Strict` | The staging pod sets it, so the groups of its user in the worker image are not added; a runtime without the feature does not start the pod. |
+| A StorageClass `heartwood-attempt` that provisions `ReadWriteOnce` volumes and deletes them with their claim | Inputs and Skills are staged into two claims of 256 MiB for each attempt. Admission reads the claims, and a claim does not show whether its volume is a host path. |
+
+The namespace of a session:
+
+| Requirement | Reason |
+|---|---|
+| One namespace and one sandbox gateway for each researcher and project | Every client of one sandbox gateway has the same identity there. |
+| The label `pod-security.kubernetes.io/enforce` with the value `restricted`, and no pinned version other than `latest` | Admission refuses any other value. |
+| A NetworkPolicy that selects every pod and denies ingress and egress | Staging requires that its pod has no network access, and the worker's pods receive only the driver's own allowances. |
+| No further NetworkPolicy that selects workload pods and has a rule | Admission refuses a worker whose pods another policy allows traffic. |
+| Ingress to the sandbox gateway on port 8080 from supervisor pods and from the session's Heartwood gateway, and egress from the sandbox gateway to cluster DNS and the Kubernetes API | The driver's supervisors and Heartwood connect to the sandbox gateway; exec and port forwarding into a worker travel over the supervisor's connection. |
+| A ServiceAccount `hw-staging` that mounts no token and holds no role | The staging pod runs under it as user and group `10002`. |
+| When the namespace has a ResourceQuota, a LimitRange with default requests and limits | The driver's supervisor and init containers declare none. |
+| No principal with `pods/ephemeralcontainers`, `pods/attach` or `pods/portforward` in the namespace | A container added to the workload pod after admission runs outside the sandbox process, and attach and port forwarding reach the workload container without passing the supervisor. |
+
+The credential of the Heartwood gateway holds the permissions listed for the [`kubeconfig` key](../reference/configuration.md#kubernetes-driver) in that namespace and nothing else.
+An admission policy limits what it creates there to pods of the staging shape, which carry only the labels `heartwood.project`, `heartwood.attempt` and `heartwood.role`, and claims named `hw-attempt-*` with the StorageClass `heartwood-attempt`, and admits exec sessions only into pods named `hw-staging-*`.
+The staging pod runs the worker image, so the policy admits each worker image the deployment manifests name, the current and the next one during a change of the image.
+The reference platform ships this as the ValidatingAdmissionPolicy `heartwood-staging-shape`.
+
+The sandbox gateway, beyond the [behavior of the qualification build](#gateway-behavior-behind-native-qualification):
+
+| Setting of the OpenShell chart | Value | Reason |
+|---|---|---|
+| `server.drivers.kubernetes.allowDriverConfig` | `true` | Heartwood passes the read-only mounts of `/inputs` and `/skills` as driver configuration. |
+| `allowed_pod_labels` under `openshell.drivers.kubernetes` in `gatewayConfig` | `heartwood.project`, `heartwood.attempt` and `heartwood.role` | The driver copies only listed labels to the pods, and Heartwood finds the pods of an attempt by them. |
+| `server.sandboxUid` and `server.sandboxGid` | `10001` | Admission requires the workload to run as this user and group. |
+| `server.drivers.kubernetes.workspaceMode` | `shared` | Sandboxes run in the gateway's own namespace, which is the namespace the manifest names. |
+| `supervisor.image.digest` and `sandboxRuntime.image.digest` | The digests in the manifest keys `supervisor_image_digest` and `sandbox_image_digest` | Admission compares the images the pods run. |
+| `replicaCount` | `1` | The driver serializes the operations on one sandbox inside one gateway process, and the deletion behavior it reports was examined and qualified with one replica. |
+| `supervisor.network.additionalCaConfigMapName` | A ConfigMap with the certificate authority of the model route, when that authority is not publicly trusted | The supervisor makes the TLS connection to each destination the sandbox policy allows. |
+
+Each sandbox has its own supervisor pod; the shared supervisor topology is not qualified.
+The driver's policy `openshell-sandbox-supervisors` allows supervisor pods all egress, so the namespaces of other services deny ingress by default and admit supervisor pods only where a route is intended.
 
 ### Gateway Behavior Behind Native Qualification
 

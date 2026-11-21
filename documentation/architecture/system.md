@@ -101,6 +101,8 @@ This section describes the worker of the Docker reference driver, `driver = "ope
 The worker is the OpenHands agent server from the Heartwood worker image, started by `images/worker/launch.py` as user `10001`.
 Before starting the server it registers the image's own verified advisory specialists.
 It runs in an OpenShell sandbox created through OpenShell's Docker or Kubernetes driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
+With `openshell-kubernetes`, the driver mounts the sandbox's workspace claim at `/sandbox`, and `/workspace` is the image's own directory on the container's writable layer.
+Files the worker writes to `/workspace` on this driver are lost when the container restarts.
 The sandbox has no network of its own (`network=none`); its only routes are those the OpenShell policy and supervisor permit.
 
 The gateway reaches the worker through an `openshell forward service` tunnel on loopback and authenticates every request with a per-attempt `SESSION_API_KEY`.
@@ -237,7 +239,7 @@ The gateway fences an attempt when it observes an exhausted response budget, a m
 Fencing starts revocation on its own thread, so no control-plane call runs under a session lock or on a transport thread.
 Revocation does not wait for a session command whose worker request is in progress; it waits only for a control-plane launch of the same attempt to return, and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
 It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
-With the Kubernetes driver, a deletion that the sandbox gateway could not complete is sent again, up to five times within the 90 seconds of the delete request, after pauses of 0.5, 1, 2, and 4 seconds.
+With the Kubernetes driver, a deletion that the sandbox gateway could not complete is sent again, up to seven times within the 90 seconds of the delete request, after pauses of 0.5, 1, 2, 4, 8, and 16 seconds.
 Only three answers are retried: an `INTERNAL` error that starts with `delete sandbox failed:`, which includes a concurrent change of the Sandbox resource, `FAILED_PRECONDITION`, which reports a pending operation, and `UNAVAILABLE`.
 Before each retry the sandbox's name, labels, and identity are read again.
 The cluster must then show neither the Sandbox resource nor any pod of the attempt, for which revocation waits up to 90 seconds, before the [claims are removed](#kubernetes-worker-staging).

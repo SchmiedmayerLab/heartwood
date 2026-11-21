@@ -31,6 +31,8 @@ jobs:
     uses: ./.github/workflows/gpu-container-pr-validation.yml
   kubernetes-qualification:
     name: Kubernetes Qualification
+    # The cluster stage uses the wheels and the gateway of the candidate build.
+    needs: native-qualification
     uses: ./.github/workflows/kubernetes-qualification.yml
   native-assets:
     name: Native Release Assets
