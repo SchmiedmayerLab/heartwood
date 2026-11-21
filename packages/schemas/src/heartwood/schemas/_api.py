@@ -50,6 +50,9 @@ __all__ = [
     "McpCapabilityResponse",
     "McpDestinationResponse",
     "McpDiscoveredToolResponse",
+    "McpOperationResponse",
+    "McpOperationsResponse",
+    "McpOptionalCapabilityResponse",
     "McpSelectedToolResponse",
     "McpServerAddRequest",
     "McpServerEnabledRequest",
@@ -830,6 +833,39 @@ class McpCapabilityResponse(_ApiResponse):
     support: Literal["unsupported"]
 
 
+class McpOperationResponse(_ApiResponse):
+    """One operation a platform service declares, with the permission it requires.
+
+    ``consistent`` is false when the declared operation differs from the role the
+    deployment gives the tool or from its read-only hint.
+    """
+
+    tool: str
+    operation: Literal["submit", "status", "cancel", "proposal"]
+    required_permission: str
+    permitted: bool | None
+    listed: bool
+    read_only: bool | None
+    consistent: bool
+
+
+class McpOptionalCapabilityResponse(_ApiResponse):
+    """An optional platform capability; one the service does not declare is unavailable."""
+
+    capability: Literal["gpu-resources", "dataset-attachment", "application-discovery"]
+    status: Literal["available", "not-permitted", "unavailable"]
+    reason: str | None
+
+
+class McpOperationsResponse(_ApiResponse):
+    """What a platform operation service declares; discovery authorizes nothing."""
+
+    status: Literal["available", "unavailable"]
+    operations: list[McpOperationResponse]
+    capabilities: list[McpOptionalCapabilityResponse]
+    limitations: list[str]
+
+
 class McpServerTestResponse(_ApiResponse):
     """The result of connecting to one server and listing its tools."""
 
@@ -837,6 +873,7 @@ class McpServerTestResponse(_ApiResponse):
     tools: list[McpDiscoveredToolResponse]
     resources: McpCapabilityResponse
     prompts: McpCapabilityResponse
+    operations: McpOperationsResponse | None
 
 
 class CredentialIsolationResponse(_ApiResponse):

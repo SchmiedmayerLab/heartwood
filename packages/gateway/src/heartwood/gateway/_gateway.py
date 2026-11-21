@@ -641,6 +641,13 @@ class SessionGateway:
             # in workers; it binds tools to sessions only with a worker of its own.
             worker_available=worker_plan_factory is not None
             or (deployment is not None and deployment.worker is not None),
+            project_id=(
+                self._planning.launch.project_id
+                if self._planning is not None
+                else None
+                if self.project.project_id is None
+                else str(self.project.project_id)
+            ),
         )
         # The research service adapter of each worker session, by service identity.
         self._mcp_adapters: dict[int, McpOutsideAdapter] = {}
@@ -2613,7 +2620,11 @@ class SessionGateway:
         mcp_adapter: McpOutsideAdapter | None = None
         if self._worker_plan_factory is not None and self._external_actions_factory is None:
             bound = self.mcp_servers.bound_tools()
-            mcp_adapter = McpOutsideAdapter(self.mcp_servers, bound) if bound else None
+            mcp_adapter = (
+                McpOutsideAdapter(self.mcp_servers, bound, planning=self._planning)
+                if bound
+                else None
+            )
         backend = self._backend(
             model_settings=configuration.model_settings,
             selected_model=configuration.local_model,

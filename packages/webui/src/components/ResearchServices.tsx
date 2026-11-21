@@ -18,6 +18,7 @@ import {
 import { useEffect, useState } from "react";
 import type { HeartwoodClient } from "../client";
 import type { McpServer, McpServers, McpServerTest } from "../types";
+import { displaySafeText } from "./SafeMarkdown";
 
 type ServicesClient = Pick<
   HeartwoodClient,
@@ -290,6 +291,9 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
               </div>
             );
           })}
+          {test.operations ?
+            <PlatformOperations operations={test.operations} />
+          : null}
           {test.resources.advertised || test.prompts.advertised ?
             <small>
               The server offers{" "}
@@ -430,3 +434,56 @@ export const ResearchServices = ({ client }: { client: ServicesClient }) => {
     </>
   );
 };
+
+/** Show what a platform operation service declares; service text is escaped. */
+const PlatformOperations = ({
+  operations,
+}: {
+  operations: NonNullable<McpServerTest["operations"]>;
+}) => (
+  <div className="service-tool">
+    <strong>Platform operations</strong>
+    <small>
+      Declared by the service. Discovery authorizes nothing, and the platform
+      checks every call.
+    </small>
+    {operations.status === "unavailable" ?
+      <small>The service did not declare its operations.</small>
+    : null}
+    <ul className="platform-operation" aria-label="Declared operations">
+      {operations.operations.map((item) => (
+        <li key={item.tool}>
+          {displaySafeText(
+            [
+              `${item.tool}: ${item.operation}`,
+              `requires ${item.required_permission}`,
+              item.permitted === null ? "permission not disclosed"
+              : item.permitted ? "permitted"
+              : "not permitted",
+              ...(item.listed ? [] : ["not listed"]),
+              ...(item.consistent ?
+                []
+              : ["differs from the deployment or its read-only hint"]),
+            ].join("; "),
+          )}
+        </li>
+      ))}
+    </ul>
+    <ul className="platform-operation" aria-label="Optional capabilities">
+      {operations.capabilities.map((item) => (
+        <li key={item.capability}>
+          {displaySafeText(
+            item.reason ?
+              `${item.capability}: ${item.status.replace("-", " ")} (${item.reason})`
+            : `${item.capability}: ${item.status.replace("-", " ")}`,
+          )}
+        </li>
+      ))}
+    </ul>
+    {operations.limitations.map((item, index) => (
+      // Platform text can repeat, so the position identifies each note.
+      // eslint-disable-next-line @eslint-react/no-array-index-key
+      <small key={index}>Platform note: {displaySafeText(item)}</small>
+    ))}
+  </div>
+);

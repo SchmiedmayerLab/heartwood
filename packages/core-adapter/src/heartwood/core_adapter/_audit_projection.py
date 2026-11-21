@@ -44,6 +44,15 @@ def project_audit_payload(kind: EventKind, payload: dict[str, JsonValue]) -> dic
             "actor_id": decided.actor_id if decided else None,
             "command_id": decided.command_id if decided else None,
             "status": outside.observation.operation.status if outside.observation else None,
+            # The join to the platform's own audit record, without its content.
+            "platform_record_ref": (
+                outside.observation.operation.platform_record_ref if outside.observation else None
+            ),
+            "target_operation_id": (
+                None
+                if outside.proposal.request.target_operation_id is None
+                else str(outside.proposal.request.target_operation_id)
+            ),
         }
     if kind == EventKind.WORKER_ATTEMPT_RECORDED:
         record = WorkerAttemptRecord.model_validate(payload)

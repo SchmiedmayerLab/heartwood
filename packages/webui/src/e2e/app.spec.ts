@@ -15,6 +15,7 @@ import {
   genericCapabilities,
   syntheticEvents,
   syntheticOutsideOperation,
+  syntheticPlatformJob,
   syntheticProjection,
 } from "../test/fixtures";
 import type {
@@ -427,6 +428,33 @@ test("shows an outside operation review without expansion at high zoom", async (
 });
 
 for (const colorScheme of ["light", "dark"] as const)
+  test(`shows a platform job review on a phone in ${colorScheme} mode`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/?configured-model=1&platform-job=1");
+    await page.keyboard.press("Escape");
+
+    const approval = page.getByRole("region", {
+      name: "Review outside operation",
+    });
+    const operation = approval.getByRole("list", {
+      name: "Platform operation",
+    });
+    await expect(
+      operation.getByText(
+        "Resource limits: cpu 2 core, duration 1800 s, gpu 1 synthetic-gpu",
+      ),
+    ).toBeVisible();
+    await expect(
+      operation.getByText(/^Approval is not admission\./u),
+    ).toBeVisible();
+    await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
+    await expectNoAccessibilityViolations(page);
+  });
+
+for (const colorScheme of ["light", "dark"] as const)
   test(`shows research services on a phone in ${colorScheme} mode`, async ({
     page,
   }) => {
@@ -489,6 +517,16 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
     pendingApproval: {
       groupId: "action-set-session-test",
       actions: [outsideOperation],
+      decision: null,
+      decisionScope: "all",
+    },
+  });
+  const platformJob = syntheticPlatformJob();
+  const platformJobProjection = syntheticProjection({
+    actions: [platformJob],
+    pendingApproval: {
+      groupId: "action-set-session-test",
+      actions: [platformJob],
       decision: null,
       decisionScope: "all",
     },
@@ -780,6 +818,8 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           sessionId !== "session-test" ? emptyProjection(sessionId)
           : new URL(page.url()).searchParams.has("outside-review") ?
             outsideProjection
+          : new URL(page.url()).searchParams.has("platform-job") ?
+            platformJobProjection
           : sessionProjection,
       });
       return;

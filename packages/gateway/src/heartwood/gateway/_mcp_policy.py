@@ -34,6 +34,8 @@ from heartwood.gateway._diagnostics import diagnostic_for
 
 # The service learns the project and operation identity from the gateway, never the worker.
 GATEWAY_FIELDS = frozenset({"project_id", "operation_id"})
+# A cancellation's target, which the worker names and the gateway takes from its own record.
+TARGET_FIELD = "target_operation_id"
 _SERVER_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
 _SERVICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
@@ -67,6 +69,20 @@ class McpServerError(ValueError):
         super().__init__(f"{self.code}: {message}")
 
 
+class McpOperationProfile(BaseModel):
+    """The tools that make a destination a platform operation service.
+
+    Every selectable tool of such a destination submits work, except the cancellation
+    tool. The capability and proposal tools are read-only and not selectable.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    capabilities_tool: str = Field(pattern=_TOOL_NAME.pattern)
+    proposal_tool: str = Field(pattern=_TOOL_NAME.pattern)
+    cancel_tool: str | None = Field(default=None, pattern=_TOOL_NAME.pattern)
+
+
 class McpDestination(BaseModel):
     """One deployment-approved origin and the tools researchers may select there."""
 
@@ -80,6 +96,7 @@ class McpDestination(BaseModel):
     call_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
     # The operator's opt-in for a cluster or other private address at this exact origin.
     private_address: bool = False
+    operations: McpOperationProfile | None = None
 
     @field_validator("origin")
     @classmethod
@@ -99,8 +116,25 @@ class McpDestination(BaseModel):
     def _observation_is_separate(self) -> Self:
         if self.observation_tool in self.tools:
             raise ValueError("the observation tool cannot also be a selectable tool")
+        if self.operations is not None:
+            readers = (self.operations.capabilities_tool, self.operations.proposal_tool)
+            if len({*readers, self.observation_tool}) != 3 or set(readers) & set(self.tools):
+                raise ValueError(
+                    "the capability, proposal and observation tools must be distinct and "
+                    "not selectable"
+                )
+            if self.operations.cancel_tool is not None and (
+                self.operations.cancel_tool not in self.tools or len(self.tools) < 2
+            ):
+                raise ValueError(
+                    "the cancellation tool must be selectable next to a submission tool"
+                )
         exact_origin(self.origin, private_address=self.private_address)
         return self
+
+    def cancels(self, tool: str) -> bool:
+        """Return whether ``tool`` is this destination's cancellation tool."""
+        return self.operations is not None and self.operations.cancel_tool == tool
 
 
 def mcp_destinations_from_mapping(value: object) -> tuple[McpDestination, ...]:
@@ -304,18 +338,22 @@ def definition_digest(definition: str) -> str:
     return hashlib.sha256(definition.encode()).hexdigest()
 
 
-def binding_supported(definition: Mapping[str, Any]) -> bool:
-    """Return whether a tool accepts the gateway's project and operation identity."""
+def binding_supported(definition: Mapping[str, Any], *, cancel: bool = False) -> bool:
+    """Return whether a tool accepts the gateway's project and operation identity.
+
+    A cancellation tool must also require the identifier of the operation it cancels.
+    """
     schema = definition.get("inputSchema")
     if not isinstance(schema, dict):
         return False
     properties = schema.get("properties")
     required = schema.get("required")
+    fields = GATEWAY_FIELDS | ({TARGET_FIELD} if cancel else set())
     return (
         isinstance(properties, dict)
         and isinstance(required, list)
-        and set(properties) >= GATEWAY_FIELDS
-        and set(required) >= GATEWAY_FIELDS
+        and set(properties) >= fields
+        and set(required) >= fields
     )
 
 

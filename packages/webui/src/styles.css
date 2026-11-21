@@ -1868,6 +1868,18 @@ summary:focus-visible {
   border: 0;
 }
 
+.platform-operation {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .approval-action-objective {
   margin: 0;
   color: var(--color-foreground);

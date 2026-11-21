@@ -82,7 +82,7 @@ def _client(profile: PlatformMcpServiceProfile, token: str) -> Iterator[MCPClien
 
 
 def _call(
-    profile: PlatformMcpServiceProfile, token: str, tool: str, **arguments: object
+    profile: PlatformMcpServiceProfile, token: str, tool: str, /, **arguments: object
 ) -> dict[str, Any]:
     """Return structured content, or raise for a refused call."""
     with _client(profile, token) as client:
@@ -132,7 +132,7 @@ def test_kit_runs_the_same_checks_against_the_fakes(fakes: RunningFakes) -> None
     assert [(r.capability, r.target, r.status, r.item_count) for r in results] == [
         ("inference", "inference", "passed", 1),
         ("platform-tools", "synthetic-data", "passed", 3),
-        ("platform-tools", "synthetic-jobs", "passed", 3),
+        ("platform-tools", "synthetic-jobs", "passed", 5),
         ("platform-tools", "synthetic-budgets", "passed", 2),
     ]
     assert all(r.diagnostic is None for r in results)
@@ -286,13 +286,107 @@ def test_job_service_submits_reports_and_cancels_by_operation(fakes: RunningFake
     submitted = _submit(fakes, "op-batch", _CPU)
     fakes.jobs.advance(PROJECT_ID, "op-batch", "RUNNING")
     running = _jobs(fakes, "get_task", operation_id="op-batch")
-    cancelled = _jobs(fakes, "cancel_task", operation_id="op-batch")
-    repeated = _jobs(fakes, "cancel_task", operation_id="op-batch")
+    cancel = _jobs(fakes, "cancel_task", operation_id="op-cancel", target_operation_id="op-batch")
+    repeated = _jobs(fakes, "cancel_task", operation_id="op-cancel", target_operation_id="op-batch")
+    cancelled = _jobs(fakes, "get_task", operation_id="op-batch")
 
     assert (submitted["status"], submitted["backend_operation_ref"]) == ("queued", "task-0001")
+    assert submitted["project_context_id"] == "launch-synthetic-1"
     assert running["status"] == "running"
-    assert cancelled["status"] == repeated["status"] == "cancelled"
+    # The cancellation is its own operation; the target reports what happened to it.
+    assert cancel == repeated == _jobs(fakes, "get_task", operation_id="op-cancel")
+    assert (cancel["status"], cancel["backend_operation_ref"]) == ("completed", "task-0001")
+    assert cancel["limitations"] == ["Cancellation of op-batch observed TES state CANCELED"]
+    assert cancelled["status"] == "cancelled"
     assert fakes.jobs.task_count == 1
+    with pytest.raises(PermissionError, match="operation identifier conflict"):
+        _jobs(fakes, "cancel_task", operation_id="op-cancel", target_operation_id="op-other")
+    with pytest.raises(PermissionError, match="operation not found"):
+        _jobs(fakes, "cancel_task", operation_id="op-cancel-2", target_operation_id="op-none")
+
+
+def test_status_of_an_unreceived_operation_is_failed_and_refused_afterwards(
+    fakes: RunningFakes,
+) -> None:
+    unseen = _jobs(fakes, "get_task", operation_id="op-unseen")
+
+    assert unseen["status"] == "failed"
+    assert unseen["limitations"] == ["The service never received this operation."]
+    with pytest.raises(PermissionError, match="reported as not received"):
+        _submit(fakes, "op-unseen", _CPU)
+    with pytest.raises(PermissionError, match="reported as not received"):
+        _jobs(fakes, "cancel_task", operation_id="op-unseen", target_operation_id="op-unseen")
+    with pytest.raises(PermissionError, match="operation not found"):
+        _jobs(fakes, "cancel_task", operation_id="op-cancel", target_operation_id="op-unseen")
+    assert fakes.jobs.task_count == 0
+
+
+def test_job_service_describes_operations_and_proposes_without_submitting(
+    fakes: RunningFakes,
+) -> None:
+    token = fakes.issuer.exchange(audience=JOBS_AUDIENCE)
+    described = _call(fakes.jobs_profile, token, "describe_operations", project_id=PROJECT_ID)
+    proposal = _call(
+        fakes.jobs_profile,
+        token,
+        "propose_task",
+        project_id=PROJECT_ID,
+        tool="create_task",
+        arguments={
+            "name": "synthetic-gpu",
+            "command": ["python", "train.py"],
+            "resources": _GPU,
+            "inputs": ["obj-cohort"],
+        },
+    )
+
+    validate_platform_message("operation-capabilities.schema.json", described)
+    validate_platform_message("operation-proposal.schema.json", proposal)
+    assert {item["tool"]: item["required_permission"] for item in described["operations"]} == {
+        "create_task": "jobs:submit",
+        "get_task": "jobs:read",
+        "cancel_task": "jobs:cancel",
+        "propose_task": "jobs:read",
+    }
+    # Only GPU resources are declared, and this project may not use them.
+    assert [
+        (item["capability"], item["status"]) for item in described["optional_capabilities"]
+    ] == [("gpu-resources", "not-permitted")]
+    assert proposal["runtime_profile_ref"] == "synthetic-batch-gpu"
+    assert {
+        item["metric"]: (item["unit"], item["maximum"]) for item in proposal["resource_limits"]
+    } == {
+        "cpu": ("core", "4"),
+        "memory": ("GB", "16"),
+        "duration": ("s", "3600"),
+        "gpu": ("synthetic-gpu", "1"),
+    }
+    assert proposal["data_scope"] == "Project objects drs://data.synthetic.invalid/obj-cohort"
+    assert "no GPU entitlement" in proposal["limitations"][-1]
+    assert fakes.jobs.task_count == 0
+    with pytest.raises(PermissionError, match="no proposal for this tool"):
+        _call(
+            fakes.jobs_profile,
+            token,
+            "propose_task",
+            project_id=PROJECT_ID,
+            tool="get_task",
+            arguments={},
+        )
+
+
+def test_exhausted_budgets_and_revoked_access_refuse_work(fakes: RunningFakes) -> None:
+    fakes.jobs.exhausted_projects.add(PROJECT_ID)
+    denied = _submit(fakes, "op-budget", _CPU)
+    fakes.jobs.revoked_projects.add(PROJECT_ID)
+
+    assert (denied["status"], denied["limitations"]) == (
+        "denied",
+        ["Budget budget-compute has no availability"],
+    )
+    with pytest.raises(PermissionError, match="authorization revoked"):
+        _jobs(fakes, "get_task", operation_id="op-budget")
+    assert fakes.jobs.task_count == 0
 
 
 def test_lost_submission_reply_reconciles_to_one_task(fakes: RunningFakes) -> None:
@@ -328,12 +422,11 @@ def test_task_that_fails_after_it_started_is_observed_as_failed(fakes: RunningFa
     fakes.jobs.advance(PROJECT_ID, "op-fails", "EXECUTOR_ERROR")
 
     failed = _jobs(fakes, "get_task", operation_id="op-fails")
-    after_cancel = _jobs(fakes, "cancel_task", operation_id="op-fails")
+    _jobs(fakes, "cancel_task", operation_id="op-cancel", target_operation_id="op-fails")
 
-    assert failed["status"] == after_cancel["status"] == "failed"
+    assert failed["status"] == _jobs(fakes, "get_task", operation_id="op-fails")["status"]
+    assert failed["status"] == "failed"
     assert failed["limitations"] == ["TES state EXECUTOR_ERROR"]
-    with pytest.raises(PermissionError, match="operation not found"):
-        _jobs(fakes, "get_task", operation_id="op-missing")
 
 
 def test_tool_annotations_mark_submission_and_cancellation_as_state_changing(
@@ -350,6 +443,8 @@ def test_tool_annotations_mark_submission_and_cancellation_as_state_changing(
         "create_task": False,
         "get_task": True,
         "cancel_task": False,
+        "describe_operations": True,
+        "propose_task": True,
     }
     assert hints["cancel_task"]["destructiveHint"] is True
 

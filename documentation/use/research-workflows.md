@@ -120,6 +120,7 @@ Each estimate shows its coverage, range, cost components, limitations, exclusion
 An unknown cost is shown as unknown and never counted as zero.
 Each budget shows its allocation, reservations, spending and availability with the time the platform observed them.
 Each element shows whether you approved a reviewed proposal that contains it, whether it is unchanged since an approval in an earlier revision, and the platform's authorization.
+A [platform job](../operate/platform-contract.md#platform-job-operations) the agent proposes refers to the batch element of the latest revision that uses the job's runtime profile, and its review shows that element's estimate; your decision on the review becomes the element's decision, and the platform's admission its authorization.
 
 The platform owns prices, budgets, reservations and admission:
 

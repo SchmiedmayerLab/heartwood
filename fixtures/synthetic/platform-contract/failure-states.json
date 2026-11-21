@@ -123,6 +123,30 @@
       "code": "HW-PLAN-006",
       "surface": "planning",
       "diagnostic": "HW-PLAN-006: The platform denied an operation"
+    },
+    {
+      "condition": "Platform did not describe a submission",
+      "code": "HW-OPS-001",
+      "surface": "operation",
+      "diagnostic": "HW-OPS-001: The platform did not describe the operation"
+    },
+    {
+      "condition": "Operation failed after admission",
+      "code": "HW-OPS-002",
+      "surface": "operation",
+      "diagnostic": "HW-OPS-002: A platform operation failed"
+    },
+    {
+      "condition": "Submission reply lost or timed out",
+      "code": "HW-OPS-003",
+      "surface": "operation",
+      "diagnostic": "HW-OPS-003: A platform operation has an unknown outcome"
+    },
+    {
+      "condition": "Operation denied after researcher approval",
+      "code": "HW-PLAN-006",
+      "surface": "operation",
+      "diagnostic": "HW-PLAN-006: The platform denied an operation"
     }
   ]
 }

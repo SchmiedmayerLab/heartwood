@@ -84,6 +84,8 @@ def propose_external_action_locked(
     request = ExternalActionRequest.model_validate(adapter.prepare(tool_name, arguments))
     if request.tool_name != tool_name:
         raise ExternalActionError("service request changed the proposed tool")
+    if request.target_operation_id is not None:
+        _check_target(request, external_action_records(events).get(request.target_operation_id))
     created_at = external_now(service.clock)
     proposal = ExternalActionProposal(
         operation_id=uuid4(),
@@ -525,6 +527,24 @@ def _check_external_authority(service: SessionService, proposal: ExternalActionP
     ):
         raise ExternalActionError(
             "an earlier operation on this service has an unknown outcome; reconcile it first"
+        )
+
+
+def _check_target(request: ExternalActionRequest, target: ExternalActionRecord | None) -> None:
+    """Admit a cancellation only for an operation this session sent to the same service.
+
+    The target identifier the service receives comes from this record, never from the
+    worker's text.
+    """
+    if (
+        target is None
+        or target.phase != "observed"
+        or target.proposal.request.service_id != request.service_id
+        or target.proposal.request.project_context_id != request.project_context_id
+        or target.proposal.request.target_operation_id is not None
+    ):
+        raise ExternalActionError(
+            "a cancellation must name an operation this session sent to the same service"
         )
 
 

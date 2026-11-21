@@ -19,7 +19,7 @@ Hosting, isolated workers, inference and research services are independent capab
 | Isolate complete workers | A Docker engine and sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only gateway build |
 | Use approved inference | Authorized model discovery and an inference endpoint with streaming and native tool calls | Current through built-in and configured routes; connection-manifest startup unavailable |
 | Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft profile and offline checks; no built-in connector |
-| Execute research workflows | Native submission, status, results and cancellation with independent authorization | Draft profile; the trusted Python [outside operation](platform-contract.md#outside-operation-admission) interface requires a platform-specific adapter |
+| Execute research workflows | Native submission, status, results and cancellation with independent authorization | Draft profile; [platform job operations](platform-contract.md#platform-job-operations) through an MCP job service, otherwise the trusted Python [outside operation](platform-contract.md#outside-operation-admission) interface with a platform-specific adapter |
 | Estimate work and inspect budgets | Platform-owned estimates, observed spend and allocation constraints | Draft schemas only |
 
 The service requests below describe an integration target; no Terra workflow or Seven Bridges connector is installed.

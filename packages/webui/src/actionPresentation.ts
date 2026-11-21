@@ -7,6 +7,10 @@
  */
 
 import type {
+  ProjectionOperationEstimate,
+  ProjectionPlatformOperation,
+} from "./sessionProjection.generated";
+import type {
   ActionModeOption,
   ActionPresentation,
   ActionRisk,
@@ -153,4 +157,119 @@ export const actionHeading = (action: ProjectionActionRecord): string => {
   return action.summary ?
       `${summarySourceLabel(action)}: ${action.summary}`
     : "";
+};
+
+// Shared wording with the gateway's ADMISSION_NOTICE and platform operation lines.
+const admissionNotice =
+  "A reported balance or estimate does not reserve funds or guarantee that the platform admits work.";
+
+const platformStatusLabels: Record<
+  NonNullable<ProjectionPlatformOperation["status"]>,
+  string
+> = {
+  submitted: "Pending",
+  queued: "Pending",
+  running: "Running",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Cancelled",
+  denied: "Denied",
+  unknown: "Unknown",
+};
+
+const platformOperation = (
+  action: ProjectionActionRecord,
+): ProjectionPlatformOperation | null =>
+  action.details.kind === "outside-operation" ? action.details.operation : null;
+
+const estimateLine = (estimate: ProjectionOperationEstimate): string => {
+  const where =
+    estimate.elementId === null ?
+      ""
+    : ` for element ${estimate.elementId} of plan ${estimate.planId} revision ${estimate.planRevision}`;
+  if (estimate.state === "not-offered")
+    return "Estimate: not offered by this deployment";
+  if (estimate.state === "missing") return `Estimate: none recorded${where}`;
+  const unit = estimate.unit ?? "";
+  let amount = (
+    estimate.expected !== null ?
+      `${estimate.expected} ${unit}`
+    : `unknown ${unit}`).trim();
+  if (estimate.lower !== null || estimate.upper !== null) {
+    amount += ` (range ${estimate.lower ?? estimate.expected} to ${estimate.upper ?? estimate.expected})`;
+  }
+  const state =
+    estimate.state === "expired" ? "expired" : "current when proposed";
+  return `Estimate ${estimate.estimateId}${where}: ${amount}, ${estimate.coverage} coverage, ${state}, valid until ${estimate.validUntil}`;
+};
+
+/** State what the platform reported for an operation, and its diagnostic, if any. */
+export const platformStatusLines = (
+  action: ProjectionActionRecord,
+): string[] => {
+  const operation = platformOperation(action);
+  if (operation === null) return [];
+  const lines: string[] = [];
+  if (operation.status !== null) {
+    let status = `Platform status: ${platformStatusLabels[operation.status]}`;
+    if (operation.backendOperationRef)
+      status += `; platform reference ${operation.backendOperationRef}`;
+    if (operation.platformRecordRef)
+      status += `; platform record ${operation.platformRecordRef}`;
+    lines.push(status);
+    lines.push(
+      ...operation.observedLimitations.map(
+        (item) => `Platform report: ${item}`,
+      ),
+    );
+  }
+  if (operation.diagnostic) lines.push(`Diagnostic: ${operation.diagnostic}`);
+  return lines;
+};
+
+/** Describe a platform operation: the platform's proposal, its estimate and its status. */
+export const platformOperationLines = (
+  action: ProjectionActionRecord,
+): string[] => {
+  const operation = platformOperation(action);
+  if (operation === null) return [];
+  const lines: string[] = [];
+  if (operation.kind === "cancel") {
+    lines.push(
+      `Cancels operation ${operation.targetOperationId}: ${operation.targetSummary ?? "an earlier operation"}`,
+      "Cancellation does not undo completed work or incurred charges.",
+    );
+  }
+  const proposal = operation.proposal;
+  if (operation.kind === "submit" && proposal === null) {
+    lines.push(
+      "Platform proposal: none returned; this review cannot be approved",
+    );
+  }
+  if (proposal !== null) {
+    lines.push(`Platform proposal: ${proposal.description}`);
+    if (proposal.runtimeProfile)
+      lines.push(`Runtime profile: ${proposal.runtimeProfile}`);
+    lines.push(
+      `Resource limits: ${
+        proposal.resourceLimits
+          .map((item) => `${item.metric} ${item.maximum} ${item.unit}`)
+          .join(", ") || "none stated"
+      }`,
+      `Data scope: ${proposal.dataScope}`,
+      `Results destination: ${proposal.destination}`,
+      ...proposal.limitations.map((item) => `Platform note: ${item}`),
+    );
+  }
+  if (operation.estimate !== null) {
+    lines.push(estimateLine(operation.estimate));
+    if (operation.estimate.limitation)
+      lines.push(`Estimate note: ${operation.estimate.limitation}`);
+  }
+  if (operation.projectContextId)
+    lines.push(`Platform project context: ${operation.projectContextId}`);
+  if (operation.kind === "submit")
+    lines.push(`Approval is not admission. ${admissionNotice}`);
+  lines.push(...platformStatusLines(action));
+  return lines;
 };

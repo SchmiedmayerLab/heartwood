@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from heartwood.gateway._session_projection import (
         ProjectionActionRecord,
         ProjectionApprovalGroup,
+        ProjectionOperationEstimate,
         ProjectionOutsideContent,
         SessionProjection,
     )
@@ -37,6 +38,20 @@ ACTION_RISK_LABELS = {
 OUTSIDE_REVIEW_TITLES = {
     "outside-operation": "Outside Operation",
     "outside-result": "Outside Result Release",
+}
+ADMISSION_NOTICE = (
+    "A reported balance or estimate does not reserve funds or guarantee "
+    "that the platform admits work."
+)
+PLATFORM_STATUS_LABELS = {
+    "submitted": "Pending",
+    "queued": "Pending",
+    "running": "Running",
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+    "denied": "Denied",
+    "unknown": "Unknown",
 }
 UNKNOWN_ACTION_TOOL_LABEL = "Tool Action"
 UNKNOWN_ACTION_RISK_LABEL = "Not Classified"
@@ -205,6 +220,7 @@ def outside_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
             ),
             f"Request sent to the service: {_outside_content_identity(details.request)}",
         ]
+        lines.extend(platform_operation_lines(action))
     elif details.kind == "outside-result":
         lines = [
             "Leaves Heartwood for the model route",
@@ -216,6 +232,97 @@ def outside_review_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
         return ()
     lines.append(f"Review valid until: {details.expires_at}")
     return tuple(display_safe_text(line) for line in lines)
+
+
+def platform_operation_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
+    """Describe a platform operation: the platform's proposal, its estimate and its status.
+
+    Text from the platform is labelled as such; empty for any other action.
+    """
+    details = action.details
+    if details.kind != "outside-operation" or details.operation is None:
+        return ()
+    operation = details.operation
+    lines: list[str] = []
+    if operation.kind == "cancel":
+        target = operation.target_summary or "an earlier operation"
+        lines.append(f"Cancels operation {operation.target_operation_id}: {target}")
+        lines.append("Cancellation does not undo completed work or incurred charges.")
+    proposal = operation.proposal
+    if operation.kind == "submit" and proposal is None:
+        lines.append("Platform proposal: none returned; this review cannot be approved")
+    if proposal is not None:
+        lines.append(f"Platform proposal: {proposal.description}")
+        if proposal.runtime_profile:
+            lines.append(f"Runtime profile: {proposal.runtime_profile}")
+        lines.append(
+            "Resource limits: "
+            + (
+                ", ".join(
+                    f"{item.metric} {item.maximum} {item.unit}" for item in proposal.resource_limits
+                )
+                or "none stated"
+            )
+        )
+        lines.append(f"Data scope: {proposal.data_scope}")
+        lines.append(f"Results destination: {proposal.destination}")
+        lines.extend(f"Platform note: {item}" for item in proposal.limitations)
+    estimate = operation.estimate
+    if estimate is not None:
+        lines.append(_estimate_line(estimate))
+        if estimate.limitation:
+            lines.append(f"Estimate note: {estimate.limitation}")
+    if operation.project_context_id:
+        lines.append(f"Platform project context: {operation.project_context_id}")
+    if operation.kind == "submit":
+        lines.append(f"Approval is not admission. {ADMISSION_NOTICE}")
+    lines.extend(platform_status_lines(action))
+    return tuple(display_safe_text(line) for line in lines)
+
+
+def platform_status_lines(action: ProjectionActionRecord) -> tuple[str, ...]:
+    """State what the platform reported for an operation, and its diagnostic, if any."""
+    details = action.details
+    if details.kind != "outside-operation" or details.operation is None:
+        return ()
+    operation = details.operation
+    lines: list[str] = []
+    if operation.status is not None:
+        status = f"Platform status: {PLATFORM_STATUS_LABELS[operation.status]}"
+        if operation.backend_operation_ref:
+            status += f"; platform reference {operation.backend_operation_ref}"
+        if operation.platform_record_ref:
+            status += f"; platform record {operation.platform_record_ref}"
+        lines.append(status)
+        lines.extend(f"Platform report: {item}" for item in operation.observed_limitations)
+    if operation.diagnostic:
+        lines.append(f"Diagnostic: {operation.diagnostic}")
+    return tuple(display_safe_text(line) for line in lines)
+
+
+def _estimate_line(estimate: ProjectionOperationEstimate) -> str:
+    where = (
+        ""
+        if estimate.element_id is None
+        else f" for element {estimate.element_id} of plan {estimate.plan_id} "
+        f"revision {estimate.plan_revision}"
+    )
+    if estimate.state == "not-offered":
+        return "Estimate: not offered by this deployment"
+    if estimate.state == "missing":
+        return f"Estimate: none recorded{where}"
+    unit = estimate.unit or ""
+    amount = (
+        f"{estimate.expected} {unit}" if estimate.expected is not None else f"unknown {unit}"
+    ).strip()
+    if estimate.lower is not None or estimate.upper is not None:
+        low, high = estimate.lower or estimate.expected, estimate.upper or estimate.expected
+        amount += f" (range {low} to {high})"
+    state = "expired" if estimate.state == "expired" else "current when proposed"
+    return (
+        f"Estimate {estimate.estimate_id}{where}: {amount}, {estimate.coverage} coverage, "
+        f"{state}, valid until {estimate.valid_until}"
+    )
 
 
 # Label a specialist's task and result as the model wrote them, wherever its runtime summary
@@ -301,6 +408,7 @@ __all__ = [
     "ACTION_RISK_LABELS",
     "ACTION_STATE_LABELS",
     "ACTION_TOOL_LABELS",
+    "ADMISSION_NOTICE",
     "OTHER_ACTION_TOOL_LABEL_TEMPLATE",
     "RETAINED_APPROVAL_NOTICE",
     "SPECIALIST_RESULT_LABEL",
@@ -318,6 +426,8 @@ __all__ = [
     "display_safe_text",
     "outside_review_lines",
     "outside_review_title",
+    "platform_operation_lines",
+    "platform_status_lines",
     "retained_approval",
     "retained_approval_notice",
     "retained_approval_sendable",
