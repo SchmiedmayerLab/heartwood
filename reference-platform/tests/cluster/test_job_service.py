@@ -19,6 +19,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -385,9 +386,9 @@ _TASK = "0f0e0d0c-0b0a-1009-8807-060504030201"
 _OTHER_TASK = "1f1e1d1c-1b1a-1019-8817-161514131211"
 
 
-@pytest.fixture(scope="module")
-def worker_token(cluster: Cluster, probe_image: str) -> Iterator[tuple[str, str]]:
-    """A kubeconfig that authenticates as the worker of task ``_TASK`` and nothing else."""
+@contextmanager
+def _worker_tokens(cluster: Cluster, probe_image: str, namespace: str) -> Iterator[tuple[str, str]]:
+    """Tokens of the worker of task ``_TASK`` in ``namespace``: bound to its pod, and unbound."""
     pod = f"{_TASK}-abcde"
     cluster.apply(
         {
@@ -395,7 +396,7 @@ def worker_token(cluster: Cluster, probe_image: str) -> Iterator[tuple[str, str]
             "kind": "Pod",
             "metadata": {
                 "name": pod,
-                "namespace": "hw-jobs-demo",
+                "namespace": namespace,
                 "labels": {"heartwood.platform/role": "policy-probe"},
             },
             "spec": {
@@ -423,19 +424,33 @@ def worker_token(cluster: Cluster, probe_image: str) -> Iterator[tuple[str, str]
             "create",
             "token",
             "funnel-worker",
-            "--namespace=hw-jobs-demo",
+            f"--namespace={namespace}",
             "--bound-object-kind=Pod",
             f"--bound-object-name={pod}",
             "--duration=10m",
         )
         assert bound.returncode == 0, bound.stderr
         unbound = cluster.kubectl(
-            "create", "token", "funnel-worker", "--namespace=hw-jobs-demo", "--duration=10m"
+            "create", "token", "funnel-worker", f"--namespace={namespace}", "--duration=10m"
         )
         assert unbound.returncode == 0, unbound.stderr
         yield bound.stdout.strip(), unbound.stdout.strip()
     finally:
-        cluster.kubectl("delete", "--namespace=hw-jobs-demo", f"pod/{pod}", "--wait=false")
+        cluster.kubectl("delete", f"--namespace={namespace}", f"pod/{pod}", "--wait=false")
+
+
+@pytest.fixture(scope="module")
+def worker_token(cluster: Cluster, probe_image: str) -> Iterator[tuple[str, str]]:
+    """Tokens of a worker in project demo, which has no GPU entitlement."""
+    with _worker_tokens(cluster, probe_image, "hw-jobs-demo") as tokens:
+        yield tokens
+
+
+@pytest.fixture(scope="module")
+def gpu_worker_token(cluster: Cluster, probe_image: str) -> Iterator[tuple[str, str]]:
+    """Tokens of a worker in project other, which the kind values give the GPU entitlement."""
+    with _worker_tokens(cluster, probe_image, "hw-jobs-other") as tokens:
+        yield tokens
 
 
 def _as_worker(cluster: Cluster, token: str, job: dict[str, Any]) -> str:
@@ -471,7 +486,11 @@ def _as_worker(cluster: Cluster, token: str, job: dict[str, Any]) -> str:
     return "" if result.returncode == 0 else result.stderr
 
 
-def _executor_job(task: str = _TASK, **changes: Any) -> dict[str, Any]:  # noqa: ANN401
+def _executor_job(
+    task: str = _TASK,
+    namespace: str = "hw-jobs-demo",
+    **changes: Any,  # noqa: ANN401
+) -> dict[str, Any]:
     labels = {
         "app": "funnel-executor",
         "heartwood.platform/role": "funnel-executor",
@@ -504,7 +523,7 @@ def _executor_job(task: str = _TASK, **changes: Any) -> dict[str, Any]:  # noqa:
     job = {
         "apiVersion": "batch/v1",
         "kind": "Job",
-        "metadata": {"name": f"{task}-0", "namespace": "hw-jobs-demo", "labels": labels},
+        "metadata": {"name": f"{task}-0", "namespace": namespace, "labels": labels},
         "spec": {"backoffLimit": 0, "template": {"metadata": {"labels": labels}, "spec": pod}},
     }
     job.update(changes)
@@ -563,7 +582,7 @@ def test_a_worker_may_create_an_executor_job_of_its_own_task(
         (_executor_job(pod={"automountServiceAccountToken": True}), "ServiceAccount token"),
         (_executor_job(pod={"hostUsers": True}), "user namespace"),
         (_executor_job(pod={"nodeSelector": {"kubernetes.io/hostname": "x"}}), "scheduling"),
-        (_executor_job(pod={"tolerations": [{"operator": "Exists"}]}), "scheduling"),
+        (_executor_job(pod={"tolerations": [{"operator": "Exists"}]}), "only the GPU taint"),
         (_executor_job(pod={"priorityClassName": "system-node-critical"}), "scheduling"),
         (_executor_job(pod={"schedulingGates": [{"name": "hold"}]}), "scheduling"),
         (
@@ -609,6 +628,70 @@ def test_a_worker_may_not_let_its_executor_container_restart(
     # The API server keeps a container's own restart policy and rules with the
     # ContainerRestartRules feature, which the kind node version enables by default.
     assert "run one pod once" in _as_worker(cluster, worker_token[0], _restarting_job(container))
+
+
+_GPU_EXISTS = {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
+_GPU_EQUAL = {
+    "key": "nvidia.com/gpu",
+    "operator": "Equal",
+    "value": "present",
+    "effect": "NoSchedule",
+}
+
+
+def _gpu_job(
+    namespace: str, tolerations: list[dict[str, Any]], gpus: str | None = "1"
+) -> dict[str, Any]:
+    job = _executor_job(namespace=namespace, pod={"tolerations": tolerations})
+    (container,) = job["spec"]["template"]["spec"]["containers"]
+    if gpus is not None:
+        container["resources"]["limits"]["nvidia.com/gpu"] = gpus
+    return job
+
+
+@pytest.mark.parametrize("toleration", [_GPU_EXISTS, _GPU_EQUAL])
+def test_a_gpu_task_of_an_entitled_project_tolerates_the_gpu_taint(
+    cluster: Cluster, gpu_worker_token: tuple[str, str], toleration: dict[str, Any]
+) -> None:
+    job = _gpu_job("hw-jobs-other", [toleration])
+    assert _as_worker(cluster, gpu_worker_token[0], job) == ""
+
+
+@pytest.mark.parametrize(
+    ("tolerations", "gpus", "message"),
+    [
+        # A task without GPUs, also with a GPU count of zero.
+        ([_GPU_EXISTS], None, "only GPU tasks"),
+        ([_GPU_EXISTS], "0", "only GPU tasks"),
+        # Any other toleration, or more than the one.
+        ([{**_GPU_EXISTS, "key": "node.kubernetes.io/unschedulable"}], "1", "only the GPU taint"),
+        ([{**_GPU_EXISTS, "effect": "NoExecute"}], "1", "only the GPU taint"),
+        (
+            [{**_GPU_EXISTS, "effect": "NoExecute", "tolerationSeconds": 60}],
+            "1",
+            "only the GPU taint",
+        ),
+        ([{**_GPU_EQUAL, "value": "absent"}], "1", "only the GPU taint"),
+        ([{"key": "nvidia.com/gpu", "operator": "Exists"}], "1", "only the GPU taint"),
+        ([_GPU_EXISTS, _GPU_EQUAL], "1", "only the GPU taint"),
+    ],
+)
+def test_an_entitled_project_tolerates_nothing_else(
+    cluster: Cluster,
+    gpu_worker_token: tuple[str, str],
+    tolerations: list[dict[str, Any]],
+    gpus: str | None,
+    message: str,
+) -> None:
+    job = _gpu_job("hw-jobs-other", tolerations, gpus)
+    assert message in _as_worker(cluster, gpu_worker_token[0], job)
+
+
+def test_a_project_without_the_gpu_entitlement_does_not_tolerate_the_gpu_taint(
+    cluster: Cluster, worker_token: tuple[str, str]
+) -> None:
+    job = _gpu_job("hw-jobs-demo", [_GPU_EXISTS])
+    assert "only GPU tasks" in _as_worker(cluster, worker_token[0], job)
 
 
 def test_a_worker_may_not_choose_the_selector_of_its_job(

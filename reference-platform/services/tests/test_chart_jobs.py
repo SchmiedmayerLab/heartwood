@@ -256,9 +256,12 @@ def test_workers_reach_the_object_store(objects: list[dict[str, Any]]) -> None:
 def test_gpus_are_bounded_by_the_quota_of_each_project(objects: list[dict[str, Any]]) -> None:
     for project in _PROJECTS:
         quota = _named(objects, "ResourceQuota", "jobs", f"hw-jobs-{project}")["spec"]["hard"]
-        # Neither kind project holds the GPU entitlement.
+        # The kind values allow no GPU in a task, so even project other, which holds the
+        # GPU entitlement, has no GPU quota.
         assert quota["requests.nvidia.com/gpu"] == "0"
         assert quota["count/jobs.batch"] == "40"
+        labels = _named(objects, "Namespace", f"hw-jobs-{project}")["metadata"]["labels"]
+        assert labels.get("heartwood.platform/gpu") == ("true" if project == "other" else None)
     policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-funnel-worker-jobs")["spec"]
     assert "worker-created Jobs run one pod once" in {
         item["message"] for item in policy["validations"]
@@ -278,3 +281,38 @@ def test_worker_created_jobs_run_without_a_pod_failure_policy(
     assert "restartPolicy == 'Never'" in rule
     # A container's own restart policy or rules would run it again inside the pod.
     assert "!has(c.restartPolicy) && !has(c.restartPolicyRules)" in rule
+
+
+def test_worker_created_jobs_tolerate_only_the_gpu_taint_and_only_for_gpu_tasks(
+    objects: list[dict[str, Any]],
+) -> None:
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-funnel-worker-jobs")["spec"]
+    rules = {item["message"]: item["expression"] for item in policy["validations"]}
+    variables = {item["name"]: item["expression"] for item in policy["variables"]}
+    scheduling = rules[
+        "worker-created Jobs must not choose their node, scheduling, runtime or host name"
+    ]
+    assert "tolerations" not in scheduling
+    taint = rules[
+        "worker-created Jobs may tolerate only the GPU taint nvidia.com/gpu=present:NoSchedule"
+    ]
+    for part in (
+        "size(variables.tolerations) == 1",
+        "t.key == 'nvidia.com/gpu'",
+        "t.effect == 'NoSchedule'",
+        "!has(t.tolerationSeconds)",
+        "t.operator == 'Exists'",
+        "t.value == 'present'",
+    ):
+        assert part in taint
+    entitled = rules[
+        "only GPU tasks of a project with the GPU entitlement may tolerate the GPU taint"
+    ]
+    assert entitled == (
+        "size(variables.tolerations) == 0 || (variables.gpuEntitled && variables.gpuTask)"
+    )
+    assert (
+        "namespaceObject.metadata.labels['heartwood.platform/gpu'] == 'true'"
+        in (variables["gpuEntitled"])
+    )
+    assert "'nvidia.com/gpu' in c.resources.limits" in variables["gpuTask"]

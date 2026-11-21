@@ -331,6 +331,7 @@ The network policies and the admission policy select pods by the role labels `he
 
 For each task, the server creates the worker Job from `files/funnel/worker-job.yaml`, the workspace claim `<task>-workspace` and the Secret `funnel-worker-credential-<task>`, which only that worker Job mounts.
 The worker creates the executor Job from `files/funnel/executor-job.yaml`: the task image as the only container, as `funnel-executor` without a token, with `hostUsers: false`, the task's CPU and memory as requests and limits, and the workspace claim.
+The executor template sets no GPU limit and no toleration, so an executor Job requests no GPU.
 Worker and executor run as root in their own user namespaces, without capabilities and without privilege escalation; the server runs as a non-root user.
 
 The ValidatingAdmissionPolicy `heartwood-funnel-worker-jobs` applies to the Jobs that a `funnel-worker` ServiceAccount creates in a jobs namespace.
@@ -339,7 +340,8 @@ A worker's token is bound to its pod, whose name is its task identifier with a s
 - carry exactly the executor labels of that task, apart from the selector labels that the API server adds to its pod template, a name `<task>-<index>`, and no selector of its own;
 - run as `funnel-executor` without a ServiceAccount token, in a user namespace;
 - mount only the claim `<task>-workspace` of that task, and no other volume;
-- have one container, no init or ephemeral containers, no pull secrets, no environment from Secrets or ConfigMaps, and no node, scheduling, runtime class, proc mount or host name of its own.
+- have one container, no init or ephemeral containers, no pull secrets, no environment from Secrets or ConfigMaps, and no node, scheduling, runtime class, proc mount or host name of its own;
+- tolerate nothing, except that a Job whose container requests GPUs in the namespace of a project with the GPU entitlement, labeled `heartwood.platform/gpu: "true"`, may tolerate exactly the GPU nodes' taint `nvidia.com/gpu=present:NoSchedule`, with the operator `Exists`, or `Equal` and the value `present`.
 
 A worker cannot change a Job, and each Job runs one pod once, without a pod failure policy and without a restart policy or restart rules of its container.
 The quota bounds the number of Jobs in the namespace and allows GPUs only to a project with the GPU entitlement.

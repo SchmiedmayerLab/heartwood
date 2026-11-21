@@ -51,6 +51,10 @@ metadata:
     {{- include "heartwood.labels" $ | nindent 4 }}
     heartwood.platform/jobs: "true"
     heartwood.platform/project: {{ $project.id }}
+    {{- if $project.gpu }}
+    # The admission policy of worker-created Jobs admits the GPU toleration here.
+    heartwood.platform/gpu: "true"
+    {{- end }}
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
 ---

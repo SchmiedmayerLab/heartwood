@@ -13,7 +13,9 @@ executor template renders. The worker's identity is the ServiceAccount funnel-wo
 its jobs namespace, and its token is bound to its pod, whose name is the task's worker Job
 name, the task identifier, with a suffix. A Job of another task, or one that mounts any
 claim other than the task's workspace claim, is refused. Pod Security restricted covers
-host namespaces, capabilities and privilege escalation.
+host namespaces, capabilities and privilege escalation. The only scheduling choice is the
+toleration of the GPU nodes' taint nvidia.com/gpu=present:NoSchedule, for a Job whose
+container requests GPUs in the namespace of a project with the GPU entitlement.
 */ -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -51,6 +53,20 @@ spec:
         'authentication.kubernetes.io/pod-name' in request.userInfo.extra &&
         size(request.userInfo.extra['authentication.kubernetes.io/pod-name']) == 1
         ? string(request.userInfo.extra['authentication.kubernetes.io/pod-name'][0]) : ''
+    - name: tolerations
+      expression: "has(object.spec.template.spec.tolerations) ? object.spec.template.spec.tolerations : []"
+    # The chart labels the jobs namespace of a project with the GPU entitlement.
+    - name: gpuEntitled
+      expression: >-
+        has(namespaceObject.metadata.labels)
+        && 'heartwood.platform/gpu' in namespaceObject.metadata.labels
+        && namespaceObject.metadata.labels['heartwood.platform/gpu'] == 'true'
+    # Every container of the Job requests at least one GPU.
+    - name: gpuTask
+      expression: >-
+        variables.pod.containers.all(c, has(c.resources) && has(c.resources.limits)
+        && 'nvidia.com/gpu' in c.resources.limits
+        && quantity(string(c.resources.limits['nvidia.com/gpu'])).isGreaterThan(quantity('0')))
   validations:
     - expression: request.operation == 'CREATE'
       message: workers may not change Jobs
@@ -103,17 +119,27 @@ spec:
     - expression: "variables.pod.containers.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))"
       message: worker-created Jobs must not reference Secrets or ConfigMaps in their environment
     # The API server sets the default scheduler before admission; an empty node selector
-    # or toleration list chooses nothing.
+    # chooses nothing.
     - expression: >-
         !has(variables.pod.nodeName)
         && (!has(variables.pod.nodeSelector) || size(variables.pod.nodeSelector) == 0)
         && !has(variables.pod.affinity)
-        && (!has(variables.pod.tolerations) || size(variables.pod.tolerations) == 0)
         && !has(variables.pod.priorityClassName) && !has(variables.pod.runtimeClassName)
         && !has(variables.pod.schedulingGates) && !has(variables.pod.topologySpreadConstraints)
         && (!has(variables.pod.schedulerName) || variables.pod.schedulerName == 'default-scheduler')
         && !has(variables.pod.resourceClaims) && !has(variables.pod.hostname) && !has(variables.pod.subdomain)
       message: worker-created Jobs must not choose their node, scheduling, runtime or host name
+    # Exactly the toleration of the GPU taint, with operator Exists, or Equal and its value.
+    - expression: >-
+        size(variables.tolerations) == 0
+        || (size(variables.tolerations) == 1 && variables.tolerations.all(t,
+        has(t.key) && t.key == 'nvidia.com/gpu' && has(t.effect) && t.effect == 'NoSchedule'
+        && !has(t.tolerationSeconds)
+        && ((has(t.operator) && t.operator == 'Exists' && (!has(t.value) || t.value == ''))
+        || ((!has(t.operator) || t.operator == 'Equal') && has(t.value) && t.value == 'present'))))
+      message: worker-created Jobs may tolerate only the GPU taint nvidia.com/gpu=present:NoSchedule
+    - expression: size(variables.tolerations) == 0 || (variables.gpuEntitled && variables.gpuTask)
+      message: only GPU tasks of a project with the GPU entitlement may tolerate the GPU taint
     - expression: >-
         variables.pod.containers.all(c, !has(c.securityContext) || !has(c.securityContext.procMount)
         || c.securityContext.procMount == 'Default')

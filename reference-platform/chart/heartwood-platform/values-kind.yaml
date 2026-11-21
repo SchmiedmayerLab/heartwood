@@ -28,6 +28,9 @@ projects:
     policyRef: synthetic-policy-1
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+    # The GPU entitlement, so the cluster tests check the GPU toleration here; with
+    # jobs.limits.maxGpuCount 0 and no GPU nodes on kind, no GPU task runs.
+    gpu: true
     budgets:
       inference: "1.5"
     datasets:
