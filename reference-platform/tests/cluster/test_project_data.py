@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -33,6 +36,7 @@ from identity import (
     SESSIONS,
     exchange,
     launch_url,
+    private_file,
     probe,
     request,
     secret,
@@ -90,6 +94,8 @@ def _session_pod(
     name = f"hw-data-probe-{secrets.token_hex(4)}"
     mounts: list[dict[str, Any]] = [{"name": "platform-ca", "mountPath": "/etc/platform-ca"}]
     volumes: list[dict[str, Any]] = [{"name": "platform-ca", "configMap": {"name": "platform-ca"}}]
+    mounts.append({"name": "scratch", "mountPath": "/scratch"})
+    volumes.append({"name": "scratch", "emptyDir": {"medium": "Memory"}})
     if claim is not None:
         mounts.append({"name": "data", "mountPath": "/data", "readOnly": True})
         volumes.append(
@@ -173,11 +179,15 @@ def _copy_pod(cluster: Cluster, namespace: str, image: str) -> Iterator[str]:
                             },
                             "resources": {"limits": limits, "requests": limits},
                             "volumeMounts": [
-                                {"name": "platform-ca", "mountPath": "/etc/platform-ca"}
+                                {"name": "platform-ca", "mountPath": "/etc/platform-ca"},
+                                {"name": "scratch", "mountPath": "/scratch"},
                             ],
                         }
                     ],
-                    "volumes": [{"name": "platform-ca", "configMap": {"name": "platform-ca"}}],
+                    "volumes": [
+                        {"name": "platform-ca", "configMap": {"name": "platform-ca"}},
+                        {"name": "scratch", "emptyDir": {"medium": "Memory"}},
+                    ],
                 },
             },
         },
@@ -214,26 +224,70 @@ def _run(cluster: Cluster, namespace: str, pod: str, *command: str) -> tuple[int
     return result.returncode, result.stdout + result.stderr
 
 
-def _fetch(cluster: Cluster, namespace: str, pod: str, url: str) -> tuple[int, str]:
-    """Fetch a URL from a pod by the object store's address, so DNS plays no part."""
-    address = _json(cluster, f"--namespace={PLATFORM}", "service", "versitygw")["spec"]["clusterIP"]
-    return _run(
-        cluster,
-        namespace,
-        pod,
-        "curl",
-        "--silent",
-        "--show-error",
-        "--max-time",
-        "10",
-        "--cacert",
-        "/etc/platform-ca/ca.crt",
-        "--resolve",
-        f"versitygw.heartwood-platform.svc.cluster.local:7070:{address}",
-        "--write-out",
-        "\n%{http_code}",
-        url,
-    )
+def _fetch(
+    cluster: Cluster,
+    namespace: str,
+    pod: str,
+    url: str,
+    expected_status: int | None,
+    *arguments: str,
+    service: str = "versitygw",
+    port: int = 7070,
+) -> str:
+    """Return the response body, or require a connection refusal or timeout for isolation."""
+    address = _json(cluster, f"--namespace={PLATFORM}", "service", service)["spec"]["clusterIP"]
+    host = f"{service}.{PLATFORM}.svc.cluster.local:{port}"
+    if urlsplit(url).netloc != host or urlsplit(url).scheme != "https":
+        raise AssertionError("unexpected probe destination")
+    with private_file(cluster, pod, f"url = {json.dumps(url)}\n", namespace=namespace) as path:
+        result = cluster.kubectl(
+            "exec",
+            f"--namespace={namespace}",
+            pod,
+            "--",
+            "curl",
+            "--silent",
+            "--max-time",
+            "10",
+            "--cacert",
+            "/etc/platform-ca/ca.crt",
+            "--noproxy",
+            "*",
+            "--resolve",
+            f"{host}:{address}",
+            "--write-out",
+            "\n%{http_code} %{time_connect}",
+            *arguments,
+            "--config",
+            path,
+        )
+    body, separator, trailer = result.stdout.rpartition("\n")
+    measured = re.fullmatch(r"([0-9]{3}) ([0-9]+\.[0-9]{6})", trailer)
+    if not separator or measured is None:
+        raise AssertionError(f"invalid curl status or connection timing (exit {result.returncode})")
+    http, tcp_seconds = measured.groups()
+    code = result.returncode
+    if expected_status is None:
+        assert code in {7, 28}
+        assert http == "000"
+        assert tcp_seconds == "0.000000"
+    else:
+        assert code == 0
+        assert int(http) == expected_status
+    return body
+
+
+def _require_store_error(body: str, expected_code: str, message: str | None = None) -> None:
+    try:
+        error = ET.fromstring(body)
+    except ET.ParseError:
+        raise AssertionError("invalid store error XML") from None
+    code = error.findtext("Code")
+    if error.tag != "Error" or code is None or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,63}", code):
+        raise AssertionError("invalid store error code")
+    # VersityGW uses AccessDenied for policy denials and for expired requests.
+    if code != expected_code or (message is not None and error.findtext("Message") != message):
+        raise AssertionError(f"unexpected store rejection (code {code})")
 
 
 def _object(researcher: Researcher, token: str | None, identifier: str) -> tuple[int, Any]:
@@ -328,19 +382,18 @@ def test_object_urls_read_one_object_from_copy_pods_only(
         f"{_DRS}/objects/synthetic-cohort.measurements.csv/access/https",
         researcher.tokens["demo"]["data"],
     )
-    assert status == 200, access
+    assert status == 200
     url = access["url"]
-    assert "X-Amz-Expires=301" in url
+    correct_lifetime = parse_qs(urlsplit(url).query).get("X-Amz-Expires") == ["301"]
+    assert correct_lifetime
     with _copy_pod(cluster, namespace, probe_image) as pod:
-        code, output = _fetch(cluster, namespace, pod, url)
-        body, _, http = output.rpartition("\n")
-        assert (code, http) == (0, "200"), output
-        assert hashlib.sha256(body.encode()).hexdigest() == _sha256(
-            "synthetic-cohort/measurements.csv"
-        )
+        body = _fetch(cluster, namespace, pod, url, 200)
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        assert digest == _sha256("synthetic-cohort/measurements.csv")
         # The URL names one object; the same signature does not read another.
         other = url.replace("measurements.csv", "participants.csv")
-        assert _fetch(cluster, namespace, pod, other)[1].endswith("\n403")
+        changed = _fetch(cluster, namespace, pod, other, 403)
+        _require_store_error(changed, "SignatureDoesNotMatch")
         # The data service's account reads and never writes, and its URLs expire.
         data = Credentials(
             secret(cluster, PLATFORM, "versitygw-data", "access-key"),
@@ -355,25 +408,10 @@ def test_object_urls_read_one_object_from_copy_pods_only(
             expires=60,
             now=datetime.now(UTC),
         )
-        code, output = _run(
-            cluster,
-            namespace,
-            pod,
-            "curl",
-            "--silent",
-            "--max-time",
-            "10",
-            "--cacert",
-            "/etc/platform-ca/ca.crt",
-            "--request",
-            "PUT",
-            "--data-binary",
-            "x",
-            "--write-out",
-            "\n%{http_code}",
-            write,
+        denied = _fetch(
+            cluster, namespace, pod, write, 403, "--request", "PUT", "--data-binary", "x"
         )
-        assert output.endswith("\n403"), output
+        _require_store_error(denied, "AccessDenied", "Access Denied.")
         listing = presign(
             method="GET",
             endpoint=_STORE,
@@ -383,59 +421,39 @@ def test_object_urls_read_one_object_from_copy_pods_only(
             expires=60,
             now=datetime.now(UTC),
         )
-        assert _fetch(cluster, namespace, pod, listing)[1].endswith("\n403")
+        denied = _fetch(cluster, namespace, pod, listing, 403)
+        _require_store_error(denied, "AccessDenied", "Access Denied.")
+        issued_at = datetime.now(UTC).replace(microsecond=0)
+        lifetime = 60
         brief = presign(
             method="GET",
             endpoint=_STORE,
             path="/hw-project-demo/datasets/synthetic-cohort/README.md",
             credentials=data,
             region="us-east-1",
-            expires=2,
-            now=datetime.now(UTC),
+            expires=lifetime,
+            now=issued_at,
         )
-        assert _fetch(cluster, namespace, pod, brief)[1].endswith("\n200")
-        time.sleep(4)
-        expired = _fetch(cluster, namespace, pod, brief)[1]
-        assert expired.endswith("\n403")
-        assert "expired" in expired
+        _fetch(cluster, namespace, pod, brief, 200)
         # A copy pod reaches nothing else, such as Keycloak.
-        code, _ = _run(
+        _fetch(
             cluster,
             namespace,
             pod,
-            "curl",
-            "--silent",
-            "--max-time",
-            "10",
-            "--cacert",
-            "/etc/platform-ca/ca.crt",
             "https://keycloak.heartwood-platform.svc.cluster.local:8443/health",
+            None,
+            service="keycloak",
+            port=8443,
         )
-        assert code != 0
+        deadline = issued_at + timedelta(seconds=lifetime + 1)
+        time.sleep(max(0, (deadline - datetime.now(UTC)).total_seconds()))
+        rejection = _fetch(cluster, namespace, pod, brief, 403)
+        _require_store_error(rejection, "AccessDenied", "Request has expired.")
     # Pods without the copy label, in the session namespace and in heartwood-sessions,
     # do not reach the object store.
     with _session_pod(cluster, namespace, probe_image, {}) as pod:
-        code, output = _fetch(cluster, namespace, pod, url)
-        assert code != 0, output
-    code = curl_exit(cluster, researcher.pod, url)
-    assert code != 0
-
-
-def curl_exit(cluster: Cluster, pod: str, url: str) -> int:
-    result = cluster.kubectl(
-        "exec",
-        f"--namespace={SESSIONS}",
-        pod,
-        "--",
-        "curl",
-        "--silent",
-        "--max-time",
-        "10",
-        "--cacert",
-        "/etc/platform-ca/ca.crt",
-        url,
-    )
-    return result.returncode
+        _fetch(cluster, namespace, pod, url, None)
+    _fetch(cluster, SESSIONS, researcher.pod, url, None)
 
 
 @pytest.mark.parametrize("project", ["demo", "other"])

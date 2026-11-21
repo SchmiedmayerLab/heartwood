@@ -22,7 +22,7 @@ import re
 import secrets
 import warnings
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 
@@ -87,8 +87,11 @@ def probe(
         cluster.kubectl("delete", f"--namespace={SESSIONS}", f"pod/{name}", "--wait")
 
 
-def write_private(cluster: Cluster, pod: str, text: str) -> str:
-    """Write ``text`` to a new file that only the probe reads, and return its path.
+@contextmanager
+def private_file(
+    cluster: Cluster, pod: str, text: str, *, namespace: str = SESSIONS
+) -> Iterator[str]:
+    """Write ``text`` to a new file that only the probe reads, and remove it after use.
 
     Data sent to ``kubectl exec`` on standard input can arrive incomplete, so the
     write reports the size it wrote and is repeated until the size matches. Each
@@ -97,26 +100,34 @@ def write_private(cluster: Cluster, pod: str, text: str) -> str:
     """
     path = f"/scratch/{secrets.token_hex(8)}.data"
     expected = len(text.encode())
-    for attempt in range(1, 6):
-        written = cluster.kubectl(
-            "exec",
-            "--stdin",
-            f"--namespace={SESSIONS}",
-            pod,
-            "--",
-            "sh",
-            "-c",
-            f"umask 077 && cat > {path} && wc -c < {path}",
-            text_input=text,
-        )
-        if written.returncode == 0 and written.stdout.strip() == str(expected):
-            return path
-        warnings.warn(
-            f"write {attempt} to the probe was incomplete: exit {written.returncode}, "
-            f"{written.stdout.strip() or 'no'} of {expected} bytes",
-            stacklevel=2,
-        )
-    raise AssertionError(f"the probe did not receive {expected} bytes")
+    try:
+        for attempt in range(1, 6):
+            written = cluster.kubectl(
+                "exec",
+                "--stdin",
+                f"--namespace={namespace}",
+                pod,
+                "--",
+                "sh",
+                "-c",
+                f"umask 077 && cat > {path} && wc -c < {path}",
+                text_input=text,
+            )
+            if written.returncode == 0 and written.stdout.strip() == str(expected):
+                yield path
+                return
+            warnings.warn(
+                f"write {attempt} to the probe was incomplete: exit {written.returncode}, "
+                f"expected {expected} bytes",
+                stacklevel=2,
+            )
+        raise AssertionError(f"the probe did not receive {expected} bytes")
+    finally:
+        removed = cluster.kubectl("exec", f"--namespace={namespace}", pod, "--", "rm", "-f", path)
+        if removed.returncode:
+            raise AssertionError(
+                f"removing {path} from {namespace}/{pod} failed (exit {removed.returncode})"
+            )
 
 
 def curl(
@@ -127,10 +138,11 @@ def curl(
     Arguments that read standard input (``@-``) read ``text_input`` from a file that
     is written and checked first.
     """
-    path = write_private(cluster, pod, text_input) if text_input else None
-    if path is not None:
-        arguments = tuple(f"@{path}" if argument == "@-" else argument for argument in arguments)
-    try:
+    with private_file(cluster, pod, text_input) if text_input else nullcontext() as path:
+        if path is not None:
+            arguments = tuple(
+                f"@{path}" if argument == "@-" else argument for argument in arguments
+            )
         result = cluster.kubectl(
             "exec",
             f"--namespace={SESSIONS}",
@@ -146,9 +158,6 @@ def curl(
             "/etc/platform-ca/ca.crt",
             *arguments,
         )
-    finally:
-        if path is not None:
-            cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", path)
     assert result.returncode == 0, result.stderr
     return result.stdout
 
@@ -170,11 +179,10 @@ def request(
         headers.append("Content-Type: application/json")
     # The headers hold the token, so they reach curl through a file that only the
     # probe reads, and the body through another one.
-    path = write_private(cluster, pod, "\n".join(headers))
-    arguments = ["--request", method, "--header", f"@{path}", "--write-out", "\n%{http_code}"]
-    if body is not None:
-        arguments += ["--data-binary", "@-"]
-    try:
+    with private_file(cluster, pod, "\n".join(headers)) as path:
+        arguments = ["--request", method, "--header", f"@{path}", "--write-out", "\n%{http_code}"]
+        if body is not None:
+            arguments += ["--data-binary", "@-"]
         output = curl(
             cluster,
             pod,
@@ -183,8 +191,6 @@ def request(
             text_input="" if body is None else json.dumps(body),
             max_time=max_time,
         )
-    finally:
-        cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", path)
     text, _, status = output.rpartition("\n")
     try:
         return int(status), json.loads(text)
@@ -254,18 +260,16 @@ def token_request(
     the header reaches curl through a file that only the probe reads.
     """
     arguments = ["--data", "@-", "--write-out", "\n%{http_code}"]
-    path = None
-    if basic is not None:
-        credentials = base64.b64encode(
-            f"{quote(basic[0], safe='')}:{quote(basic[1], safe='')}".encode()
-        ).decode()
-        path = write_private(cluster, pod, f"Authorization: Basic {credentials}")
-        arguments += ["--header", f"@{path}"]
-    try:
+    with ExitStack() as files:
+        if basic is not None:
+            credentials = base64.b64encode(
+                f"{quote(basic[0], safe='')}:{quote(basic[1], safe='')}".encode()
+            ).decode()
+            path = files.enter_context(
+                private_file(cluster, pod, f"Authorization: Basic {credentials}")
+            )
+            arguments += ["--header", f"@{path}"]
         output = curl(cluster, pod, *arguments, f"{REALM}/{endpoint}", text_input=urlencode(form))
-    finally:
-        if path is not None:
-            cluster.kubectl("exec", f"--namespace={SESSIONS}", pod, "--", "rm", "-f", path)
     text, _, status = output.rpartition("\n")
     body = json.loads(text)
     assert isinstance(body, dict)

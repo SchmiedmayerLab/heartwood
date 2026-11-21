@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import uuid4
 
-from identity import PLATFORM, SESSIONS, curl, researcher, secret, write_private
+from identity import PLATFORM, SESSIONS, curl, private_file, researcher, secret
 from kube import Cluster
 
 ORIGIN = "https://proxy-public.heartwood-platform.svc.cluster.local"
@@ -200,25 +200,25 @@ class Browser:
             lines.append(f"X-Heartwood-Capability: {capability}")
         if body is not None:
             lines.append("Content-Type: application/json")
-        headers = write_private(self.cluster, self.pod, "\n".join(lines))
-        arguments = [
-            "--request",
-            method,
-            "--header",
-            f"@{headers}",
-            "--write-out",
-            "\n%{http_code}",
-        ]
-        if body is not None:
-            arguments += ["--data-binary", "@-"]
-        output = curl(
-            self.cluster,
-            self.pod,
-            *arguments,
-            f"{ORIGIN}{base}{path}",
-            text_input=json.dumps(body) if body is not None else "",
-            max_time=max_time,
-        )
+        with private_file(self.cluster, self.pod, "\n".join(lines)) as headers:
+            arguments = [
+                "--request",
+                method,
+                "--header",
+                f"@{headers}",
+                "--write-out",
+                "\n%{http_code}",
+            ]
+            if body is not None:
+                arguments += ["--data-binary", "@-"]
+            output = curl(
+                self.cluster,
+                self.pod,
+                *arguments,
+                f"{ORIGIN}{base}{path}",
+                text_input=json.dumps(body) if body is not None else "",
+                max_time=max_time,
+            )
         text, _, status = output.rpartition("\n")
         try:
             return int(status), json.loads(text)
