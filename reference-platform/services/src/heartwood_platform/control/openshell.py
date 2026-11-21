@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,10 @@ from typing import Any
 
 _GATEWAY = "session"
 _TIMEOUT_SECONDS = 60
+# Right after a new session's OpenShell gateway is ready, the tool can fail to connect to it
+# for a few seconds, likely until its Service and network policy are in effect.
+_CONNECT_ATTEMPTS = 30
+_CONNECT_PAUSE_SECONDS = 2.0
 
 
 class ProviderError(Exception):
@@ -101,12 +106,14 @@ class OpenShellProviders:
         route: ProviderRoute,
         scratch: Path,
         run: Runner = _run,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         """Run ``cli`` with registrations in temporary directories under ``scratch``."""
         self._cli = cli
         self._route = route
         self._scratch = scratch
         self._runner = run
+        self._sleep = sleep
 
     def _session(
         self, directory: Path, endpoint: str, client: dict[str, str]
@@ -144,7 +151,10 @@ class OpenShellProviders:
             directory = Path(name)
             run = self._session(directory, endpoint, client)
             route = self._route
-            if run("workspace", "get", route.workspace, workspace=False).returncode != 0:
+            found = self._workspace(run)
+            if _unreachable(found):
+                _require(found, "reach the session's OpenShell gateway")
+            if found.returncode != 0:
                 _require(
                     run("workspace", "create", "--name", route.workspace, workspace=False),
                     "create the workspace",
@@ -180,11 +190,27 @@ class OpenShellProviders:
                 )
                 _require(updated, "update the provider")
 
+    def _workspace(
+        self, run: Callable[..., subprocess.CompletedProcess[str]]
+    ) -> subprocess.CompletedProcess[str]:
+        """Ask for the route's workspace, again while the gateway refuses connections."""
+        for _ in range(_CONNECT_ATTEMPTS - 1):
+            result = run("workspace", "get", self._route.workspace, workspace=False)
+            if not _unreachable(result):
+                return result
+            self._sleep(_CONNECT_PAUSE_SECONDS)
+        return run("workspace", "get", self._route.workspace, workspace=False)
+
     def exists(self, endpoint: str, client: dict[str, str]) -> bool:
         """Return whether the session's OpenShell gateway holds the provider."""
         with TemporaryDirectory(dir=self._scratch, prefix="openshell-") as name:
             run = self._session(Path(name), endpoint, client)
             return run("provider", "get", self._route.name).returncode == 0
+
+
+def _unreachable(result: subprocess.CompletedProcess[str]) -> bool:
+    """Whether the tool could not connect to the gateway at all."""
+    return result.returncode != 0 and "connect error" in result.stderr
 
 
 def _require(result: subprocess.CompletedProcess[str], action: str) -> None:

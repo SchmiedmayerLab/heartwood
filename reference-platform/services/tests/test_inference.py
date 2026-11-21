@@ -104,6 +104,8 @@ class FakeOpenShell:
         self.profiles: dict[str, dict[str, Any]] = {}
         self.providers: dict[str, str] = {}
         self.fail: str | None = None
+        # Requests to the gateway that fail to connect, as a new gateway's can.
+        self.unreachable = 0
 
     def run(
         self, arguments: Sequence[str], environment: dict[str, str]
@@ -117,6 +119,9 @@ class FakeOpenShell:
         def done(code: int = 0, stderr: str = "") -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(command, code, "", stderr)
 
+        if self.unreachable and command[:2] != ["gateway", "add"]:
+            self.unreachable -= 1
+            return done(1, "Error: connect error: transport error")
         if self.fail is not None and command[:2] == self.fail.split():
             return done(1, "error: the gateway refused the request")
         if command[:2] == ["gateway", "add"]:
@@ -174,6 +179,7 @@ class Route:
             ),
             tmp_path,
             run=self.openshell.run,
+            sleep=self.sleep,
         )
         self.inference = ManagedInference(
             tmp_path / "control.sqlite3",
@@ -410,6 +416,24 @@ def test_a_failed_provider_creation_is_reported_and_completed_by_the_next_launch
         len([key for key in route.proxy.keys.values() if key["metadata"]["purpose"] == "worker"])
         == 1
     )
+
+
+def test_a_new_gateway_that_refuses_connections_at_first_gets_the_provider(
+    route: Route,
+) -> None:
+    route.openshell.unreachable = 3
+
+    route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
+
+    token, _ = route.worker_key()
+    assert key_hash(route.openshell.providers["platform-route"]) == token
+    assert route.sleeps == [2.0, 2.0, 2.0]
+    # A gateway that never answers fails the launch.
+    route.openshell.unreachable = 1000
+    with pytest.raises(ProviderError, match="could not reach the session's OpenShell gateway"):
+        route.inference.rotate("abc", "demo", _ROUTE)
+    # 30 lookups of the workspace, and nothing after them.
+    assert route.openshell.unreachable == 1000 - 30
 
 
 def test_a_settled_session_gets_no_new_key(route: Route) -> None:
