@@ -5,3 +5,9 @@
 34f03342b0077f6d2b04ba25e3e46f459e23e477:deploy/tests/worker_hostile_probe.py:generic-api-key:81
 # Synthetic credential expiry timestamp in milliseconds; the value is not a credential.
 e51f2e5e2482ed376980e8be9d20b6eb979d3695:packages/compliance/tests/test_native_model_profile.py:generic-api-key:218
+# Synthetic actor keys of the control service tests in published history; the tests now generate the key.
+11e02f154f413238f9293f847300c2db4a13fc90:reference-platform/services/tests/test_control_app.py:generic-api-key:85
+11e02f154f413238f9293f847300c2db4a13fc90:reference-platform/services/tests/test_control_app.py:generic-api-key:182
+11e02f154f413238f9293f847300c2db4a13fc90:reference-platform/services/tests/test_sessions.py:generic-api-key:36
+# Synthetic UUID subject in published history, matched after the word "keycloak"; the test now generates it.
+db6bbb9b24094db5d0cdaa2a804822fdf9916bb1:packages/gateway/tests/test_identity.py:generic-api-key:1985
