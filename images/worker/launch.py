@@ -43,6 +43,10 @@ def worker_environment(source: Mapping[str, str]) -> dict[str, str]:
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        # LiteLLM's aiohttp transport keeps resolved addresses for five minutes, while the
+        # supervisor maps a resolved name for at most the 30 seconds of its DNS answer and
+        # refuses later connections to an expired mapping. httpx resolves each connection.
+        "DISABLE_AIOHTTP_TRANSPORT": "True",
         "OPENHANDS_SUPPRESS_BANNER": "1",
         "LOG_LEVEL": "ERROR",
         "OH_TELEMETRY_CONSENT": "denied",
