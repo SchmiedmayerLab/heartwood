@@ -75,6 +75,8 @@ class ProjectSettings(_Settings):
     max_ram_gb: float = Field(gt=0)
     max_disk_gb: float = Field(gt=0)
     max_runtime_seconds: int = Field(ge=1)
+    max_gpu_count: int = Field(default=1, ge=0)
+    max_active_tasks: int = Field(default=4, ge=1)
 
 
 class StoreSettings(_Settings):
@@ -149,6 +151,8 @@ def build(settings: Settings) -> tuple[Starlette, JobService]:
             max_ram_gb=project.max_ram_gb,
             max_disk_gb=project.max_disk_gb,
             max_runtime_seconds=project.max_runtime_seconds,
+            max_gpu_count=project.max_gpu_count,
+            max_active_tasks=project.max_active_tasks,
         )
         buckets[project.id] = ProjectBucket(
             project.store.bucket,

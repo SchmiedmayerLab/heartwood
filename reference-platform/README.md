@@ -279,13 +279,14 @@ Task tags may not start with an underscore, which Funnel reads as instructions, 
 
 An operation belongs to the researcher who sent it: another member of the project can neither observe nor cancel it.
 A repeated operation identifier with the same arguments returns the existing task, and other arguments or another researcher are a conflict.
-A request outside the project's entitlements or limits, with an image that the platform does not run, or with an input that the project does not hold, is recorded and reported as denied, and no task is created.
+A request outside the project's entitlements or limits, such as more GPUs than one task may use or a task beyond the number of tasks that may wait or run at once, with an image that the platform does not run, or with an input that the project does not hold, is recorded and reported as denied, and no task is created.
+An operation's observations carry the launch context that it was received in.
 The platform does not select GPU types, so a request that names one is denied.
 The service records each submission in its SQLite database before it reserves the budget and calls the executor.
 It runs as one replica and serializes the operations of each project.
 When the executor's reply is lost or is a server error, a repetition or the status finds the task by its operation tag and a creation time no earlier than 60 seconds before the record; a task that is not found within 120 seconds is reported as failed.
 A client error from the executor is reported as failed at once.
-At start and then every `reconcile_seconds`, 60 by default, the service lists each project's tasks that may still run and cancels those that no operation recorded, such as a task created around the service with the executor's credential.
+At start and then every `reconcile_seconds`, 60 by default, the service lists each project's tasks that may still run and cancels those that no operation recorded, such as a task created around the service with the executor's credential, and those whose operation has ended.
 A proposal whose description or data scope is longer than 8192 characters is refused, because the researcher reviews it in full.
 
 | TES state | Status |

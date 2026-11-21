@@ -203,6 +203,10 @@ class ProjectPolicy:
     max_ram_gb: float
     max_disk_gb: float
     max_runtime_seconds: int
+    # The most GPUs of one task, for a project with the GPU entitlement.
+    max_gpu_count: int = 1
+    # The most tasks of the project that wait or run at once.
+    max_active_tasks: int = 4
 
 
 @dataclass(frozen=True)
@@ -353,6 +357,8 @@ class JobService:
             return "The task image is not one the platform runs."
         if resources.gpu_count and not policy.gpu:
             return "The project holds no GPU entitlement."
+        if resources.gpu_count > policy.max_gpu_count:
+            return f"The request exceeds the project's limit of {policy.max_gpu_count} GPUs."
         if resources.gpu_type is not None:
             return "The platform does not select GPU types."
         exceeded = [
@@ -454,13 +460,14 @@ class JobService:
                     or existing.request_sha256 != digest
                 ):
                     raise InvalidRequestError("operation identifier conflict")
-                return self._observe(caller, self._refresh(existing))
+                return self._observe(self._refresh(existing))
             now = self._clock()
             record = Operation(
                 project=caller.project,
                 operation_id=operation_id,
                 kind="submit",
                 subject=caller.subject,
+                context=caller.project_context_id,
                 request_sha256=digest,
                 state="SUBMITTING",
                 task_id=None,
@@ -478,9 +485,13 @@ class JobService:
                 ended_at=None,
             )
             refusal = self._refusal(policy, request)
+            if refusal is None and (
+                self._records.active_submissions(caller.project) >= policy.max_active_tasks
+            ):
+                refusal = f"The project already runs {policy.max_active_tasks} tasks, its limit."
             task = self._task(caller, operation_id, request) if refusal is None else refusal
             if isinstance(task, str):
-                return self._observe(caller, self._deny(record, task))
+                return self._observe(self._deny(record, task))
             # Recorded before the budget and the executor are called, so a reservation or
             # a task whose reply is lost always has a record: the reservation is settled by
             # its holder, and the task is found by its tag.
@@ -499,7 +510,7 @@ class JobService:
                         detail=str(error) or "The budget denied it.",
                         settled=True,
                     )
-                    return self._observe(caller, record)
+                    return self._observe(record)
                 except httpx.HTTPError:
                     record = self._records.update(
                         record,
@@ -507,7 +518,7 @@ class JobService:
                         failure="The budget could not be reserved.",
                         ended_at=self._clock(),
                     )
-                    return self._observe(caller, self._settle(record))
+                    return self._observe(self._settle(record))
                 record = self._records.update(record, reservation=reservation)
             try:
                 task_id = self._executors[caller.project].create(task)
@@ -515,7 +526,7 @@ class JobService:
                 if not error.response.is_client_error:
                     # The task may exist; the status finds it by its tag.
                     _LOGGER.warning("the executor of %s failed a submission", caller.project)
-                    return self._observe(caller, record)
+                    return self._observe(record)
                 _LOGGER.warning("the executor of %s refused a submission", caller.project)
                 record = self._records.update(
                     record,
@@ -523,13 +534,23 @@ class JobService:
                     failure="The executor did not accept the task.",
                     ended_at=self._clock(),
                 )
-                return self._observe(caller, self._settle(record))
+                return self._observe(self._settle(record))
             except (httpx.HTTPError, ValueError):
                 # No reply, or a reply that names no task; the status finds it by its tag.
                 _LOGGER.warning("the executor of %s did not answer a submission", caller.project)
-                return self._observe(caller, record)
-            record = self._records.update(record, state="QUEUED", task_id=task_id)
-            return self._observe(caller, record)
+                return self._observe(record)
+            try:
+                record = self._records.update(record, state="QUEUED", task_id=task_id)
+            except ConflictError:
+                # An executor that returns another operation's task identifier.
+                record = self._records.update(
+                    record,
+                    state="SYSTEM_ERROR",
+                    failure="The executor did not accept the task.",
+                    ended_at=self._clock(),
+                )
+                return self._observe(self._settle(record))
+            return self._observe(record)
 
     def _deny(self, record: Operation, reason: str) -> Operation:
         denied = Operation(
@@ -590,6 +611,7 @@ class JobService:
                     operation_id=operation_id,
                     kind="absent",
                     subject=caller.subject,
+                    context=caller.project_context_id,
                     request_sha256="",
                     state="NOT_RECEIVED",
                     task_id=None,
@@ -609,7 +631,7 @@ class JobService:
                 self._records.insert(record)
             elif record.subject != caller.subject:
                 raise InvalidRequestError("operation not found")
-            return self._observe(caller, self._refresh(record))
+            return self._observe(self._refresh(record))
 
     # Cancellation.
 
@@ -629,7 +651,7 @@ class JobService:
                     or existing.target != target
                 ):
                     raise InvalidRequestError("operation identifier conflict")
-                return self._observe(caller, existing)
+                return self._observe(existing)
             submitted = self._records.get(caller.project, target)
             if (
                 submitted is None
@@ -648,6 +670,7 @@ class JobService:
                 operation_id=operation_id,
                 kind="cancel",
                 subject=caller.subject,
+                context=caller.project_context_id,
                 request_sha256=hashlib.sha256(target.encode()).hexdigest(),
                 state="DONE",
                 task_id=None,
@@ -665,7 +688,7 @@ class JobService:
                 ended_at=None,
             )
             self._records.insert(record)
-            return self._observe(caller, record)
+            return self._observe(record)
 
     # Reconciliation.
 
@@ -843,7 +866,18 @@ class JobService:
         for view in views:
             try:
                 with self._locks[project]:
-                    if self._records.by_task(project, view.id) is not None:
+                    recorded = self._records.by_task(project, view.id)
+                    if recorded is not None and not (
+                        recorded.state in TERMINAL or recorded.state == "DENIED" or recorded.settled
+                    ):
+                        continue
+                    if recorded is not None:
+                        # The record ended, so the task runs without being tracked.
+                        _LOGGER.warning(
+                            "cancelling task %s of %s, whose operation ended", view.id, project
+                        )
+                        executor.cancel(view.id)
+                        cancelled.append(view.id)
                         continue
                     tagged = (view.tags or {}).get(OPERATION_TAG)
                     record = None if tagged is None else self._records.get(project, tagged)
@@ -874,7 +908,7 @@ class JobService:
 
     # Observations.
 
-    def _observe(self, caller: Caller, record: Operation) -> PlatformOperationObservation:
+    def _observe(self, record: Operation) -> PlatformOperationObservation:
         limitations: list[str] = []
         reference = record.task_id or record.operation_id
         if record.kind == "absent":
@@ -907,7 +941,7 @@ class JobService:
             if record.state == "SUBMITTING":
                 limitations.append("The executor has not confirmed the task yet.")
         return PlatformOperationObservation(
-            project_context_id=caller.project_context_id,
+            project_context_id=record.context,
             operation_id=record.operation_id,
             service_id=SERVICE_ID,
             backend_operation_ref=reference,

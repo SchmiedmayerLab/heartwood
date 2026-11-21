@@ -1030,3 +1030,38 @@ def test_a_tagged_task_of_another_operation_is_never_adopted(
     observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
     assert observed.status == "submitted"
     assert observed.backend_operation_ref != other
+
+
+def test_a_task_whose_record_ended_is_cancelled(jobs: tuple[Jobs, TestClient]) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    executor = service.executors["demo"]
+    lost = executor.tasks.pop("task-0000")
+    status = {"project_id": "demo", "operation_id": "op-1"}
+    assert service.observe(client, "get_task", status).status == "failed"
+    # The executor reports the task again, still running.
+    executor.tasks["task-0000"] = lost
+    assert service.service.reconcile("demo") == ["task-0000"]
+
+
+def test_observations_carry_the_launch_context_of_their_submission(
+    jobs: tuple[Jobs, TestClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    monkeypatch.setattr(FakeContexts, "context", lambda *_: "session-renewed")
+    observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+    assert observed.project_context_id == "session-demo"
+
+
+def test_gpu_counts_and_active_tasks_are_bounded(jobs: tuple[Jobs, TestClient]) -> None:
+    service, client = jobs
+    other = service.headers(project="other")
+    many = task(project="other", inputs=[], resources={"gpu_count": 2})
+    observed = service.observe(client, "create_task", many, headers=other)
+    assert observed.limitations == ("The request exceeds the project's limit of 1 GPUs.",)
+    for index in range(4):
+        assert service.observe(client, "create_task", task(f"busy-{index}")).status == "queued"
+    observed = service.observe(client, "create_task", task("busy-4"))
+    assert observed.status == "denied"
+    assert observed.limitations == ("The project already runs 4 tasks, its limit.",)

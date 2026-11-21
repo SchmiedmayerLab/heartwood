@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS operation (
     operation_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('submit', 'cancel', 'absent')),
     subject TEXT NOT NULL,
+    context TEXT NOT NULL,
     request_sha256 TEXT NOT NULL,
     state TEXT NOT NULL,
     task_id TEXT,
@@ -64,6 +65,8 @@ class Operation:
     operation_id: str
     kind: Kind
     subject: str
+    # The launch context the operation was received in, which its observations carry.
+    context: str
     request_sha256: str
     state: RecordState
     task_id: str | None
@@ -162,19 +165,36 @@ class Records:
             raise ConflictError from None
 
     def update(self, operation: Operation, **changes: object) -> Operation:
-        """Change the fields of a recorded operation and return it."""
+        """Change the fields of a recorded operation and return it.
+
+        Raise :class:`ConflictError` when a task identifier belongs to another operation.
+        """
         changed = replace(operation, **changes)  # type: ignore[arg-type]
         assignments = ", ".join(f"{name} = ?" for name in changes)
-        with self._transaction() as connection:
-            connection.execute(
-                f"UPDATE operation SET {assignments} WHERE project = ? AND operation_id = ?",
-                [
-                    *(_value(value) for value in changes.values()),
-                    operation.project,
-                    operation.operation_id,
-                ],
-            )
+        try:
+            with self._transaction() as connection:
+                connection.execute(
+                    f"UPDATE operation SET {assignments} WHERE project = ? AND operation_id = ?",
+                    [
+                        *(_value(value) for value in changes.values()),
+                        operation.project,
+                        operation.operation_id,
+                    ],
+                )
+        except sqlite3.IntegrityError:
+            raise ConflictError from None
         return changed
+
+    def active_submissions(self, project: str) -> int:
+        """Return how many submissions of a project are waiting or running."""
+        with self._transaction(write=False) as connection:
+            row = connection.execute(
+                "SELECT count(*) FROM operation WHERE project = ? AND kind = 'submit'"
+                " AND state NOT IN ('DENIED', 'COMPLETE', 'EXECUTOR_ERROR', 'SYSTEM_ERROR',"
+                " 'CANCELED', 'PREEMPTED')",
+                (project,),
+            ).fetchone()
+        return int(row[0])
 
     def open_submissions(self, project: str) -> list[Operation]:
         """Return the submissions of a project whose task has not ended or is unsettled."""
