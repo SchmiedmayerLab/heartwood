@@ -33,9 +33,9 @@ def test_gateway_stamp_preserves_registry_dependencies(builder: ModuleType, tmp_
         '[[package]]\nname = "synthetic"\nversion = "10.0.0"\n'
         'source = "registry+https://example.invalid/index"\nchecksum = "unchanged"\n'
     )
-    builder._gateway_version(tmp_path, "0.1.8+heartwood.1")
+    builder._gateway_version(tmp_path, "0.1.9+heartwood.1")
     packages = tomllib.loads((tmp_path / "Cargo.lock").read_text())["package"]
-    assert packages[0]["version"] == "0.1.8+heartwood.1"
+    assert packages[0]["version"] == "0.1.9+heartwood.1"
     assert packages[1] == {
         "name": "synthetic",
         "version": "10.0.0",
@@ -53,7 +53,7 @@ def test_gateway_stamp_rejects_registry_zero_version(builder: ModuleType, tmp_pa
     )
     (tmp_path / "Cargo.lock").write_text(lock)
     with pytest.raises(ValueError, match="workspace versions"):
-        builder._gateway_version(tmp_path, "0.1.8+heartwood.1")
+        builder._gateway_version(tmp_path, "0.1.9+heartwood.1")
     assert (tmp_path / "Cargo.toml").read_text() == metadata
     assert (tmp_path / "Cargo.lock").read_text() == lock
 
@@ -612,7 +612,7 @@ def test_gateway_regression_failure_prevents_binary_build(
         'version = 4\n[[package]]\nname = "openshell-server"\nversion = "0.0.0"\n'
     )
     manifest = {
-        "version": "0.1.8+heartwood.1",
+        "version": "0.1.9+heartwood.1",
         "source": {},
         "patches": [],
         "cmake": {"amd64": {}},
@@ -646,7 +646,7 @@ def test_gateway_objects_are_not_reused_across_manifests(
     builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest = {
-        "version": "0.1.8+heartwood.1",
+        "version": "0.1.9+heartwood.1",
         "source": {},
         "patches": [],
         "cmake": {"amd64": {}},

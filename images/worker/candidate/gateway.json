@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "purpose": "qualification-only",
-  "version": "0.1.8+heartwood.3",
+  "version": "0.1.9+heartwood.1",
   "source": {
-    "url": "https://codeload.github.com/NVIDIA/OpenShell/tar.gz/f3d976590d3eb1379690a2abaf0f0e26c21d487d",
-    "tree_sha256": "e16ba93b689d0ab3ac51fdbc9d8b5521afec623cd350067403a629368738b2f7",
-    "revision": "f3d976590d3eb1379690a2abaf0f0e26c21d487d"
+    "url": "https://codeload.github.com/NVIDIA/OpenShell/tar.gz/ce58cf8e9b953281352d98a637e41616295b1318",
+    "tree_sha256": "daf2239105deca6b3f07d7fe08b343ae84bdc4811f4ee371e5f8eb4199c1c6c0",
+    "revision": "ce58cf8e9b953281352d98a637e41616295b1318"
   },
   "patches": [
     {
@@ -20,8 +20,8 @@
   "images": {
     "rust": "rust@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3",
     "gateway_base": "gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2",
-    "supervisor": "ghcr.io/nvidia/openshell/supervisor@sha256:deadeacfdba6d12ca27e538d0002696369d4de5a4fcad075ab503495503af9d1",
-    "sandbox": "ghcr.io/nvidia/openshell/sandbox@sha256:f0fe7dbf18d833acb5da99c405231124718f23b524aa8e3c0108e6f37530033b",
+    "supervisor": "ghcr.io/nvidia/openshell/supervisor@sha256:f1ec231b5dbe5b6a40c33acb2ac847995aabb959a56134ef6d7d7aa4f43199d3",
+    "sandbox": "ghcr.io/nvidia/openshell/sandbox@sha256:e57d07cd6cc1fc314b80368d6b51ec6fbf825fb62cd8f081312941180846866f",
     "docker_client": "docker.io/library/docker@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb"
   },
   "cmake": {
@@ -38,13 +38,13 @@
   },
   "cli": {
     "amd64": {
-      "url": "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.8/openshell-x86_64-unknown-linux-musl.tar.gz",
-      "sha256": "87f5c41d396dcd36b4c30a7b5e6f41643a656cb31a82b0edbb00319c9a719c2d",
+      "url": "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.9/openshell-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "3856ac7b6b2e33d6c8ab72a1036444156516e7303da85a9b13f661a2aa63bd2d",
       "directory": "."
     },
     "arm64": {
-      "url": "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.8/openshell-aarch64-unknown-linux-musl.tar.gz",
-      "sha256": "9a2e8f522ccfb3fbd1ed1985a51191a60e083f3404903a56bd4813710a2c7080",
+      "url": "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.9/openshell-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "cb923d08703b966f7e0e6b1483ed4ba6ed77bc10812c5502bcc1fb6ee0f6ad59",
       "directory": "."
     }
   }
