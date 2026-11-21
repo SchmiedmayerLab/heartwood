@@ -10,19 +10,23 @@
   "patches": [
     {
       "path": "docker-provisioning.patch",
-      "sha256": "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1"
+      "sha256": "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1",
+      "purpose": "Retain ownership of a Docker sandbox while provisioning is in progress so deletion can be retried after provisioning settles."
     },
     {
       "path": "gateway-delete-retry.patch",
-      "sha256": "a9319c79ffbb8d4ad93575bdc0d54df1a070d0083e18a29ba31a378c6532ed3b"
+      "sha256": "a9319c79ffbb8d4ad93575bdc0d54df1a070d0083e18a29ba31a378c6532ed3b",
+      "purpose": "Call the driver again when a sandbox already marked for deletion receives another delete request."
     },
     {
       "path": "kubernetes-delete-conflict.patch",
-      "sha256": "5cf974a3e13b892367adf3ab531780852f7a200b08bd947801de980ae7561e37"
+      "sha256": "5cf974a3e13b892367adf3ab531780852f7a200b08bd947801de980ae7561e37",
+      "purpose": "Report a conflicting Kubernetes sandbox deletion as an error so the caller retries instead of treating the sandbox as absent."
     },
     {
       "path": "gateway-create-after-absence.patch",
-      "sha256": "70bf2811f124c5cedb29a7b1add4ed69f513995ffbe455d09167d2c7f5ffde7d"
+      "sha256": "70bf2811f124c5cedb29a7b1add4ed69f513995ffbe455d09167d2c7f5ffde7d",
+      "purpose": "Record confirmed absence so a delayed create request cannot recreate a sandbox under its revoked name during the retention window."
     }
   ],
   "images": {
