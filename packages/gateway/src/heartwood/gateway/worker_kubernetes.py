@@ -144,9 +144,9 @@ _STAGING_READY_SECONDS = 120
 # The worker image's interpreter, which reports the digest of each staged tree.
 _STAGING_PYTHON = "/opt/heartwood/.venv/bin/python"
 # A filesystem's own directory for recovered blocks, such as on Persistent Disk. Below a
-# claim's root it is skipped only when the snapshot has no entry of that name and it is a
-# directory that belongs to user 0 with no permission for other users, which the staging
-# user cannot create.
+# claim's root it is skipped only when the snapshot has no entry of that name and it is an
+# empty directory that belongs to user 0 with no permission for other users, which the
+# staging user cannot create.
 _LOST_AND_FOUND = "lost+found"
 # Reports the digest of the tree below a claim's mount point as `_tree_digest` computes it
 # for an archive, and fails on any entry that is not a directory or a regular file.
@@ -165,6 +165,9 @@ def visit(directory, prefix):
             if skip and path == "lost+found" and stat.S_ISDIR(info.st_mode):
                 if info.st_uid != owner or info.st_mode & 0o007:
                     sys.exit("staged tree holds a lost+found directory of another owner")
+                with os.scandir(entry.path) as recovered:
+                    if any(recovered):
+                        sys.exit("staged tree holds a lost+found directory that is not empty")
                 continue
             mode = stat.S_IMODE(info.st_mode) & 0o777
             if stat.S_ISDIR(info.st_mode):
@@ -1040,6 +1043,10 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
         # Computed before any cluster request, so a snapshot that cannot be compared stops
         # staging before a claim exists.
         expected = {mount: _tree_digest(archive) for mount, archive in archives.items()}
+        skipped = {
+            mount: _LOST_AND_FOUND not in _top_level_names(archive)
+            for mount, archive in archives.items()
+        }
         self._require_isolation({**self.labels, "heartwood.role": "staging"})
         if self._find("pod", "Pod", self.staging_name) is not None:
             raise WorkerAttemptError("worker staging pod already exists")
@@ -1073,7 +1080,6 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
             )
             # Standard input can reach the pod incomplete, and tar accepts an archive cut
             # at a member boundary, so the staged tree is compared with what was sent.
-            skip = _LOST_AND_FOUND not in _top_level_names(archive)
             reported = self.command(
                 "exec",
                 self.staging_name,
@@ -1085,7 +1091,7 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
                 "-c",
                 _TREE_DIGEST_SCRIPT,
                 "/" + mount,
-                "skip-lost-found" if skip else "keep-lost-found",
+                "skip-lost-found" if skipped[mount] else "keep-lost-found",
             )
             if reported.decode(errors="replace").strip() != expected[mount]:
                 raise WorkerAttemptError("worker projection does not match the staged snapshot")
