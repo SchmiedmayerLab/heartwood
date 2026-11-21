@@ -58,9 +58,10 @@ The platform is for synthetic and open data only.
 | Control service | One StatefulSet that serves HTTPS on port 8443, with the project registry, the launch interface and the provisioning of session namespaces |
 | LiteLLM | The proxy of the model route, one Deployment that serves HTTPS on port 4000, with one virtual key for each session's workers |
 | Synthetic model | With `inference.syntheticModel.enabled`, a deterministic model behind LiteLLM for tests |
+| Local model | With `inference.localModel.enabled`, `llama-server` from `images.modelRuntime` behind LiteLLM |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
 | JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
-| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `litellm-tls` and `synthetic-model-tls` with the serving certificates of those services |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `litellm-tls`, `synthetic-model-tls` and `llama-server-tls` with the serving certificates of those services |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services` and `heartwood-hub-pods` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -361,13 +362,26 @@ A platform operator rotates the worker key of a session with `POST /v1/researche
 The control service measures the old key's spending as at a deletion, creates a key with the remaining budget, replaces the provider's credential with it, deletes the old key and rewrites the gateway Secret.
 A worker attached to the old key fails at its next request, and the next worker uses the new key.
 
+### Local Model
+
+`inference.localModel` serves a model on the cluster's CPUs with `llama-server` from `images.modelRuntime`, the `runtime-image` stage of `images/Dockerfile`, which has no default.
+The image holds no weights: an init container downloads `inference.localModel.model.url` over HTTPS at each start, up to `inference.localModel.model.maxBytes`, and checks its SHA-256 digest against `inference.localModel.model.sha256`.
+`llama-server` serves HTTPS on port 8443 with a certificate that the platform CA signs for the names of its Service, and LiteLLM verifies it against the platform CA, so a server without that certificate receives no request.
+It requires the API key that Helm generates into the Secret `llama-server`, read with `--api-key-file`, and only LiteLLM receives the key; it runs with `--no-webui`.
+Its health and model list answer without the key, so the network policy admits only LiteLLM.
+The model is a model of the route, listed in `inference.models` with the name `inference.localModel.alias`, `api_base` `https://llama-server.<namespace>.svc.cluster.local:8443/v1` and `apiKeySecret` `{name: llama-server, key: api-key}`.
+When the runtime is not running, LiteLLM answers the model's requests with an error.
+
+`values-kind.yaml` serves Stories 260K, the small test model that `images/generic/local-runtime/models/stories260k.toml` pins, with a context of 4096 tokens.
+It exists to test the route and is not suited to research tasks.
+
 ### Network Policies
 
 Both namespaces deny ingress by default.
 PostgreSQL accepts connections from Keycloak and LiteLLM.
 Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service and from its bootstrap Job.
 The control service accepts connections from `heartwood-sessions` and from the Hub.
-LiteLLM accepts connections on port 4000 from the control service, from the supervisors of session sandboxes and from the gateway pods in `heartwood-sessions`, and the synthetic model accepts connections from LiteLLM.
+LiteLLM accepts connections on port 4000 from the control service, from the supervisors of session sandboxes and from the gateway pods in `heartwood-sessions`, and the synthetic model and `llama-server` accept connections from LiteLLM.
 versitygw accepts connections from its bootstrap Job.
 The proxy accepts researchers' connections on port 8000 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
@@ -462,8 +476,10 @@ docker build --file reference-platform/services/Dockerfile --tag heartwood-platf
 image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-platform-services:candidate)"
 docker build --file images/Dockerfile --target hosted-gateway-image --tag heartwood-hosted-gateway:candidate .
 hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:candidate)"
+docker build --file images/Dockerfile --target runtime-image --tag heartwood-runtime:candidate .
+runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-runtime:candidate)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
-  --set "images.hostedGateway=${hosted}"
+  --set "images.hostedGateway=${hosted}" --set "images.modelRuntime=${runtime}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
   --ignore ../tests/cluster/test_hub_spawning.py)
 bash reference-platform/cluster/delete-cluster.sh heartwood
@@ -513,7 +529,9 @@ openshell="$(jq --raw-output .openshell_repository test-results/kubernetes-quali
 staging="$(jq --compact-output '[.image_references.worker, .image_references.replacement_worker]' \
   test-results/kubernetes-qualification/worker/images.json)"
 hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:qualification)"
+runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-runtime:qualification)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
+  --set "images.modelRuntime=${runtime}" \
   --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
   --set "images.hostedGateway=${hosted}" --set "hub.worker.image=${worker}" \
   --set-json "sessions.stagingImages=${staging}"

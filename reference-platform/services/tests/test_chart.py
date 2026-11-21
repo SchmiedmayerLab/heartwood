@@ -36,7 +36,8 @@ _MODELS = (
     '"litellmParams":{"model":"openai/synthetic-coder","api_base":"https://models.example.test/v1"}}]'
 )
 _IMAGES = ["--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
-_IMAGES += ["--set-json", _MODELS]
+_RUNTIME = "images.modelRuntime=registry.example.test/runtime@sha256:" + "6" * 64
+_IMAGES += ["--set-json", _MODELS, "--set", _RUNTIME]
 # Without a cluster, Helm cannot read the API server addresses.
 _API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
 _IMAGES += _API_SERVER
@@ -933,3 +934,81 @@ def test_the_model_route_refuses_unpriced_models_and_credentials_in_values(
     result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
     assert result.returncode != 0
     assert path in result.stderr
+
+
+def _render_kind_route() -> list[dict[str, Any]]:
+    """Render the kind values with their own models of the route."""
+    images = [*_IMAGES[: _IMAGES.index("--set-json")], "--set", _RUNTIME, *_API_SERVER]
+    output = subprocess.run(
+        [*_BASE, *images, "--values", str(_CHART / "values-kind.yaml")],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return [item for item in yaml.safe_load_all(output) if item is not None]
+
+
+def test_the_local_model_serves_tls_with_a_key_file_and_no_web_interface() -> None:
+    objects = _render_kind_route()
+    spec = _named(objects, "Deployment", "llama-server")["spec"]["template"]["spec"]
+    (model,) = spec["initContainers"]
+    (server,) = spec["containers"]
+    arguments = server["args"]
+
+    assert server["image"] == _RUNTIME.partition("=")[2]
+    assert server["command"] == ["/opt/llama.cpp/llama-server"]
+    for flag, value in (
+        ("--ssl-key-file", "/etc/llama-server/tls/tls.key"),
+        ("--ssl-cert-file", "/etc/llama-server/tls/tls.crt"),
+        ("--api-key-file", "/etc/llama-server/key/api-key"),
+        ("--alias", "local-model"),
+    ):
+        assert arguments[arguments.index(flag) + 1] == value
+    assert "--no-webui" in arguments
+    assert "--api-key" not in arguments
+    assert not any(item.get("valueFrom") for item in server.get("env", []))
+    assert {"name": "tls", "secret": {"secretName": "llama-server-tls"}} in spec["volumes"]
+    # The weights are downloaded over HTTPS and checked against their digest.
+    environment = {item["name"]: item["value"] for item in model["env"]}
+    assert environment["MODEL_URL"].startswith("https://huggingface.co/ggml-org/")
+    assert environment["MODEL_SHA256"] == (
+        "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d"
+    )
+    assert "sha256sum --check" in model["command"][-1]
+    (rule,) = _named(objects, "NetworkPolicy", "llama-server")["spec"]["ingress"]
+    assert [
+        source["podSelector"]["matchLabels"]["app.kubernetes.io/component"]
+        for source in rule["from"]
+    ] == ["litellm"]
+    assert "llama-server-tls" in {
+        item["metadata"]["name"] for item in objects if item["kind"] == "Secret"
+    }
+    config = _litellm(objects)
+    models = {item["model_name"]: item for item in config["model_list"]}
+    assert models["local-model"]["litellm_params"] == {
+        "model": "openai/local-model",
+        "api_base": "https://llama-server.heartwood-platform.svc.cluster.local:8443/v1",
+        "api_key": "os.environ/HW_MODEL_KEY_1",
+    }
+    assert models["local-model"]["model_info"]["input_cost_per_token"] == pytest.approx(1e-7)
+    litellm = _named(objects, "Deployment", "litellm")["spec"]["template"]["spec"]
+    environment_names = {item["name"]: item for item in litellm["containers"][0]["env"]}
+    assert environment_names["HW_MODEL_KEY_1"]["valueFrom"]["secretKeyRef"] == {
+        "name": "llama-server",
+        "key": "api-key",
+    }
+
+
+def test_the_local_model_needs_the_runtime_image_and_its_weights() -> None:
+    images = [*_IMAGES[: _IMAGES.index("--set-json")], *_API_SERVER]
+    kind = ["--values", str(_CHART / "values-kind.yaml")]
+    result = subprocess.run([*_BASE, *images, *kind], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "images.modelRuntime must name the runtime image by digest" in result.stderr
+    result = subprocess.run(
+        [*_BASE, *images, *kind, "--set", _RUNTIME, "--set", "inference.localModel.model.url="],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "inference.localModel.model.url is required" in result.stderr

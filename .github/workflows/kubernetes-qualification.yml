@@ -120,6 +120,12 @@ jobs:
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-hosted-gateway:qualification)"
           echo "HOSTED_GATEWAY_IMAGE=${image}" >> "${GITHUB_ENV}"
+      # llama-server of the local model runs from the runtime image.
+      - name: Push the runtime image to the cluster registry
+        run: |
+          image="$(bash reference-platform/cluster/push-image.sh heartwood \
+            heartwood-runtime:qualification)"
+          echo "MODEL_RUNTIME_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Build the gateway and controller images and push them with the worker and OpenShell images
         run: |
           python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
@@ -144,6 +150,7 @@ jobs:
           --set "images.openshellGateway=${GATEWAY_IMAGE}"
           --set "images.openshellRepository=${OPENSHELL_REPOSITORY}"
           --set "images.hostedGateway=${HOSTED_GATEWAY_IMAGE}"
+          --set "images.modelRuntime=${MODEL_RUNTIME_IMAGE}"
           --set "hub.worker.image=${WORKER_IMAGE}"
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
       - name: Test the installed chart

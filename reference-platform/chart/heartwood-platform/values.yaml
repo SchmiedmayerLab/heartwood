@@ -25,6 +25,10 @@ images:
   # Image of the hosted Heartwood gateway, the hosted-gateway-image stage of
   # images/Dockerfile. It has no default: set it to a reference by digest.
   hostedGateway: ""
+  # Image of the local model runtime: the runtime-image stage of images/Dockerfile, which
+  # holds llama-server. It has no default: set it to a reference by digest when
+  # inference.localModel.enabled is set.
+  modelRuntime: ""
   # The LiteLLM proxy, the non-root image of its release.
   litellm: ghcr.io/berriai/litellm-non_root:v1.110.0@sha256:825dc1814bbdb30f8800ea5f5b8f405a265747c6f3feeb765f28dbcc60049196
 
@@ -139,6 +143,18 @@ syntheticPrices:
       SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
       SkuPriceEligibility:
         IsGlobalScope: true
+    - ServiceProviderName: Synthetic Provider
+      SkuId: synthetic-local-tokens
+      SkuPriceId: synthetic-local-tokens-list
+      ChargeCategory: Usage
+      UnitPrice: "0.10"
+      UnitPriceType: List
+      PricingUnit: 1,000,000 Tokens
+      PricingCurrency: USD
+      PricingCurrencyCategory: Payable
+      SkuPriceEffectiveStart: "2026-01-01T00:00:00Z"
+      SkuPriceEligibility:
+        IsGlobalScope: true
   runtimeProfiles:
     - runtimeProfileRef: synthetic-exploration-small
       kind: exploration
@@ -167,6 +183,16 @@ syntheticPrices:
           quantityPerPricingUnit: "1000000"
         - measure: output_tokens
           skuPriceId: synthetic-coder-output-list
+          quantityPerPricingUnit: "1000000"
+    # The local model of inference.localModel, whose tokens share one price.
+    - runtimeProfileRef: local-model
+      kind: inference
+      rates:
+        - measure: input_tokens
+          skuPriceId: synthetic-local-tokens-list
+          quantityPerPricingUnit: "1000000"
+        - measure: output_tokens
+          skuPriceId: synthetic-local-tokens-list
           quantityPerPricingUnit: "1000000"
 
 # The model route of sessions: the LiteLLM proxy, which holds one virtual key for each
@@ -206,6 +232,25 @@ inference:
   # A deterministic model for tests, served by the platform services image.
   syntheticModel:
     enabled: false
+  # A local model served by llama-server from images.modelRuntime, which LiteLLM reaches
+  # over HTTPS with a certificate of the platform CA and the runtime's API key. The
+  # image holds no weights: an init container downloads model.url and checks
+  # model.sha256 at each start. List the model in inference.models with the name
+  # alias, api_base https://llama-server.<namespace>.svc.cluster.local:8443/v1 and
+  # apiKeySecret {name: llama-server, key: api-key}.
+  localModel:
+    enabled: false
+    alias: local-model
+    # maxBytes bounds the download, which also needs room in the pod's 8 GiB volume.
+    model:
+      url: ""
+      sha256: ""
+      maxBytes: 4294967296
+    contextSize: 4096
+    threads: 2
+    resources:
+      cpu: "2"
+      memory: 2Gi
 
 postgresql:
   storage: 2Gi

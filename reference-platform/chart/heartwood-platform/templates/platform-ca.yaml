@@ -55,6 +55,9 @@ while the CA is kept.
 {{- if .Values.inference.syntheticModel.enabled -}}
 {{- $services = append $services "synthetic-model" -}}
 {{- end -}}
+{{- if .Values.inference.localModel.enabled -}}
+{{- $services = append $services "llama-server" -}}
+{{- end -}}
 {{- range $service := $services }}
 {{- $secret := printf "%s-tls" $service -}}
 {{- $servingCertificate := "" -}}

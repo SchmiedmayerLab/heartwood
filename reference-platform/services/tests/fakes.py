@@ -62,6 +62,7 @@ SYNTHETIC_PRICES: dict[str, Any] = {
         _sku_price("synthetic-batch-gpu", "0.004", "Task-Seconds"),
         _sku_price("synthetic-coder-input", "0.50", "1,000,000 Input Tokens"),
         _sku_price("synthetic-coder-output", "1.50", "1,000,000 Output Tokens"),
+        _sku_price("synthetic-local-tokens", "0.10", "1,000,000 Tokens"),
     ],
     "runtime_profiles": [
         _profile(
@@ -80,6 +81,12 @@ SYNTHETIC_PRICES: dict[str, Any] = {
             "inference",
             ("input_tokens", "synthetic-coder-input-list", "1000000"),
             ("output_tokens", "synthetic-coder-output-list", "1000000"),
+        ),
+        _profile(
+            "local-model",
+            "inference",
+            ("input_tokens", "synthetic-local-tokens-list", "1000000"),
+            ("output_tokens", "synthetic-local-tokens-list", "1000000"),
         ),
     ],
 }

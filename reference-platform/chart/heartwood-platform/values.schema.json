@@ -52,7 +52,8 @@
         "openshellGateway",
         "openshellRepository",
         "hostedGateway",
-        "litellm"
+        "litellm",
+        "modelRuntime"
       ],
       "properties": {
         "postgresql": {
@@ -80,6 +81,17 @@
         },
         "litellm": {
           "$ref": "#/$defs/image"
+        },
+        "modelRuntime": {
+          "description": "The runtime image by digest; empty without a local model.",
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "$ref": "#/$defs/image"
+            }
+          ]
         }
       }
     },
@@ -701,7 +713,8 @@
         "environment",
         "trustPublicRoots",
         "settleWaitSeconds",
-        "syntheticModel"
+        "syntheticModel",
+        "localModel"
       ],
       "properties": {
         "models": {
@@ -821,6 +834,79 @@
           "properties": {
             "enabled": {
               "type": "boolean"
+            }
+          }
+        },
+        "localModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "alias",
+            "model",
+            "contextSize",
+            "threads",
+            "resources"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "alias": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url",
+                "sha256",
+                "maxBytes"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "pattern": "^(https://\\S+)?$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{64})?$"
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8589934592
+                }
+              }
+            },
+            "contextSize": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 1048576
+            },
+            "threads": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*m?$"
+                },
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+                }
+              }
             }
           }
         }
