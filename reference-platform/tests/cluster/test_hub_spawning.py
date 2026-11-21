@@ -93,7 +93,7 @@ def test_a_researcher_signs_in_to_the_hub_through_keycloak(server: Server) -> No
 
 
 def test_the_proxy_answers_only_over_https(server: Server, cluster: Cluster) -> None:
-    # The browser verifies the proxy against the platform CA alone.
+    # The client verifies the proxy against the platform CA.
     status, _, _ = server.first.get("/hub/api/")
     assert status == 200
     (proxy,) = _json(
