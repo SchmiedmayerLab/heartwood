@@ -15,6 +15,9 @@ images:
   # Image of the platform services, built from reference-platform/services/Dockerfile.
   # It has no default: set it to a reference by digest at installation.
   platformServices: ""
+  # Image of the OpenShell gateway of each session, with the Kubernetes driver.
+  # It has no default: set it to a reference by digest.
+  openshellGateway: ""
 
 # StorageClass of the platform's own volumes. Empty selects the cluster default.
 storageClassName: ""
@@ -54,6 +57,27 @@ sessions:
   namespace: heartwood-sessions
   # Image of the staging pods that a Heartwood gateway may create, by digest.
   stagingImage: ""
+  # Addresses under which pods reach the Kubernetes API server, as a list of
+  # {cidr, port}. Session namespaces deny egress by default, and the OpenShell gateway
+  # may reach these. Empty reads the addresses from the cluster at installation.
+  apiServer: []
+  # ResourceQuota of one session namespace.
+  quota:
+    requests.cpu: "6"
+    requests.memory: 12Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "20"
+    persistentvolumeclaims: "20"
+    requests.storage: 40Gi
+  # Limits and requests of containers that declare none, such as the OpenShell
+  # gateway and supervisors. The quota admits only pods with limits.
+  containerDefaults:
+    cpu: 500m
+    memory: 512Mi
+  containerDefaultRequests:
+    cpu: 100m
+    memory: 128Mi
   # StorageClass of the attempt volumes that a Heartwood gateway may create.
   attemptStorageClass:
     provisioner: ""

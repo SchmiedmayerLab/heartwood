@@ -59,3 +59,8 @@ seccompProfile:
 storageClassName: {{ . }}
 {{- end }}
 {{- end }}
+
+{{- /* The network of one host address. Argument: an IPv4 or IPv6 address. */ -}}
+{{- define "heartwood.hostCidr" -}}
+{{- printf "%s/%d" . (ternary 128 32 (contains ":" .)) -}}
+{{- end }}

@@ -25,7 +25,13 @@ _TEMPLATE = ["helm", "template", "heartwood-platform", str(_CHART)]
 _TEMPLATE += ["--namespace", "heartwood-platform"]
 # The platform services image has no default.
 _SERVICES = "images.platformServices=registry.example.test/services@sha256:" + "0" * 64
-_TEMPLATE += ["--set", _SERVICES]
+_GATEWAY = "images.openshellGateway=registry.example.test/gateway@sha256:" + "1" * 64
+_IMAGES = ["--set", _SERVICES, "--set", _GATEWAY]
+# Without a cluster, Helm cannot read the API server addresses.
+_API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
+_IMAGES += _API_SERVER
+_BASE = list(_TEMPLATE)
+_TEMPLATE += _IMAGES
 _FIXED_ROLES = {
     "heartwood-openshell-sandbox",
     "heartwood-openshell-peer",
@@ -67,16 +73,7 @@ def _pod_specs(objects: list[dict[str, Any]]) -> Iterator[tuple[str, dict[str, A
 @pytest.mark.parametrize("values", ["values-kind.yaml", "values-gke.yaml"])
 def test_chart_passes_lint(values: str) -> None:
     subprocess.run(
-        [
-            "helm",
-            "lint",
-            str(_CHART),
-            "--strict",
-            "--values",
-            str(_CHART / values),
-            "--set",
-            _SERVICES,
-        ],
+        ["helm", "lint", str(_CHART), "--strict", *_IMAGES, "--values", str(_CHART / values)],
         check=True,
         capture_output=True,
     )
@@ -231,11 +228,14 @@ def test_sessions_namespace_is_neither_the_platform_nor_a_session_namespace(name
     assert "/sessions/namespace" in result.stderr
 
 
-def test_installation_needs_the_platform_services_image() -> None:
-    command = [argument for argument in _TEMPLATE if argument not in {"--set", _SERVICES}]
-    result = subprocess.run(command, capture_output=True, text=True)
+@pytest.mark.parametrize(
+    ("given", "missing"),
+    [(_GATEWAY, "/images/platformServices"), (_SERVICES, "/images/openshellGateway")],
+)
+def test_installation_needs_the_images_without_a_default(given: str, missing: str) -> None:
+    result = subprocess.run([*_BASE, *_API_SERVER, "--set", given], capture_output=True, text=True)
     assert result.returncode != 0
-    assert "/images/platformServices" in result.stderr
+    assert missing in result.stderr
 
 
 def test_control_service_configuration_holds_the_registry(objects: list[dict[str, Any]]) -> None:
@@ -244,6 +244,14 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
     assert configuration["audience"] == "heartwood-control"
     assert configuration["keycloak"]["issuer"].endswith("/realms/heartwood")
     assert configuration["service_callers"] == ["system:serviceaccount:heartwood-sessions:hub"]
+    sessions = configuration["sessions"]
+    assert sessions["openshell_gateway_image"].startswith("registry.example.test/gateway@sha256:")
+    assert sessions["control_namespace"] == "heartwood-platform"
+    assert sessions["gateway_namespace"] == "heartwood-sessions"
+    assert sessions["quota"]["pods"] == "20"
+    rendered = _named(objects, "ConfigMap", "heartwood-control-openshell")
+    committed = (_CHART / "files" / "openshell-session.json").read_text(encoding="utf-8")
+    assert json.loads(rendered["data"]["openshell-session.json"]) == json.loads(committed)
     ingress = _named(objects, "NetworkPolicy", "heartwood-control")["spec"]["ingress"]
     assert ingress == [
         {
@@ -257,3 +265,10 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
             "ports": [{"protocol": "TCP", "port": 8080}],
         }
     ]
+
+
+def test_installation_needs_the_api_server_addresses() -> None:
+    command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "sessions.apiServer is empty" in result.stderr

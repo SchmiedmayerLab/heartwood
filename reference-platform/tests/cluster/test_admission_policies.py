@@ -546,6 +546,8 @@ def test_control_scope_refuses_removing_a_foreign_node_reader_subject(cluster: C
             "apply",
             "--server-side",
             "--field-manager=policy-test",
+            # The control service owns the subjects once it has provisioned a session.
+            "--force-conflicts",
             "--filename",
             "-",
             document=document,

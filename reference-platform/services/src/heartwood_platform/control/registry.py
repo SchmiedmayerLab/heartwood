@@ -138,6 +138,11 @@ class Registry:
             return None
         return Session(row[0], row[1], row[2], datetime.fromisoformat(row[3]))
 
+    def session_ids(self) -> list[str]:
+        """Return the identifiers of all sessions."""
+        with self._transaction() as connection:
+            return [row[0] for row in connection.execute("SELECT id FROM session ORDER BY id")]
+
     def delete_session(self, subject: str, project: str) -> None:
         """Remove the session of a subject in a project."""
         with self._transaction() as connection:

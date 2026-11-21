@@ -26,6 +26,7 @@ from starlette.routing import Route
 from heartwood_platform.common.tokens import AuthenticationError, ResearcherTokens, ServiceTokens
 from heartwood_platform.control.launch import LaunchService, NoSessionError
 from heartwood_platform.control.registry import NotAMemberError
+from heartwood_platform.control.sessions import SessionError
 
 # Subjects and projects become part of redirect URIs and object names.
 Subject = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9-]{1,64}$")]
@@ -75,6 +76,8 @@ def create_app(
             except httpx.HTTPError:
                 # Keycloak or the Kubernetes API did not answer as expected.
                 return _error(502, "a platform component is unavailable")
+            except SessionError as error:
+                return _error(503, str(error))
 
         return wrapper
 

@@ -35,7 +35,8 @@
         "postgresql",
         "keycloak",
         "versitygw",
-        "platformServices"
+        "platformServices",
+        "openshellGateway"
       ],
       "properties": {
         "postgresql": {
@@ -48,6 +49,9 @@
           "$ref": "#/$defs/image"
         },
         "platformServices": {
+          "$ref": "#/$defs/image"
+        },
+        "openshellGateway": {
           "$ref": "#/$defs/image"
         }
       }
@@ -125,7 +129,11 @@
       "required": [
         "namespace",
         "stagingImage",
-        "attemptStorageClass"
+        "attemptStorageClass",
+        "apiServer",
+        "quota",
+        "containerDefaults",
+        "containerDefaultRequests"
       ],
       "properties": {
         "namespace": {
@@ -166,6 +174,46 @@
                 "type": "string"
               }
             }
+          }
+        },
+        "apiServer": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cidr",
+              "port"
+            ],
+            "properties": {
+              "cidr": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F:.]+/[0-9]{1,3}$"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              }
+            }
+          }
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "containerDefaults": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "containerDefaultRequests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
           }
         }
       }
