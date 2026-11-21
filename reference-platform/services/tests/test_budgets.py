@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from collections.abc import Iterator
 from decimal import Decimal
@@ -16,13 +17,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fakes import SYNTHETIC_PRICES
 from heartwood_platform.control.budgets import Allocation, InsufficientBudgetError, Ledger
 from heartwood_platform.control.launch import session_holder
 from heartwood_platform.control.planning import MCP_PATH
+from heartwood_platform.control.prices import PriceSheet
 from starlette.testclient import TestClient
 from test_control_app import Platform, _id
 
 from heartwood.schemas import BudgetObservation
+
+_UNIT = PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)).denomination
 
 _ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
 _BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
@@ -32,7 +37,7 @@ _ACCEPT = {"Accept": "application/json, text/event-stream"}
 
 @pytest.fixture
 def ledger(tmp_path: Path) -> Ledger:
-    ledger = Ledger(tmp_path / "ledger.sqlite3")
+    ledger = Ledger(tmp_path / "ledger.sqlite3", _UNIT)
     ledger.synchronize([Allocation("demo", "inference", Decimal(10))])
     return ledger
 
@@ -109,14 +114,14 @@ def test_a_changed_allocation_changes_availability_and_the_revision(ledger: Ledg
 
 def test_concurrent_reservations_never_exceed_the_allocation(tmp_path: Path) -> None:
     path = tmp_path / "ledger.sqlite3"
-    Ledger(path).synchronize([Allocation("demo", "inference", Decimal(10))])
+    Ledger(path, _UNIT).synchronize([Allocation("demo", "inference", Decimal(10))])
     reserved: list[Decimal] = []
     refused: list[str] = []
     start = threading.Barrier(24)
 
     def reserve(index: int) -> None:
         # Each thread opens the database itself, as separate requests would.
-        ledger = Ledger(path)
+        ledger = Ledger(path, _UNIT)
         start.wait()
         try:
             reserved.append(ledger.reserve("demo", "inference", f"s:{index}", Decimal(1)).amount)
@@ -132,7 +137,7 @@ def test_concurrent_reservations_never_exceed_the_allocation(tmp_path: Path) -> 
     assert sum(reserved) == Decimal(10)
     assert len(reserved) == 10
     assert len(refused) == 14
-    assert _balance(Ledger(path)) == (10, 10, 0, 0)
+    assert _balance(Ledger(path, _UNIT)) == (10, 10, 0, 0)
 
 
 # The control service with its launch flow.
@@ -301,7 +306,7 @@ def test_a_refused_first_launch_leaves_no_session_and_a_rotation_admits_nothing(
 
 
 def test_amounts_of_the_largest_form_stay_exact(tmp_path: Path) -> None:
-    ledger = Ledger(tmp_path / "ledger.sqlite3")
+    ledger = Ledger(tmp_path / "ledger.sqlite3", _UNIT)
     largest = Decimal("999999999999999999.999999999999")
     ledger.synchronize([Allocation("demo", "inference", largest)])
 
@@ -366,3 +371,15 @@ def test_a_session_whose_deletion_did_not_finish_is_not_launched_again(
     assert response.status_code == 503
     assert response.json() == {"error": "the session is being deleted"}
     assert _balance(platform.ledger) == (5, 1, 0, 4)
+
+
+def test_ledger_without_recorded_denomination_is_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.sqlite3"
+    ledger = Ledger(path, _UNIT)
+    ledger.synchronize([Allocation("demo", "compute", Decimal("5"))])
+    with sqlite3.connect(path) as database:
+        database.execute("DROP TABLE ledger_denomination")
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="Incompatible ledger without a denomination"):
+        Ledger(path, _UNIT)
+    assert path.read_bytes() == original

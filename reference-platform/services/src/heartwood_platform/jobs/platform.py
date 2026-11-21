@@ -42,13 +42,31 @@ class ProjectContexts(Protocol):
 
 @dataclass(frozen=True)
 class JobUsage:
-    """Resources of a task over a duration: its limits at reservation, its use at settlement."""
+    """The run time limit or observed duration on a task runtime profile."""
 
     runtime_profile_ref: str
-    cpu_cores: int
-    ram_gb: float
-    gpu_count: int
     seconds: int
+
+
+@dataclass(frozen=True)
+class BudgetAmount:
+    """An amount of a project's compute budget in the denomination of the price sheet."""
+
+    budget_id: str
+    amount: str
+    unit: str
+
+    def __str__(self) -> str:
+        """Return the amount with its unit."""
+        return f"{self.amount} {self.unit}"
+
+
+@dataclass(frozen=True)
+class JobSettlement:
+    """What a settled reservation held and what the task incurred."""
+
+    reserved: BudgetAmount
+    incurred: BudgetAmount
 
 
 class BudgetDeniedError(Exception):
@@ -58,20 +76,27 @@ class BudgetDeniedError(Exception):
 class JobBudgets(Protocol):
     """Reservations of a project's compute budget, held by one operation each."""
 
-    def reserve(self, project: str, holder: str, usage: JobUsage) -> str:
-        """Reserve for the hard limits of a task and return the reservation's reference.
+    def quote(self, project: str, usage: JobUsage) -> BudgetAmount:
+        """Return what a reservation for this usage would hold now; nothing is reserved.
 
-        A holder that already holds a reservation keeps it. Raise
-        :class:`BudgetDeniedError` when the budget cannot hold it.
+        Raise :class:`BudgetDeniedError` when the usage has no price.
         """
 
-    def settle(self, holder: str, usage: JobUsage) -> None:
+    def reserve(self, project: str, operation_id: str, usage: JobUsage) -> BudgetAmount:
+        """Reserve the price of a task's run time limit for an operation.
+
+        An operation that already holds a reservation keeps it. Raise
+        :class:`BudgetDeniedError` when the budget does not cover it, when the usage has no
+        price, or when the operation's reservation was settled already.
+        """
+
+    def settle(self, project: str, operation_id: str, usage: JobUsage) -> JobSettlement:
         """Record what the task used and release the rest of its reservation.
 
-        Settling is idempotent per holder and ends the holder: settling again, or settling
-        a holder that never reserved, changes nothing, and a later reservation for a settled
-        holder is refused. The job service settles by holder whenever it cannot tell whether
-        a reservation reached the budget.
+        Settling is idempotent per operation and ends it: settling again returns the first
+        settlement, settling an operation that never reserved records that, and a later
+        reservation for a settled operation is refused. The job service settles whenever it
+        cannot tell whether a reservation reached the budget.
         """
 
 
@@ -102,3 +127,83 @@ class ControlContexts:
         if not isinstance(context, str) or not context:
             raise NoSessionError
         return context
+
+
+class ControlBudgets:
+    """Job reservations on the compute budgets of the control service's ledger."""
+
+    def __init__(self, client: httpx.Client, token: Callable[[], str]) -> None:
+        """Use the job service account for ledger requests."""
+        self._client = client
+        self._token = token
+
+    def _call(
+        self, method: str, path: str, usage: JobUsage, *, admission: bool = True
+    ) -> dict[str, object]:
+        response = self._client.request(
+            method,
+            path,
+            json={"runtime_profile_ref": usage.runtime_profile_ref, "seconds": usage.seconds},
+            headers={"Authorization": f"Bearer {self._token()}"},
+        )
+
+        if not admission or response.status_code != httpx.codes.CONFLICT:
+            response.raise_for_status()
+        try:
+            document = response.json()
+        except ValueError as error:
+            raise httpx.DecodingError("invalid budget reply") from error
+        if not isinstance(document, dict):
+            raise httpx.DecodingError("the reply is not an object")
+        if response.status_code == httpx.codes.CONFLICT:
+            raise self._denied(document, usage)
+        return document
+
+    @staticmethod
+    def _amount(document: dict[str, object], field: str = "amount") -> BudgetAmount:
+        denomination = document.get("denomination")
+        unit = denomination.get("unit") if isinstance(denomination, dict) else None
+        budget, amount = document.get("budget_id"), document.get(field)
+        if not all(isinstance(value, str) and value for value in (budget, amount, unit)):
+            raise httpx.DecodingError("the reply names no budget amount")
+        return BudgetAmount(str(budget), str(amount), str(unit))
+
+    @staticmethod
+    def _denied(document: dict[str, object], usage: JobUsage) -> BudgetDeniedError:
+        error = document.get("error")
+        if error == "unpriced":
+            return BudgetDeniedError(f"{document.get('reason')} The budget cannot price the task.")
+        if error == "settled":
+            return BudgetDeniedError("The operation's reservation was settled already.")
+        if error == "insufficient":
+            needed = ControlBudgets._amount(document)
+            available = document.get("available")
+            if available is None:
+                return BudgetDeniedError(f"The project has no budget {needed.budget_id}.")
+            return BudgetDeniedError(
+                f"Budget {needed.budget_id} has {available} {needed.unit} available, and the"
+                f" run time limit of {usage.seconds} seconds needs {needed}."
+            )
+        raise httpx.DecodingError("the refusal names no reason")
+
+    def quote(self, project: str, usage: JobUsage) -> BudgetAmount:
+        """Return what a reservation for this usage would hold now."""
+        path = f"/v1/projects/{quote(project, safe='')}/job-quotes"
+        return self._amount(self._call("POST", path, usage))
+
+    def reserve(self, project: str, operation_id: str, usage: JobUsage) -> BudgetAmount:
+        """Reserve the price of a task's run time limit for an operation."""
+        path = (
+            f"/v1/projects/{quote(project, safe='')}/job-reservations/"
+            f"{quote(operation_id, safe='')}"
+        )
+        return self._amount(self._call("PUT", path, usage))
+
+    def settle(self, project: str, operation_id: str, usage: JobUsage) -> JobSettlement:
+        """Record what the task used and release the rest of its reservation."""
+        path = (
+            f"/v1/projects/{quote(project, safe='')}/job-reservations/"
+            f"{quote(operation_id, safe='')}/settlement"
+        )
+        document = self._call("POST", path, usage, admission=False)
+        return JobSettlement(self._amount(document), self._amount(document, "incurred"))

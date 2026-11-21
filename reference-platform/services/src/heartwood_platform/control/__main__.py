@@ -156,6 +156,9 @@ class Settings(_Settings):
     operator_callers: frozenset[str] = frozenset()
     # Service accounts of platform services that read researchers' launch contexts.
     context_callers: frozenset[str] = frozenset()
+    # Service accounts that reserve and settle the compute budgets of batch tasks: the
+    # job service.
+    job_callers: frozenset[str] = frozenset()
     # Contains ``{researcher}`` and ``{project}``; the researcher is a researcher identifier.
     redirect_uri_template: str
     # The key of the researcher identifiers in paths, Hub user names and redirect URIs.
@@ -251,12 +254,12 @@ def _inference(settings: Settings, ca_file: Path) -> ManagedInference:
 
 def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
     """Assemble the application from its configuration."""
+    ledger = Ledger(settings.database, settings.synthetic_prices.denomination)
     registry = Registry(settings.database)
     registry.synchronize(
         Project(project.id, project.billing_attribution_ref, project.policy_ref, project.members)
         for project in settings.projects
     )
-    ledger = Ledger(settings.database)
     ledger.synchronize(
         Allocation(project.id, category, Decimal(amount))
         for project in settings.projects
@@ -359,6 +362,9 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         else None,
         contexts=ServiceTokens(kubernetes.review_token, settings.audience, settings.context_callers)
         if settings.context_callers
+        else None,
+        jobs=ServiceTokens(kubernetes.review_token, settings.audience, settings.job_callers)
+        if settings.job_callers
         else None,
     )
 

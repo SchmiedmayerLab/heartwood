@@ -62,7 +62,9 @@ _READ_ONLY = ToolAnnotations(
 
 # What a budget observation states about its amounts.
 _BUDGET_CONSTRAINTS = (
-    "Reserved amounts are held by running sessions and jobs until they are settled.",
+    "Reserved amounts are held by running sessions and batch jobs until they are settled: "
+    "a session from its first launch until its deletion, a job from its submission until "
+    "its task ends.",
     "Spent amounts are what settled work incurred, which can exceed its reservation.",
     "Reading the budgets reserves nothing and admits no work.",
 )
@@ -81,9 +83,16 @@ def _amount(value: Decimal) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+def _held(count: int, amount: Decimal, kind: str) -> str:
+    noun = "reservation" if count == 1 else "reservations"
+    verb = "holds" if count == 1 else "hold"
+    return f"{count} {kind} {noun} {verb} {_amount(amount)}."
+
+
 def _observation(
     balance: Balance, context: PlatformLaunchContext, prices: PriceSheet, now: datetime
 ) -> BudgetObservation:
+    jobs, sessions = balance.job_reservations, balance.session_reservations
     return BudgetObservation(
         project_context_id=context.project_context_id,
         budget_id=balance.budget_id,
@@ -93,7 +102,12 @@ def _observation(
         reserved=_amount(balance.reserved),
         spent=_amount(balance.spent),
         available=_amount(balance.available),
-        constraints=(f"Allocated to {balance.category} work.", *_BUDGET_CONSTRAINTS),
+        constraints=(
+            f"Allocated to {balance.category} work.",
+            *_BUDGET_CONSTRAINTS,
+            _held(*sessions, "session"),
+            _held(*jobs, "job"),
+        ),
         platform_record_ref=f"heartwood-control:budget:{balance.budget_id}:{balance.revision}",
     )
 

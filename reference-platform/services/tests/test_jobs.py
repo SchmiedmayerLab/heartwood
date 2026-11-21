@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import itertools
 import json
+import sqlite3
+import threading
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +24,13 @@ import httpx
 import pytest
 from fakes import SigningKey
 from heartwood_platform.common.tokens import ResearcherTokens
+from heartwood_platform.control.budgets import Allocation
 from heartwood_platform.jobs.app import MCP_PATH, create_jobs_app
 from heartwood_platform.jobs.objects import DRS_ID, ObjectNotFoundError
 from heartwood_platform.jobs.platform import (
-    BudgetDeniedError,
+    BudgetAmount,
+    ControlBudgets,
+    JobSettlement,
     JobUsage,
     NoSessionError,
     NotAMemberError,
@@ -49,6 +56,7 @@ from heartwood_platform.jobs.tes import (
     View,
 )
 from starlette.testclient import TestClient
+from test_control_app import Platform
 
 from heartwood.schemas import (
     PlatformOperationCapabilities,
@@ -171,36 +179,6 @@ class FakeObjects:
         return f"s3://hw-project-{project}/results/{operation_id}/"
 
 
-@dataclass
-class FakeBudgets:
-    """One compute allocation per project; usage is priced at one unit per core-second."""
-
-    # Whether the control service fails after it reserved.
-    unavailable: bool = False
-    available: dict[str, int] = field(default_factory=lambda: {"demo": 100_000, "other": 0})
-    held: dict[str, tuple[str, int]] = field(default_factory=dict)
-    settled: dict[str, JobUsage] = field(default_factory=dict)
-
-    def reserve(self, project: str, holder: str, usage: JobUsage) -> str:
-        if holder in self.held:
-            return holder
-        amount = usage.cpu_cores * usage.seconds
-        if amount > self.available[project]:
-            raise BudgetDeniedError("Budget demo-compute has no availability.")
-        self.available[project] -= amount
-        self.held[holder] = (project, amount)
-        if self.unavailable:
-            raise httpx.ReadTimeout("lost reply")
-        return holder
-
-    def settle(self, holder: str, usage: JobUsage) -> None:
-        if holder not in self.held:
-            return
-        project, amount = self.held.pop(holder)
-        self.available[project] += amount - usage.cpu_cores * usage.seconds
-        self.settled[holder] = usage
-
-
 class FakeContexts:
     """Alice is a member of demo and other, Bob and Carol of demo; Bob has no session."""
 
@@ -216,12 +194,28 @@ class FakeContexts:
 class Jobs:
     """The job service with two projects; ``other`` holds a GPU entitlement and no budget."""
 
-    def __init__(self, directory: Path, *, budgets: bool = True) -> None:
+    def __init__(self, directory: Path) -> None:
         self.now = _START
         self.key = SigningKey()
         self.executors = {"demo": FakeExecutor(), "other": FakeExecutor()}
         self.objects = FakeObjects()
-        self.budgets = FakeBudgets() if budgets else None
+        self.control = Platform(directory)
+
+        def call_control(request: httpx.Request) -> httpx.Response:
+            response = self.control.client.request(
+                request.method,
+                request.url.path,
+                content=request.content,
+                headers=dict(request.headers),
+            )
+            return httpx.Response(response.status_code, content=response.content)
+
+        self.budgets = ControlBudgets(
+            httpx.Client(
+                base_url="https://control.test", transport=httpx.MockTransport(call_control)
+            ),
+            lambda: "jobs-token",
+        )
         policy = ProjectPolicy(
             gpu=False, max_cpu_cores=4, max_ram_gb=8, max_disk_gb=10, max_runtime_seconds=7200
         )
@@ -369,6 +363,8 @@ def test_a_proposal_shows_limits_data_scope_and_destination_and_submits_nothing(
     proposal = PlatformOperationProposal.model_validate_json(
         json.dumps(result["structuredContent"])
     )
+    assert any("0.18" in item and "demo-compute" in item for item in proposal.limitations)
+    assert service.control.ledger.balances("demo")[0].reserved == 0
     assert proposal.runtime_profile_ref == "synthetic-batch-small"
     assert {item.metric: item.maximum for item in proposal.resource_limits} == {
         "cpu": "2",
@@ -478,8 +474,7 @@ def test_requests_outside_entitlements_limits_or_project_data_are_denied(
     assert observed.status == "denied"
     assert any(reason in item for item in observed.limitations)
     assert service.executors["demo"].tasks == {}
-    assert service.budgets is not None
-    assert service.budgets.held == {}
+    assert service.control.ledger.held("job/demo/op-1") is None
     # The refusal is the operation's outcome: repeating it reports the same denial.
     assert service.observe(client, "create_task", task(**changes)).status == "denied"
 
@@ -493,7 +488,7 @@ def test_a_budget_without_availability_denies_the_task(jobs: tuple[Jobs, TestCli
         headers=service.headers(project="other"),
     )
     assert observed.status == "denied"
-    assert observed.limitations == ("Budget demo-compute has no availability.",)
+    assert observed.limitations == ("The project has no budget other-compute.",)
     assert service.executors["other"].tasks == {}
 
 
@@ -531,12 +526,13 @@ def test_a_completed_task_settles_its_reservation_with_its_run_time(
 ) -> None:
     service, client = jobs
     service.observe(client, "create_task", task())
-    budgets = service.budgets
-    assert budgets is not None
-    assert budgets.held["job/demo/op-1"] == ("demo", 2 * 600)
+    held = service.control.ledger.held("job/demo/op-1")
+    assert held is not None
+    assert held.amount == Decimal("0.18")
     executor = service.executors["demo"]
     executor.advance("task-0000", "RUNNING")
-    started = service.now = _START + timedelta(seconds=10)
+    started = _START
+    service.now = started + timedelta(seconds=20)
     assert (
         service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"}).status
         == "running"
@@ -551,9 +547,10 @@ def test_a_completed_task_settles_its_reservation_with_its_run_time(
     observed = service.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
 
     assert observed.status == "completed"
-    assert budgets.held == {}
-    assert budgets.settled["job/demo/op-1"].seconds == 25
-    assert budgets.available["demo"] == 100_000 - 2 * 25
+    balance = service.control.ledger.balances("demo")[0]
+    assert balance.reserved == 0
+    assert balance.spent == Decimal("0.0075")
+    assert any("for 25 seconds of run time" in item for item in observed.limitations)
 
 
 def test_an_identifier_reported_before_it_arrived_is_failed_for_good(
@@ -577,8 +574,8 @@ def test_a_task_that_does_not_start_in_time_is_cancelled_and_failed(
     assert observed.status == "failed"
     assert observed.limitations[0] == f"The task did not start within {_DEADLINE} seconds."
     assert service.executors["demo"].cancelled == ["task-0000"]
-    assert service.budgets is not None
-    assert service.budgets.settled["job/demo/op-1"].seconds == 0
+    balance = service.control.ledger.balances("demo")[0]
+    assert balance.reserved == balance.spent == 0
 
 
 def test_a_task_past_its_run_time_limit_is_cancelled_and_failed(
@@ -639,8 +636,7 @@ def test_a_submission_that_never_reached_the_executor_fails_after_the_grace_peri
     assert observed.status == "failed"
     assert observed.limitations[0] == "The executor did not accept the task."
     assert service.executors["demo"].tasks == {}
-    assert service.budgets is not None
-    assert service.budgets.held == {}
+    assert service.control.ledger.held("job/demo/op-1") is None
 
 
 def test_reconciliation_cancels_tasks_that_no_operation_recorded(
@@ -786,17 +782,6 @@ def test_another_projects_operation_cannot_be_observed_or_cancelled(
     assert service.executors["demo"].cancelled == []
 
 
-def test_without_budgets_the_service_says_it_reserves_nothing(tmp_path: Path) -> None:
-    service = Jobs(tmp_path, budgets=False)
-    with TestClient(service.app) as client:
-        result = service.call(client, "describe_operations", {"project_id": "demo"})
-        assert (
-            "This deployment reserves no budget for jobs."
-            in result["structuredContent"]["limitations"]
-        )
-        assert service.observe(client, "create_task", task()).status == "queued"
-
-
 def test_another_members_operations_are_neither_shown_nor_cancelled(
     jobs: tuple[Jobs, TestClient],
 ) -> None:
@@ -828,17 +813,22 @@ def test_a_gpu_type_is_denied(jobs: tuple[Jobs, TestClient]) -> None:
 
 def test_a_lost_reservation_reply_is_settled_by_its_holder(
     jobs: tuple[Jobs, TestClient],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, client = jobs
-    budgets = service.budgets
-    assert budgets is not None
-    budgets.unavailable = True
+    reserve = service.budgets.reserve
+
+    def lose_reply(project: str, operation: str, usage: JobUsage) -> BudgetAmount:
+        reserve(project, operation, usage)
+        raise httpx.ReadTimeout("lost reply")
+
+    monkeypatch.setattr(service.budgets, "reserve", lose_reply)
     observed = service.observe(client, "create_task", task())
 
     assert observed.status == "failed"
     assert observed.limitations[0] == "The budget could not be reserved."
-    assert budgets.held == {}
-    assert budgets.available["demo"] == 100_000
+    balance = service.control.ledger.balances("demo")[0]
+    assert balance.reserved == balance.spent == 0
     assert service.executors["demo"].tasks == {}
 
 
@@ -870,8 +860,7 @@ def test_a_refused_creation_fails_and_releases_the_reservation(
     service.executors["demo"].failure = "refused"
     observed = service.observe(client, "create_task", task())
     assert observed.status == "failed"
-    assert service.budgets is not None
-    assert service.budgets.held == {}
+    assert service.control.ledger.held("job/demo/op-1") is None
 
 
 def test_a_task_planted_with_a_later_operations_tag_is_not_adopted(
@@ -1087,3 +1076,206 @@ def test_an_executor_that_returns_another_operations_task_fails_the_submission(
     assert first.backend_operation_ref == "task-0000"
     # The task the executor created for op-2 has no record and is cancelled.
     assert service.service.reconcile("demo") == ["task-0001"]
+
+
+def test_reconciliation_replays_a_lost_settlement_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = Jobs(tmp_path)
+    settle = jobs.budgets.settle
+
+    def lose_reply(project: str, operation: str, usage: JobUsage) -> JobSettlement:
+        settle(project, operation, usage)
+        raise httpx.ReadTimeout("lost reply")
+
+    monkeypatch.setattr(jobs.budgets, "settle", lose_reply)
+    with TestClient(jobs.app) as client:
+        jobs.observe(client, "create_task", task())
+        jobs.executors["demo"].advance(
+            "task-0000",
+            "COMPLETE",
+            TesTaskLog(
+                start_time=_START.isoformat(), end_time=(_START + timedelta(seconds=10)).isoformat()
+            ),
+        )
+        result = jobs.observe(client, "get_task", {"project_id": "demo", "operation_id": "op-1"})
+        assert "The reservation is not settled yet." in result.limitations
+    before = jobs.control.ledger.balances("demo")[0]
+    assert before.spent == Decimal("0.003")
+    restarted = Jobs(tmp_path)
+    restarted.service.reconcile("demo")
+    assert restarted.control.ledger.balances("demo")[0] == before
+    assert not Records(tmp_path / "jobs.sqlite3").open_submissions("demo")
+
+
+def test_interrupted_reservation_releases_without_an_executor_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs = Jobs(tmp_path)
+    reserve = jobs.budgets.reserve
+
+    def interrupt(project: str, operation: str, usage: JobUsage) -> BudgetAmount:
+        reserve(project, operation, usage)
+        raise RuntimeError("interrupted before saving the reservation")
+
+    monkeypatch.setattr(jobs.budgets, "reserve", interrupt)
+    with TestClient(jobs.app) as client:
+        assert jobs.call(client, "create_task", task())["isError"]
+    assert jobs.control.ledger.balances("demo")[0].reserved == Decimal("0.18")
+    assert not jobs.executors["demo"].tasks
+    restarted = Jobs(tmp_path)
+    restarted.service.reconcile("demo")
+    with TestClient(restarted.app) as client:
+        replay = restarted.observe(client, "create_task", task())
+        assert replay.status == "failed"
+    assert not restarted.executors["demo"].tasks
+    balance = restarted.control.ledger.balances("demo")[0]
+    assert balance.reserved == balance.spent == 0
+
+
+def test_incompatible_jobs_database_is_preserved(tmp_path: Path) -> None:
+    jobs = Jobs(tmp_path)
+    with TestClient(jobs.app) as client:
+        jobs.observe(client, "create_task", task())
+    path = tmp_path / "jobs.sqlite3"
+    with sqlite3.connect(path) as database:
+        database.execute("ALTER TABLE operation DROP COLUMN incurred")
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="Incompatible jobs database"):
+        Records(path)
+    assert path.read_bytes() == original
+    assert Records(tmp_path / "fresh.sqlite3").get("demo", "op-1") is None
+
+
+def test_attempt_times_supersede_poll_times_and_exclude_retry_gaps(
+    jobs: tuple[Jobs, TestClient],
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    args = {"project_id": "demo", "operation_id": "op-1"}
+    executor = service.executors["demo"]
+    executor.advance("task-0000", "RUNNING")
+    service.now = _START + timedelta(seconds=5)
+    service.observe(client, "get_task", args)
+    service.now = _START + timedelta(seconds=120)
+
+    def attempt(start: float, end: float) -> TesTaskLog:
+        return TesTaskLog(
+            start_time=(_START + timedelta(seconds=start)).isoformat(),
+            end_time=(_START + timedelta(seconds=end)).isoformat(),
+        )
+
+    executor.advance("task-0000", "COMPLETE", attempt(0, 10.25), attempt(100, 110.25))
+    result = service.observe(client, "get_task", args)
+    assert any("0.0063 USD for 21 seconds" in msg for msg in result.limitations)
+    assert service.observe(client, "get_task", args) == result
+    assert service.control.ledger.balances("demo")[0].spent == Decimal("0.0063")
+
+
+def test_concurrent_submissions_admit_and_settle_only_one_job(
+    jobs: tuple[Jobs, TestClient],
+) -> None:
+    service, client = jobs
+    service.control.ledger.synchronize([Allocation("demo", "compute", Decimal("0.2"))])
+    initial = service.control.ledger.balances("demo")[0]
+    headers = service.headers()
+    start = threading.Barrier(2)
+
+    def submit(operation: str) -> PlatformOperationObservation:
+        start.wait(timeout=5)
+        return service.observe(client, "create_task", task(operation), headers=headers)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(submit, ("job-a", "job-b")))
+    (admitted,) = [item for item in results if item.status == "queued"]
+    (denied,) = [item for item in results if item.status == "denied"]
+    assert any("0.02 USD available" in message for message in denied.limitations)
+    executor = service.executors["demo"]
+    assert list(executor.tasks) == [admitted.backend_operation_ref]
+    assert service.control.ledger.balances("demo")[0].job_reservations == (1, Decimal("0.18"))
+    executor.advance(
+        "task-0000",
+        "COMPLETE",
+        TesTaskLog(
+            start_time=_START.isoformat(), end_time=(_START + timedelta(seconds=10)).isoformat()
+        ),
+    )
+    for _ in range(2):
+        assert (
+            service.observe(
+                client, "get_task", {"project_id": "demo", "operation_id": admitted.operation_id}
+            ).status
+            == "completed"
+        )
+        assert service.observe(client, "create_task", task(denied.operation_id)).status == "denied"
+    balance = service.control.ledger.balances("demo")[0]
+    assert (balance.reserved, balance.spent, balance.available) == (
+        Decimal(0),
+        Decimal("0.003"),
+        Decimal("0.197"),
+    )
+    assert balance.revision == initial.revision + 2
+    assert len(executor.tasks) == 1
+
+
+@pytest.mark.parametrize(("started", "seconds"), [(False, 0), (True, 25)])
+def test_canceling_does_not_establish_a_task_start(
+    jobs: tuple[Jobs, TestClient], started: bool, seconds: int
+) -> None:
+    service, client = jobs
+    service.observe(client, "create_task", task())
+    args = {"project_id": "demo", "operation_id": "op-1"}
+    executor = service.executors["demo"]
+    if started:
+        service.now = _START + timedelta(seconds=5)
+        executor.advance("task-0000", "RUNNING")
+        service.observe(client, "get_task", args)
+    service.now = _START + timedelta(seconds=10)
+    executor.advance("task-0000", "CANCELING")
+    service.observe(client, "get_task", args)
+    held = service.control.ledger.balances("demo")[0]
+    assert held.reserved == Decimal("0.18")
+    service.now = _START + timedelta(seconds=30)
+    executor.advance("task-0000", "CANCELED")
+    for _ in range(2):
+        observed = service.observe(client, "get_task", args)
+        assert observed.status == "cancelled"
+        assert any(f"for {seconds} seconds of run time" in msg for msg in observed.limitations)
+        balance = service.control.ledger.balances("demo")[0]
+        assert balance.reserved == 0
+        assert balance.spent == Decimal("0.0003") * seconds
+        assert balance.revision == held.revision + 1
+
+
+def test_loss_after_restart_settles_only_observed_attempt_intervals(tmp_path: Path) -> None:
+    jobs = Jobs(tmp_path)
+    args = {"project_id": "demo", "operation_id": "op-1"}
+    with TestClient(jobs.app) as client:
+        jobs.observe(client, "create_task", task())
+        jobs.now = _START + timedelta(seconds=105)
+        jobs.executors["demo"].advance(
+            "task-0000",
+            "RUNNING",
+            TesTaskLog(
+                start_time=_START.isoformat(), end_time=(_START + timedelta(seconds=10)).isoformat()
+            ),
+            TesTaskLog(start_time=(_START + timedelta(seconds=100)).isoformat()),
+        )
+        assert jobs.observe(client, "get_task", args).status == "running"
+        # A subsequent response without logs cannot erase the known retry gap.
+        jobs.executors["demo"].advance("task-0000", "RUNNING")
+        jobs.observe(client, "get_task", args)
+    held = jobs.control.ledger.balances("demo")[0]
+    restarted = Jobs(tmp_path)
+    restarted.now = _START + timedelta(seconds=110)
+    with TestClient(restarted.app) as client:
+        for _ in range(2):
+            restarted.service.reconcile("demo")
+            observed = restarted.observe(client, "get_task", args)
+            assert observed.status == "failed"
+            assert any("0.006 USD for 20 seconds" in msg for msg in observed.limitations)
+            balance = restarted.control.ledger.balances("demo")[0]
+            assert balance.reserved == 0
+            assert balance.spent == Decimal("0.006")
+            assert balance.revision == held.revision + 1
+            restarted.now += timedelta(seconds=60)

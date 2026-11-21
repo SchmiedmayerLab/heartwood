@@ -58,7 +58,9 @@ SPDX-License-Identifier: MIT
 {{- $services := list (printf "system:serviceaccount:%s:heartwood-data" .Release.Namespace) (printf "system:serviceaccount:%s:heartwood-jobs" .Release.Namespace) -}}
 {{- $contextCallers := concat $services .Values.control.contextCallers | uniq -}}
 {{- $gatewayTls := dict "issuer_directory" "/var/run/heartwood-control/gateway-issuer" "service" (include "heartwood.gatewayService" .) -}}
-{{- dict "gateway_tls" $gatewayTls "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" $contextCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- /* Only the job service reserves and settles the compute budgets of batch tasks. */ -}}
+{{- $jobCallers := list (printf "system:serviceaccount:%s:heartwood-jobs" .Release.Namespace) -}}
+{{- dict "gateway_tls" $gatewayTls "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" $contextCallers "job_callers" $jobCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same
