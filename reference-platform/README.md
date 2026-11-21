@@ -272,6 +272,7 @@ A non-member, a member without a session, and a `project_id` other than the toke
 
 A task runs one container image, which must be one of the task images that the platform lists by digest.
 Its inputs are project objects by DRS identifier `<dataset>.<file>`, read below `/inputs`; its outputs are files below `/outputs`, written to `results/<operation>/<name>` in the project's bucket.
+An identifier `<dataset>.<file>` names the object `datasets/<dataset>/<file>` of the project's bucket, where the data service stores the catalog's objects.
 The service holds one object store account for each project and gives the executor only presigned URLs for single objects.
 It checks that each input exists before it submits the task.
 An input URL expires 300 seconds after the start deadline, and an output URL 300 seconds after the start deadline plus the task's run time limit.
