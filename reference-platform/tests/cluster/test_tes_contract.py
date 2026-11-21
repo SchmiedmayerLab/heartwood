@@ -28,7 +28,16 @@ from heartwood_platform.jobs.tes import (
     TesResources,
     TesTask,
 )
-from jobs import TASK_IMAGE, TERMINAL, Store, executor, job_service_password, store, wait_for
+from jobs import (
+    TASK_IMAGE,
+    TERMINAL,
+    Store,
+    executor,
+    job_service_password,
+    job_service_paused,
+    store,
+    wait_for,
+)
 from kube import Cluster
 
 _BUCKET = "hw-project-demo"
@@ -43,7 +52,11 @@ class Contract:
 
 @pytest.fixture(scope="module")
 def contract(cluster: Cluster) -> Iterator[Contract]:
-    with executor(cluster, "demo") as funnel, store(cluster) as objects:
+    with (
+        job_service_paused(cluster),
+        executor(cluster, "demo") as funnel,
+        store(cluster) as objects,
+    ):
         yield Contract(
             funnel.client("jobsvc", job_service_password(cluster, "demo")), objects, cluster
         )

@@ -312,7 +312,7 @@ The deployed implementation calls a TES 1.1 HTTP API over HTTPS with a CA file a
 ### Job Executors
 
 The chart value `jobs.executor` selects the executor of the job service; `funnel`, the only value, installs one Funnel server for each project, from `images.funnel`, in the namespace `hw-jobs-<project>`.
-Project namespaces, quotas, accounts and policies select pods by the role labels `heartwood.platform/role` `funnel-server`, `funnel-worker` and `funnel-executor`.
+The network policies and the admission policy select pods by the role labels `heartwood.platform/role` `funnel-server`, `funnel-worker` and `funnel-executor`.
 
 | Object in `hw-jobs-<project>` | Content |
 |---|---|
@@ -334,12 +334,13 @@ Worker and executor run as root in their own user namespaces, without capabiliti
 The ValidatingAdmissionPolicy `heartwood-funnel-worker-jobs` applies to the Jobs that a `funnel-worker` ServiceAccount creates in a jobs namespace.
 A worker's token is bound to its pod, whose name is its task identifier with a suffix, and a Job of that worker must:
 
-- carry exactly the executor labels of that task and a name `<task>-<index>`;
+- carry exactly the executor labels of that task, apart from the selector labels that the API server adds to its pod template, a name `<task>-<index>`, and no selector of its own;
 - run as `funnel-executor` without a ServiceAccount token, in a user namespace;
 - mount only the claim `<task>-workspace` of that task, and no other volume;
-- have one container, no init or ephemeral containers, no pull secrets, no environment from Secrets or ConfigMaps, and no node or host name.
+- have one container, no init or ephemeral containers, no pull secrets, no environment from Secrets or ConfigMaps, and no node, scheduling, runtime class, proc mount or host name of its own.
 
-A worker cannot change a Job.
+A worker cannot change a Job, and the quota bounds the number of Jobs in the namespace.
+A session namespace that the control service creates may not carry the jobs label.
 The job service holds the Secret `heartwood-jobs-executors` with its password at each project's server, and `heartwood-jobs-store` with its account `hw-jobs-<project>` at the object store.
 The hook Job `heartwood-jobs-store` creates these accounts and sets each project bucket's policy: the account reads the bucket's objects and writes below `results/`.
 The job service runs as one replica with its records on the claim `data-heartwood-jobs-0` and its certificate `heartwood-jobs-tls`; gateways in the sessions namespace reach it on port 8443.
@@ -705,6 +706,10 @@ The tests check that the control service refuses the researcher's own token, a t
 With an exchanged token the estimate tool prices a synthetic plan from the chart's price sheet.
 The tests check that it refuses a request without a token for the control service, another project, and the launch context of another project.
 The budget overview shows the chart's allocations and the reservation of each launched session, a launch and a deletion change it, and it answers only for the project of the token.
+`test_tes_contract.py` holds the contract of the TES executor that the job service relies on, using only the executor's URL, CA and credential: a task that reads a presigned input and writes its output completes, a failing command is an executor error with its exit code, a missing input and an output that is not written are system errors, a cancelled task's pods are removed, cancelling a finished task leaves its state, an unknown task does not exist, tasks are listed by tag and state, and states only move forward.
+`test_job_service.py` runs a synthetic batch job and a cancellation through the job service's tools with a researcher's exchanged token, and checks the refusal of another project, a GPU request and a reserved tag.
+It also checks that a task created around the job service is cancelled, that an executor pod has no token, no credential and no network, that a worker credential reaches only its own task, that one project's credential is refused by another project's server, and that sessions do not reach the executor API.
+Requests with a token bound to a worker pod show that the admission policy admits an executor Job of the worker's own task and refuses one of another task, one that mounts another task's claim or a Secret, and one with another ServiceAccount, a token or no user namespace.
 
 ### Worker Qualification
 

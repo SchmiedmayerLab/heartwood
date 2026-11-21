@@ -4,6 +4,7 @@ metadata:
   name: {{.TaskId}}-{{.JobId}}
   namespace: {{.JobsNamespace}}
   labels:
+    app: funnel-executor
     heartwood.platform/role: funnel-executor
     heartwood.platform/task: "{{.TaskId}}"
 spec:
@@ -11,6 +12,7 @@ spec:
   template:
     metadata:
       labels:
+        app: funnel-executor
         heartwood.platform/role: funnel-executor
         heartwood.platform/task: "{{.TaskId}}"
     spec:

@@ -35,7 +35,15 @@ from identity import (
     sign_in,
     spawner_token,
 )
-from jobs import TASK_IMAGE, TERMINAL, executor, job_service_password, store, wait_for
+from jobs import (
+    TASK_IMAGE,
+    TERMINAL,
+    executor,
+    job_service_password,
+    job_service_paused,
+    store,
+    wait_for,
+)
 from kube import Cluster
 
 JOBS = "https://heartwood-jobs.heartwood-platform.svc.cluster.local:8443"
@@ -176,14 +184,20 @@ def test_a_researcher_runs_a_batch_job_through_the_job_service(
     assert completed["status"] == "completed", completed
     with store(cluster) as objects:
         assert objects.get(_BUCKET, f"results/{operation}/count.txt") == b"4\n"
-    result = cluster.kubectl(
-        "get",
-        "--namespace=hw-jobs-demo",
-        "jobs",
-        "--output=name",
-        f"--selector=heartwood.platform/task={submitted['backend_operation_ref']}",
-    )
-    assert result.returncode == 0, result.stderr
+    # Funnel removes the task's Jobs after completion.
+    for _ in range(30):
+        result = cluster.kubectl(
+            "get",
+            "--namespace=hw-jobs-demo",
+            "jobs",
+            "--output=name",
+            f"--selector=heartwood.platform/task={submitted['backend_operation_ref']}",
+        )
+        assert result.returncode == 0, result.stderr
+        if not result.stdout.strip():
+            break
+        time.sleep(2)
+    assert result.stdout.strip() == ""
 
 
 def test_a_researcher_cancels_a_running_job(researcher: Researcher) -> None:
@@ -252,6 +266,14 @@ def test_a_task_created_around_the_job_service_is_cancelled(cluster: Cluster) ->
         assert view.state == "CANCELED", states
 
 
+@pytest.fixture
+def paused(cluster: Cluster) -> Iterator[None]:
+    """Tasks created around the job service, which would cancel them."""
+    with job_service_paused(cluster):
+        yield
+
+
+@pytest.mark.usefixtures("paused")
 def test_an_executor_pod_has_no_token_credential_or_network(cluster: Cluster) -> None:
     script = (
         "for target in versitygw.heartwood-platform.svc.cluster.local:7070 "
@@ -290,6 +312,7 @@ def test_an_executor_pod_has_no_token_credential_or_network(cluster: Cluster) ->
     assert lines[-1] == "0"
 
 
+@pytest.mark.usefixtures("paused")
 def test_a_worker_credential_reaches_only_its_own_task(cluster: Cluster) -> None:
     with executor(cluster, "demo") as funnel:
         tes = funnel.client("jobsvc", job_service_password(cluster, "demo"))
@@ -333,7 +356,15 @@ def test_one_projects_job_service_credential_is_refused_by_another_project(
 
 
 def test_the_executor_api_is_reached_only_by_the_job_service(researcher: Researcher) -> None:
+    address = researcher.cluster.kubectl(
+        "get",
+        "--namespace=hw-jobs-demo",
+        "service/funnel-server",
+        "--output=jsonpath={.spec.clusterIP}",
+    )
+    assert address.returncode == 0, address.stderr
     for port in (8000, 9090):
+        # The Service address, so that only the network policy can refuse the connection.
         result = researcher.cluster.kubectl(
             "exec",
             f"--namespace={SESSIONS}",
@@ -341,10 +372,11 @@ def test_the_executor_api_is_reached_only_by_the_job_service(researcher: Researc
             "--",
             "/agnhost",
             "connect",
-            f"funnel-server.hw-jobs-demo.svc:{port}",
+            f"{address.stdout.strip()}:{port}",
             "--timeout=5s",
         )
         assert result.returncode != 0
+        assert "TIMEOUT" in result.stderr + result.stdout
 
 
 # The worker Job policy, with a token bound to a pod of the worker ServiceAccount.
@@ -440,7 +472,11 @@ def _as_worker(cluster: Cluster, token: str, job: dict[str, Any]) -> str:
 
 
 def _executor_job(task: str = _TASK, **changes: Any) -> dict[str, Any]:  # noqa: ANN401
-    labels = {"heartwood.platform/role": "funnel-executor", "heartwood.platform/task": task}
+    labels = {
+        "app": "funnel-executor",
+        "heartwood.platform/role": "funnel-executor",
+        "heartwood.platform/task": task,
+    }
     pod: dict[str, Any] = {
         "restartPolicy": "Never",
         "serviceAccountName": "funnel-executor",
@@ -512,12 +548,25 @@ def test_a_worker_may_create_an_executor_job_of_its_own_task(
         (_executor_job(pod={"serviceAccountName": "funnel-server"}), "run as funnel-executor"),
         (_executor_job(pod={"automountServiceAccountToken": True}), "ServiceAccount token"),
         (_executor_job(pod={"hostUsers": True}), "user namespace"),
+        (_executor_job(pod={"nodeSelector": {"kubernetes.io/hostname": "x"}}), "scheduling"),
+        (_executor_job(pod={"tolerations": [{"operator": "Exists"}]}), "scheduling"),
+        (_executor_job(pod={"priorityClassName": "system-node-critical"}), "scheduling"),
     ],
 )
 def test_a_worker_may_not_create_any_other_job(
     cluster: Cluster, worker_token: tuple[str, str], job: dict[str, Any], message: str
 ) -> None:
     assert message in _as_worker(cluster, worker_token[0], job)
+
+
+def test_a_worker_may_not_choose_the_selector_of_its_job(
+    cluster: Cluster, worker_token: tuple[str, str]
+) -> None:
+    job = _executor_job()
+    labels = job["spec"]["template"]["metadata"]["labels"]
+    job["spec"]["manualSelector"] = True
+    job["spec"]["selector"] = {"matchLabels": labels}
+    assert "choose their selector" in _as_worker(cluster, worker_token[0], job)
 
 
 def test_a_worker_token_not_bound_to_its_pod_creates_no_job(

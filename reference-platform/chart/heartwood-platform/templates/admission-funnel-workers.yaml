@@ -6,6 +6,7 @@ SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CO
 SPDX-License-Identifier: MIT
 */ -}}
 
+{{- if eq .Values.jobs.executor "funnel" }}
 {{- /*
 A Funnel worker may create only executor Jobs of its own task, in the shape that the
 executor template renders. The worker's identity is the ServiceAccount funnel-worker of
@@ -54,10 +55,18 @@ spec:
       message: worker-created Jobs must belong to the task of the worker's pod
     - expression: object.metadata.name.matches('^' + variables.task + '-[0-9]+$')
       message: worker-created Jobs must be named after their task
+    # Funnel finds executor Jobs by the label app, and the API server adds the Job's
+    # selector labels to the pod template before admission.
     - expression: >-
-        has(object.metadata.labels) && object.metadata.labels == variables.labels
-        && variables.labels == {'heartwood.platform/role': 'funnel-executor', 'heartwood.platform/task': variables.task}
+        has(object.metadata.labels) && object.metadata.labels == {'app': 'funnel-executor',
+        'heartwood.platform/role': 'funnel-executor', 'heartwood.platform/task': variables.task}
+        && variables.labels['app'] == 'funnel-executor'
+        && variables.labels['heartwood.platform/role'] == 'funnel-executor'
+        && variables.labels.all(k, k in ['app', 'heartwood.platform/role', 'heartwood.platform/task',
+        'job-name', 'controller-uid', 'batch.kubernetes.io/job-name', 'batch.kubernetes.io/controller-uid'])
       message: worker-created Jobs must carry exactly the executor labels of their task
+    - expression: "!has(object.spec.manualSelector) || object.spec.manualSelector == false"
+      message: worker-created Jobs must not choose their selector
     - expression: has(variables.pod.serviceAccountName) && variables.pod.serviceAccountName == 'funnel-executor'
       message: worker-created Jobs must run as funnel-executor
     - expression: has(variables.pod.automountServiceAccountToken) && variables.pod.automountServiceAccountToken == false
@@ -74,8 +83,16 @@ spec:
       message: worker-created Jobs have one container and no init or ephemeral containers or pull secrets
     - expression: "variables.pod.containers.all(c, !has(c.envFrom) && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))"
       message: worker-created Jobs must not reference Secrets or ConfigMaps in their environment
-    - expression: "!has(variables.pod.nodeName) && !has(variables.pod.hostname) && !has(variables.pod.subdomain)"
-      message: worker-created Jobs must not choose their node or host name
+    - expression: >-
+        !has(variables.pod.nodeName) && !has(variables.pod.nodeSelector) && !has(variables.pod.affinity)
+        && !has(variables.pod.tolerations) && !has(variables.pod.priorityClassName)
+        && !has(variables.pod.runtimeClassName) && !has(variables.pod.schedulerName)
+        && !has(variables.pod.resourceClaims) && !has(variables.pod.hostname) && !has(variables.pod.subdomain)
+      message: worker-created Jobs must not choose their node, scheduling, runtime or host name
+    - expression: >-
+        variables.pod.containers.all(c, !has(c.securityContext) || !has(c.securityContext.procMount)
+        || c.securityContext.procMount == 'Default')
+      message: worker-created Jobs must use the default proc mount
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
@@ -90,3 +107,4 @@ spec:
     namespaceSelector:
       matchLabels:
         heartwood.platform/jobs: "true"
+{{- end }}

@@ -13,7 +13,7 @@ policies, the quota, and the Secrets the server and the job service share. The s
 serves TLS from the platform CA on both ports, issues each task's worker a credential
 bound to that task, and accepts the job service's credential as its only Basic user.
 */ -}}
-{{- if .Values.projects }}
+{{- if and .Values.projects (eq .Values.jobs.executor "funnel") }}
 {{- $image := required "images.funnel must name the Funnel image by digest" .Values.images.funnel -}}
 {{- $apiServer := include "heartwood.apiServer" . | fromJsonArray -}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace "heartwood-jobs-executors" -}}

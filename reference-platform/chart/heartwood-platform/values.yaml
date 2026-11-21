@@ -498,6 +498,7 @@ jobs:
     pods: "20"
     persistentvolumeclaims: "20"
     requests.storage: 20Gi
+    count/jobs.batch: "40"
   # The largest task of each project.
   limits:
     maxCpuCores: 2

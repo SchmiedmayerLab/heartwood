@@ -19,6 +19,7 @@ import re
 import ssl
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -82,6 +83,8 @@ def forward(cluster: Cluster, namespace: str, target: str, port: int) -> Iterato
         line = process.stdout.readline()
         match = re.search(r"127\.0\.0\.1:(\d+)", line)
         assert match is not None, line
+        # kubectl writes a line for each connection; a full pipe would stop it.
+        threading.Thread(target=process.stdout.read, daemon=True).start()
         yield int(match.group(1))
     finally:
         process.terminate()
@@ -221,3 +224,35 @@ def wait_for(
             return view, states
         assert time.monotonic() < deadline, states
         time.sleep(2)
+
+
+@contextmanager
+def job_service_paused(cluster: Cluster) -> Iterator[None]:
+    """Stop the job service while tests create tasks around it, which it would cancel."""
+
+    def scale(replicas: int) -> None:
+        result = cluster.kubectl(
+            "scale",
+            f"--namespace={PLATFORM}",
+            "statefulset/heartwood-jobs",
+            f"--replicas={replicas}",
+        )
+        assert result.returncode == 0, result.stderr
+
+    scale(0)
+    result = cluster.kubectl(
+        "wait", f"--namespace={PLATFORM}", "--for=delete", "pod/heartwood-jobs-0", "--timeout=120s"
+    )
+    assert result.returncode == 0, result.stderr
+    try:
+        yield
+    finally:
+        scale(1)
+        result = cluster.kubectl(
+            "rollout",
+            "status",
+            f"--namespace={PLATFORM}",
+            "statefulset/heartwood-jobs",
+            "--timeout=300s",
+        )
+        assert result.returncode == 0, result.stderr
