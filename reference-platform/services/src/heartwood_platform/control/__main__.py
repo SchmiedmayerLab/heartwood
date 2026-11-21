@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import ssl
 import sys
 from pathlib import Path
@@ -87,6 +88,8 @@ class Settings(_Settings):
     database: Path
     audience: str
     service_callers: frozenset[str]
+    # Service accounts of platform operators, which may rotate project client secrets.
+    operator_callers: frozenset[str] = frozenset()
     redirect_uri_template: str
     keycloak: KeycloakSettings
     # The serving certificate from the platform CA; the service serves only HTTPS.
@@ -178,11 +181,17 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
         settings.synthetic_prices,
+        operators=ServiceTokens(
+            kubernetes.review_token, settings.audience, settings.operator_callers
+        )
+        if settings.operator_callers
+        else None,
     )
 
 
 def main() -> None:
     """Serve the control service with the configuration file named on the command line."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     settings = Settings.model_validate_json(Path(sys.argv[1]).read_text(encoding="utf-8"))
     application = build(settings, Kubernetes(in_cluster_client()))
     serve(application, settings.tls)

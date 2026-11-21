@@ -52,6 +52,9 @@ control:
   # Service accounts that may list projects and launch sessions for researchers: the Hub.
   serviceCallers:
     - system:serviceaccount:heartwood-platform:hub
+  # Service accounts that may rotate the client secret of a project.
+  operatorCallers:
+    - system:serviceaccount:heartwood-platform:heartwood-operator
 
 # Synthetic prices of the control service's estimates, for development and tests.
 # They are not the prices of any provider.

@@ -15,6 +15,17 @@ metadata:
     {{- include "heartwood.labels" . | nindent 4 }}
 automountServiceAccountToken: false
 ---
+# The identity of platform operators at the control service, which accepts its tokens for
+# the rotation of project client secrets. It has no Kubernetes rights.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: heartwood-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
 # Cluster rights of the control service. The admission policy heartwood-control-scope
 # confines them to session namespaces and to the fixed role and subject pairs.
 apiVersion: rbac.authorization.k8s.io/v1

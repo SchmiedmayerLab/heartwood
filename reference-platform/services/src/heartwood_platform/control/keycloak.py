@@ -165,6 +165,13 @@ class Keycloak:
         """Remove a redirect URI from the client of a project."""
         self._change_redirect_uris(project, uri, present=False)
 
+    def rotate_client_secret(self, project: str) -> None:
+        """Replace the secret of the client of a project; the previous one stops working."""
+        client_id = project_client(project)
+        with self._serialized(client_id):
+            client = self._existing(client_id)
+            self._request("POST", f"/clients/{client['id']}/client-secret").raise_for_status()
+
     def client_secret(self, project: str) -> str:
         """Return the secret of the client of a project."""
         client = self._existing(project_client(project))

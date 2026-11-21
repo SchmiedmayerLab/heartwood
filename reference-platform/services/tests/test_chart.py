@@ -596,3 +596,23 @@ def test_schema_rejects_inconsistent_synthetic_prices(value: str, path: str) -> 
     result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
     assert result.returncode != 0
     assert path in result.stderr
+
+
+def test_the_operator_account_may_only_rotate_client_secrets(
+    objects: list[dict[str, Any]],
+) -> None:
+    account = _named(objects, "ServiceAccount", "heartwood-operator")
+    assert account["automountServiceAccountToken"] is False
+    bound = [
+        subject
+        for item in objects
+        if item["kind"] in {"RoleBinding", "ClusterRoleBinding"}
+        for subject in item.get("subjects", [])
+    ]
+    assert not [subject for subject in bound if subject["name"] == "heartwood-operator"]
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    operator = "system:serviceaccount:heartwood-platform:heartwood-operator"
+    assert configuration["operator_callers"] == [operator]
+    assert operator not in configuration["service_callers"]

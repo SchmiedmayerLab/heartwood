@@ -261,7 +261,8 @@
       "required": [
         "platformId",
         "storage",
-        "serviceCallers"
+        "serviceCallers",
+        "operatorCallers"
       ],
       "properties": {
         "platformId": {
@@ -271,6 +272,13 @@
           "type": "string"
         },
         "serviceCallers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
+          }
+        },
+        "operatorCallers": {
           "type": "array",
           "items": {
             "type": "string",
