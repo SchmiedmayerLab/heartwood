@@ -503,7 +503,7 @@ bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
 The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py` and `test_hosted_worker.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
-`test_hosted_worker.py` also needs the worker image in `hub.worker.image`.
+`test_hosted_worker.py` also needs the worker image in `hub.worker.image` and its interpreter in `hub.modelRoute.binaries`.
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
