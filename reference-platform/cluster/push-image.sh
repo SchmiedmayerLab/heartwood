@@ -15,7 +15,7 @@ set -euo pipefail
 
 name="${1:?cluster name is required}"
 image="${2:?image is required}"
-registry="${name}-registry"
+registry="${name}-registry.internal"
 crane_image="gcr.io/go-containerregistry/crane:v0.22.1@sha256:1f968817b95790bed063f71175aa6b8ff879fa17064020415f3e18bb6e6a36e1"
 
 repository="${3:-}"

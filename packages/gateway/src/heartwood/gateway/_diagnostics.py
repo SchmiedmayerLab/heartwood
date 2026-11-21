@@ -267,6 +267,18 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Open Heartwood through the launch link printed by the terminal that started it.",
         "/reference/troubleshooting/#hw-ingress-003-gateway-request-is-missing-the-launch-capability",
     ),
+    "gateway-identity": DiagnosticDefinition(
+        "HW-INGRESS-004",
+        "Gateway request carries no accepted identity",
+        "Open the gateway's URL and sign in as the researcher it was started for.",
+        "/reference/troubleshooting/#hw-ingress-004-gateway-request-carries-no-accepted-identity",
+    ),
+    "gateway-identity-provider": DiagnosticDefinition(
+        "HW-INGRESS-005",
+        "Identity provider is unavailable",
+        "Retry when the identity provider is reachable from the gateway.",
+        "/reference/troubleshooting/#hw-ingress-005-identity-provider-is-unavailable",
+    ),
     "installed-skills": DiagnosticDefinition(
         "HW-SKILL-001",
         "Installed Skill storage needs attention",

@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 {{- range .Values.projects -}}
 {{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list)) -}}
 {{- end -}}
-{{- $keycloak := dict "url" "http://keycloak:8080" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
+{{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-control/platform-ca/ca.crt" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
 {{- /* Without configured addresses, the Service address and the endpoints of the API server are read from the cluster. */ -}}
 {{- $apiServer := .Values.sessions.apiServer -}}
 {{- if not $apiServer -}}
@@ -151,8 +151,8 @@ spec:
         - name: openshell
           configMap:
             name: heartwood-control-openshell
-        # The platform CA certificate, which the service copies into each session
-        # namespace for the supervisors of its sandboxes.
+        # The platform CA certificate, which the service trusts for Keycloak and copies
+        # into each session namespace for the supervisors of its sandboxes.
         - name: platform-ca
           configMap:
             name: platform-ca

@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from identity import curl
-from kube import Cluster
+from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
 _PLATFORM = "heartwood-platform"
@@ -51,10 +51,16 @@ def _pod(name: str, image: str, labels: dict[str, str]) -> dict[str, Any]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
-                    "volumeMounts": [{"name": "scratch", "mountPath": "/scratch"}],
+                    "volumeMounts": [
+                        {"name": "platform-ca", "mountPath": "/etc/platform-ca"},
+                        {"name": "scratch", "mountPath": "/scratch"},
+                    ],
                 }
             ],
-            "volumes": [{"name": "scratch", "emptyDir": {"medium": "Memory"}}],
+            "volumes": [
+                {"name": "platform-ca", "configMap": {"name": PROBE_CA}},
+                {"name": "scratch", "emptyDir": {"medium": "Memory"}},
+            ],
         },
     }
 

@@ -39,5 +39,14 @@ release, and the default scope lists below repeat that release's defaults.
 {{- /* The command line client signs in with the device authorization grant. */ -}}
 {{- $clients = append $clients (dict "clientId" "heartwood-cli" "publicClient" true "standardFlowEnabled" false "directAccessGrantsEnabled" false "attributes" (dict "oauth2.device.authorization.grant.enabled" "true") "defaultClientScopes" $defaults "optionalClientScopes" $projectScopes) -}}
 {{- $serviceAccount := dict "username" "service-account-heartwood-control" "enabled" true "serviceAccountClientId" "heartwood-control" "clientRoles" (dict "realm-management" (list "manage-clients")) -}}
-{{- dict "realm" "heartwood" "enabled" true "clientScopes" $scopes "defaultDefaultClientScopes" (list "role_list" "saml_organization" "AuthnContextClassRef" "profile" "email" "roles" "web-origins" "acr" "basic") "defaultOptionalClientScopes" (list "offline_access" "address" "phone" "microprofile-jwt" "organization") "clients" $clients "users" (list $serviceAccount) | toPrettyJson -}}
+{{- $users := list $serviceAccount -}}
+{{- /*
+Synthetic researchers. The identifier of a user is the subject of its tokens, and the
+registry lists members by subject. Keycloak reads each password from its environment.
+*/ -}}
+{{- range $index, $researcher := .Values.researchers -}}
+{{- $password := dict "type" "password" "temporary" false "value" (printf "${HEARTWOOD_RESEARCHER_PASSWORD_%d}" $index) -}}
+{{- $users = append $users (dict "id" $researcher.subject "username" $researcher.username "enabled" true "emailVerified" true "email" (printf "%s@example.invalid" $researcher.username) "firstName" "Synthetic" "lastName" "Researcher" "credentials" (list $password)) -}}
+{{- end -}}
+{{- dict "realm" "heartwood" "enabled" true "clientScopes" $scopes "defaultDefaultClientScopes" (list "role_list" "saml_organization" "AuthnContextClassRef" "profile" "email" "roles" "web-origins" "acr" "basic") "defaultOptionalClientScopes" (list "offline_access" "address" "phone" "microprofile-jwt" "organization") "clients" $clients "users" $users | toPrettyJson -}}
 {{- end }}

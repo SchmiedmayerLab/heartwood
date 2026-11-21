@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from heartwood.adapters.platform import select_platform_adapter
 from heartwood.gateway._diagnostics import diagnostic_for
+from heartwood.gateway._identity import IdentityDeployment
 from heartwood.gateway._mcp_policy import McpDestination, mcp_destinations_from_mapping
 from heartwood.gateway._model_catalog import (
     ModelCatalogError,
@@ -66,6 +67,7 @@ _OPTIONAL_FIELDS = {
     "model_connections",
     "model_metadata",
     "mcp_destinations",
+    "identity",
 }
 
 
@@ -100,6 +102,8 @@ class ProjectDeployment:
     model_connections: tuple[ModelConnection, ...] = ()
     # Origins the gateway may connect to as an MCP client; empty refuses every connection.
     mcp_destinations: tuple[McpDestination, ...] = ()
+    # The OpenID Connect client and the one researcher an identity-proxy gateway accepts.
+    identity: IdentityDeployment | None = None
     manifest: Path | None = None
     manifest_sha256: str | None = None
 
@@ -274,6 +278,7 @@ def _read_manifest(
     return ProjectDeployment(
         project=project,
         policy=policy,
+        identity=_identity(record["identity"], project) if "identity" in record else None,
         worker=worker,
         evidence=evidence,
         requirements=requirements,
@@ -284,6 +289,24 @@ def _read_manifest(
         manifest=resolved,
         manifest_sha256=hashlib.sha256(content.encode()).hexdigest(),
     )
+
+
+def _identity(table: object, project: ProjectContext) -> IdentityDeployment:
+    """Load the identity table and check the operator files it names."""
+    try:
+        identity = IdentityDeployment.model_validate(table)
+    except ValidationError as error:
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc']) or 'identity'}: {item['msg']}"
+            for item in error.errors(include_input=False, include_url=False)
+        )
+        raise DeploymentError("deployment-manifest", f"invalid identity table: {details}") from None
+    validate_operator_file(identity.client_secret_file, project)
+    if stat.S_IMODE(identity.client_secret_file.stat().st_mode) & 0o077:
+        raise ProjectStateError("identity client secret requires owner-only access")
+    if identity.ca_file is not None:
+        validate_operator_file(identity.ca_file, project)
+    return identity
 
 
 def _model_connections(connections: object, metadata: object) -> tuple[ModelConnection, ...]:

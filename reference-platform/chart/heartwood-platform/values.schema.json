@@ -10,7 +10,8 @@
     "keycloak",
     "versitygw",
     "sessions",
-    "control"
+    "control",
+    "researchers"
   ],
   "$defs": {
     "image": {
@@ -113,7 +114,7 @@
       "properties": {
         "url": {
           "type": "string",
-          "pattern": "^(https?://[^/]+)?$"
+          "pattern": "^(https://[^/]+)?$"
         }
       }
     },
@@ -265,6 +266,27 @@
         "redirectUriTemplate": {
           "type": "string",
           "pattern": "^https?://[^{}\\s]+/[^\\s]*\\{subject\\}[^\\s]*\\{project\\}[^\\s]*$"
+        }
+      }
+    },
+    "researchers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "username"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "username": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          }
         }
       }
     }

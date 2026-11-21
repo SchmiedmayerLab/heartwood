@@ -56,6 +56,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerControlPlaneError,
     current_worker_attempt,
 )
+from heartwood.gateway._access import OPERATOR_ACTOR
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION,
@@ -1158,7 +1159,7 @@ class SessionGateway:
                 command_id=f"audit-checkpoint-{uuid4().hex}",
                 session_id=session_id,
                 kind=CommandKind.AUDIT_EXPORT,
-                actor_id="deployment-operator",
+                actor_id=OPERATOR_ACTOR,
                 created_at=(
                     datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                 ),

@@ -21,11 +21,11 @@ from urllib.parse import quote, urlencode
 
 import pytest
 from identity import curl
-from kube import Cluster
+from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
 _CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
-_KEYCLOAK = "http://keycloak.heartwood-platform.svc.cluster.local:8080"
+_KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
 _POD = "hw-control-probe"
@@ -53,10 +53,16 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
-                    "volumeMounts": [{"name": "scratch", "mountPath": "/scratch"}],
+                    "volumeMounts": [
+                        {"name": "platform-ca", "mountPath": "/etc/platform-ca"},
+                        {"name": "scratch", "mountPath": "/scratch"},
+                    ],
                 }
             ],
-            "volumes": [{"name": "scratch", "emptyDir": {"medium": "Memory"}}],
+            "volumes": [
+                {"name": "platform-ca", "configMap": {"name": PROBE_CA}},
+                {"name": "scratch", "emptyDir": {"medium": "Memory"}},
+            ],
         },
     }
     account = {

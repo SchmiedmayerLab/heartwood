@@ -72,6 +72,9 @@ def curl(cluster: Cluster, pod: str, *arguments: str, text_input: str = "") -> s
             "--show-error",
             "--max-time",
             "60",
+            # Keycloak is verified against the platform CA alone.
+            "--cacert",
+            "/etc/platform-ca/ca.crt",
             *arguments,
         )
     finally:

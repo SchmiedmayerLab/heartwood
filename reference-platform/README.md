@@ -54,10 +54,10 @@ The platform is for synthetic and open data only.
 | Component | Content |
 |---|---|
 | PostgreSQL | One StatefulSet with a role and a database for Keycloak |
-| Keycloak | One Deployment that imports the realm `heartwood` at its first start |
+| Keycloak | One Deployment that serves HTTPS on port 8443 and imports the realm `heartwood` at its first start |
 | Control service | One StatefulSet with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
-| Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace, and Secret `keycloak-tls` with the serving certificate of Keycloak |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape` and `heartwood-session-services` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -73,13 +73,30 @@ Helm generates every credential at the first installation and keeps the existing
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
 
+### Keycloak
+
+Keycloak serves only HTTPS, with a certificate that the platform CA signs for the names of its Service (`keycloak`, `keycloak.heartwood-platform`, and the `.svc` and `.svc.cluster.local` forms), valid for 825 days.
+Helm creates the certificate together with the CA and keeps both on an upgrade.
+The issuer of every token is `https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood`, or the `keycloak.url` value.
+The control service and the bootstrap Job verify Keycloak against the platform CA alone.
+A gateway does the same with `ca_file` in its `[identity]` table, which names a regular file such as a copy that an init container makes, because a file in a ConfigMap volume is a symbolic link that the operator file checks refuse.
+The certificates are not renewed automatically.
+Deleting the Secret `keycloak-tls` and running `helm upgrade` issues a new serving certificate, and deleting the Secret `platform-ca` replaces the CA and the serving certificate together.
+Keycloak reads its certificate files again every minute, so it serves a new certificate within a few minutes, after the kubelet updates the Secret volume.
+After a new CA, the control service and running gateways need a restart once Keycloak serves the new certificate.
+A `keycloak.url` with another host name needs a certificate for that name, which the chart does not create.
+
 ### Keycloak Realm
 
 The realm import creates the client scopes `svc-control`, `svc-data` and `svc-jobs`, each with one audience, and one scope `project-<id>` for each project.
 It creates the client `heartwood-control` with the role `manage-clients` and the optional scope `kc-admin-api`, the audience clients `heartwood-data` and `heartwood-jobs`, and the public client `heartwood-cli`.
+It creates one account for each entry in `researchers`, with the entry's `subject` as the identifier of the account and the subject of its tokens.
+The accounts are synthetic, and `projects[].members` names them by subject.
+Helm generates the password of each account at the first installation and stores it in the Secret `keycloak-researchers` under the user name.
 `files/keycloak-client-scopes.json` holds the built-in client scopes of the pinned Keycloak release, because a realm file that lists client scopes replaces the built-in ones.
 The Job `keycloak-bootstrap` disables the temporary administrator that Keycloak creates at its first start.
 Keycloak skips the import when the realm exists, so a later change to the realm needs a temporary administrator from `kc.sh bootstrap-admin`.
+An account added to `researchers` after the first installation gets a password in the Secret and no account in Keycloak until it is created that way.
 
 ### Control Service
 
@@ -227,6 +244,7 @@ bash reference-platform/cluster/delete-cluster.sh heartwood
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
+The nodes reach it as `<name>-registry.internal`, a host name with a dot, which the worker deployment requires of an image repository.
 `push-image.sh` pushes a local image to that registry and prints the reference by digest under which the cluster pulls it.
 Given a repository as a third argument, it copies an image named by digest from a remote registry to that repository in the cluster's registry, with every platform of its index, and prints the reference under the same digest.
 `network-policy-controls.sh` runs a reachable-connection control and two blocked-connection controls, one denied by an ingress policy and one by an egress policy.

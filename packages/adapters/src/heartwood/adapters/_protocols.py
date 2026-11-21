@@ -23,11 +23,12 @@ type ModelSourceId = Literal[
     "openai-subscription",
     "stanford-ai-api-gateway",
 ]
-type IngressMode = Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]
+type IngressMode = Literal["direct-loopback", "jupyter-proxy", "trusted-proxy", "identity-proxy"]
 INGRESS_MODES: tuple[IngressMode, ...] = (
     "direct-loopback",
     "jupyter-proxy",
     "trusted-proxy",
+    "identity-proxy",
 )
 
 

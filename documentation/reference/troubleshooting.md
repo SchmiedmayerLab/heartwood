@@ -27,7 +27,7 @@ Codes use `HW-{AREA}-{NNN}`.
 | `SETUP` | Non-secret Heartwood configuration and policy agreement |
 | `MODEL` | Model selection, compatibility, and managed model files |
 | `CREDENTIAL` | Provider API key, subscription credential, or managed-identity availability |
-| `INGRESS` | Gateway binding, proxy trust, origins, forwarding metadata, and paths |
+| `INGRESS` | Gateway binding, proxy trust, origins, forwarding metadata, paths, and researcher identity |
 | `AGENT` | OpenHands agent runtime availability |
 | `WORKSPACE` | Read-only project file and change inspection |
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
@@ -556,6 +556,7 @@ Run `heartwood doctor`, inspect the failed check and its next action, and includ
 The requested bind, origin, prefix, or proxy trust values do not form one safe route.
 Use the default loopback gateway for direct access.
 For a Jupyter or trusted platform proxy, configure the exact browser-visible origin and base path, the expected prefix behavior, and the trusted proxy source boundary.
+`identity-proxy` ingress also needs a non-loopback bind and the manifest's `[identity]` table, and the table is refused with every other mode.
 
 Do not solve this diagnostic by widening the bind or using a wildcard origin.
 See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
@@ -577,6 +578,27 @@ If the link was already used or the gateway was restarted, stop Heartwood, start
 
 Automation must send the capability supplied through `--capability-fd` in the `X-Heartwood-Capability` header.
 Do not share the link or the secret with other users or processes.
+
+### `HW-INGRESS-004`: Gateway Request Carries No Accepted Identity
+
+The gateway runs with `identity-proxy` ingress and the request carried neither a live sign-in nor an accepted access token, or a sign-in was refused.
+Open the gateway's URL in the browser and sign in as the researcher the gateway was started for.
+A sign-in ends with its tokens and at every gateway restart; reload the page to sign in again.
+
+A sign-in is refused when the account is another person's, when the sign-in attempt is older than ten minutes or was already completed, or when the provider rejects the gateway's client secret or redirect URI.
+It is also refused when the callback arrives in another browser than the one that started the sign-in, when the browser blocks the gateway's cookies, or when the gateway restarted in between.
+An access token is refused unless the configured issuer signed it, it is unexpired, its `aud` contains the gateway's client and its `sub` is the bound researcher.
+An access token signed with an algorithm other than RS256 or ES256, or without a key identifier, and an identity token are refused as well.
+Operators compare the manifest's [`[identity]` table](configuration.md#identity) with the provider's client: issuer, client identifier, secret, subject and the redirect URI `<public origin><base path>/oauth_callback`.
+
+### `HW-INGRESS-005`: Identity Provider Is Unavailable
+
+The gateway could not reach the identity provider, or the provider answered with a document the gateway cannot use.
+Status `503` means the request to the provider failed or timed out; status `502` means the provider answered with an error or an unusable document.
+Retry when the provider is reachable.
+
+Operators check that `provider_url` is reachable from the gateway, that `ca_file` holds the authority of the provider's certificate, and that the discovery document's `issuer` equals the configured `issuer`.
+The discovery document's authorization, token and key endpoints must lie on the origin of `issuer` or of `provider_url`.
 
 ## Browser Access
 

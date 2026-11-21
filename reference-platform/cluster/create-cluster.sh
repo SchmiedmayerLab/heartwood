@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: MIT
 
 # Creates a kind cluster with Calico and the Agent Sandbox controller from pinned,
-# hash-verified upstream manifests, and a local registry NAME-registry for images that
+# hash-verified upstream manifests, and a local registry NAME-registry.internal for images that
 # are built for the cluster. Every kubectl call names the cluster's context, and kind
 # writes to the kubeconfig that KUBECONFIG selects.
 # Usage: create-cluster.sh NAME
@@ -23,7 +23,7 @@ calico_sha256="3368e62807b949438842e31f46c9b6df741731b4c755d0a622dd062b2cb20495"
 agent_sandbox_url="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.3/sandbox.yaml"
 agent_sandbox_sha256="725fafdabe6aac202a89dc57f1cfe0e2e92f3164c8c2bd343fffca52f7039d96"
 registry_image="registry:3.1.2@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c"
-registry="${name}-registry"
+registry="${name}-registry.internal"
 
 downloads="$(mktemp -d)"
 trap 'rm -rf "${downloads}"' EXIT
@@ -45,8 +45,11 @@ kind create cluster --name "${name}" --image "${node_image}" \
   --config "${cluster_dir}/kind-config.yaml" --wait 0s
 
 # The registry serves only the kind network, where the nodes reach it by name without
-# TLS. push-image.sh pushes to it from a container on that network.
-docker run --detach --name "${registry}" --network kind "${registry_image}" >/dev/null
+# TLS. push-image.sh pushes to it from a container on that network. Its name on the
+# network has a dot, because the worker deployment accepts an image repository only
+# on localhost or on a host name with a dot.
+docker run --detach --name "${name}-registry" --network kind --network-alias "${registry}" \
+  "${registry_image}" >/dev/null
 for node in $(kind get nodes --name "${name}"); do
   docker exec "${node}" mkdir -p "/etc/containerd/certs.d/${registry}:5000"
   docker exec --interactive "${node}" \

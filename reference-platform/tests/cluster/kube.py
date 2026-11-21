@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from typing import Any
 
 CONTROL = "system:serviceaccount:heartwood-platform:heartwood-control"
+# The ConfigMap with the platform CA certificate that the tests copy into heartwood-sessions
+# for their probe pods.
+PROBE_CA = "hw-probe-platform-ca"
 
 
 @dataclass(frozen=True)

@@ -23,13 +23,21 @@ from pydantic import ValidationError
 
 from heartwood.gateway._access import (
     CAPABILITY_HEADER,
+    AccessResponse,
+    AccessUnavailableError,
+    GatewayAccess,
     LaunchCapability,
     LaunchRequest,
     LaunchResponse,
 )
 from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._gateway import SessionGateway
-from heartwood.gateway._ingress import IngressPolicy, IngressRequestError
+from heartwood.gateway._identity import IDENTITY_INGRESS_MODE, IdentityAccess
+from heartwood.gateway._ingress import (
+    IngressConfigurationError,
+    IngressPolicy,
+    IngressRequestError,
+)
 from heartwood.gateway._lifecycle import GatewayClosedError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._rest import RestGateway, RestRequest
@@ -59,7 +67,7 @@ class GatewayAsgiApp:
         *,
         static_dir: Path | None = None,
         ingress: IngressPolicy | None = None,
-        access: LaunchCapability | None = None,
+        access: GatewayAccess | None = None,
     ) -> None:
         """Create an app with safe loopback ingress and a fresh capability unless supplied."""
         self.gateway = gateway
@@ -67,6 +75,10 @@ class GatewayAsgiApp:
         self.static_dir = static_dir
         self.ingress = IngressPolicy.create() if ingress is None else ingress
         self.access = LaunchCapability.generate() if access is None else access
+        if (self.ingress.mode == IDENTITY_INGRESS_MODE) != isinstance(self.access, IdentityAccess):
+            raise IngressConfigurationError(
+                "identity-proxy ingress and identity access require each other"
+            )
 
     async def __call__(self, scope: AsgiScope, receive: AsgiReceive, send: AsgiSend) -> None:
         """Handle one ASGI connection."""
@@ -111,10 +123,32 @@ class GatewayAsgiApp:
         if request.path == "/launch":
             await self._handle_launch(method=method, receive=receive, send=send)
             return
-        requires_capability = _is_gateway_api_path(request.path)
-        if requires_capability and not self.access.authorizes(_scope_headers(scope)):
-            await _send_capability_required(send)
+        headers = _scope_headers(scope)
+        owned = await asyncio.to_thread(
+            partial(
+                self.access.browser_response,
+                method=method,
+                path=request.path,
+                query_string=request.query_string,
+                headers=headers,
+            )
+        )
+        if owned is not None:
+            await _send_access_response(send, owned)
             return
+        requires_capability = _is_gateway_api_path(request.path)
+        actor_id: str | None = None
+        if requires_capability:
+            try:
+                actor_id = await asyncio.to_thread(self.access.principal, headers)
+            except AccessUnavailableError:
+                await _send_access_response(
+                    send, AccessResponse(503, check_id="gateway-identity-provider")
+                )
+                return
+            if actor_id is None:
+                await self._send_access_required(send)
+                return
         route = _session_events_stream_route(request.path)
         if route is not None and method == "GET":
             try:
@@ -150,7 +184,7 @@ class GatewayAsgiApp:
                 body={"error": "gateway request body must be UTF-8"},
             )
             return
-        if requires_capability:
+        if actor_id is not None:
             response = await asyncio.to_thread(
                 self.rest.handle,
                 RestRequest(
@@ -160,7 +194,7 @@ class GatewayAsgiApp:
                         query_string=request.query_string,
                     ),
                     body=decoded_body,
-                    actor_id=self.access.actor_id,
+                    actor_id=actor_id,
                 ),
             )
             await _send_json_response(send, status_code=response.status_code, body=response.body)
@@ -173,13 +207,14 @@ class GatewayAsgiApp:
                 path=request.path,
                 browser_base_path=self.ingress.browser_base_path,
                 browser_origin=request.external_origin,
+                framing="'none'" if self.ingress.mode == IDENTITY_INGRESS_MODE else "'self'",
             )
             return
         await _send_json_response(send, status_code=404, body={"error": "unknown gateway route"})
 
     async def _handle_launch(self, *, method: str, receive: AsgiReceive, send: AsgiSend) -> None:
         if method != "POST":
-            await _send_capability_required(send, status_code=403)
+            await self._send_access_required(send, status_code=403)
             return
         try:
             request = LaunchRequest.model_validate_json(await _read_http_body(receive))
@@ -190,7 +225,7 @@ class GatewayAsgiApp:
             return
         capability = self.access.exchange_launch_token(request.token)
         if capability is None:
-            await _send_capability_required(send, status_code=403)
+            await self._send_access_required(send, status_code=403)
             return
         await _send_json_response(
             send, status_code=200, body=LaunchResponse(capability=capability).model_dump()
@@ -294,9 +329,14 @@ class GatewayAsgiApp:
             return
 
         await send({"type": "websocket.accept"})
-        if not self.access.authorizes(_scope_headers(scope)) and not await self._authorize_socket(
-            receive
-        ):
+        try:
+            authorized = await asyncio.to_thread(
+                self.access.principal, _scope_headers(scope)
+            ) is not None or await self._authorize_socket(receive)
+        except AccessUnavailableError:
+            await send({"type": "websocket.close", "code": 1013})
+            return
+        if not authorized:
             await send({"type": "websocket.close", "code": 1008})
             return
         try:
@@ -372,7 +412,12 @@ class GatewayAsgiApp:
             or not isinstance(payload["capability"], str)
         ):
             return False
-        return self.access.authorizes({CAPABILITY_HEADER: (payload["capability"],)})
+        return self.access.principal({CAPABILITY_HEADER: (payload["capability"],)}) is not None
+
+    async def _send_access_required(self, send: AsgiSend, *, status_code: int = 401) -> None:
+        await _send_access_response(
+            send, AccessResponse(status_code, check_id=self.access.refusal_check)
+        )
 
 
 async def _read_http_body(receive: AsgiReceive) -> bytes:
@@ -425,13 +470,24 @@ async def _send_sse_events(
     await send({"type": "http.response.body", "body": body, "more_body": True})
 
 
-async def _send_capability_required(send: AsgiSend, *, status_code: int = 401) -> None:
-    diagnostic = diagnostic_for("gateway-capability")
-    await _send_json_response(
-        send,
-        status_code=status_code,
-        body={"code": diagnostic.code, "error": diagnostic.next_action},
-    )
+async def _send_access_response(send: AsgiSend, response: AccessResponse) -> None:
+    """Send a redirect, or a refusal that carries only its stable diagnostic."""
+    if response.location is None:
+        diagnostic = diagnostic_for(response.check_id or "gateway-capability")
+        await _send_json_response(
+            send,
+            status_code=response.status_code,
+            body={"code": diagnostic.code, "error": diagnostic.next_action},
+        )
+        return
+    headers = [
+        (b"location", response.location.encode("ascii")),
+        (b"cache-control", b"no-store"),
+        (b"referrer-policy", b"no-referrer"),
+    ]
+    headers.extend((b"set-cookie", cookie.encode("ascii")) for cookie in response.cookies)
+    await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
+    await send({"type": "http.response.body", "body": b""})
 
 
 def _scope_headers(scope: AsgiScope) -> dict[str, tuple[str, ...]]:
@@ -475,6 +531,7 @@ async def _send_static_response(
     path: str,
     browser_base_path: str,
     browser_origin: str,
+    framing: str,
 ) -> None:
     resolved = _static_file_path(static_dir, path=path)
     if resolved is None:
@@ -488,11 +545,14 @@ async def _send_static_response(
             "headers": [
                 (b"content-type", content_type.encode("ascii")),
                 (b"cache-control", b"no-store"),
-                (b"content-security-policy", _browser_content_security_policy(browser_origin)),
+                (
+                    b"content-security-policy",
+                    _browser_content_security_policy(browser_origin, framing=framing),
+                ),
                 (b"permissions-policy", b"camera=(), geolocation=(), microphone=()"),
                 (b"referrer-policy", b"no-referrer"),
                 (b"x-content-type-options", b"nosniff"),
-                (b"x-frame-options", b"SAMEORIGIN"),
+                (b"x-frame-options", b"DENY" if framing == "'none'" else b"SAMEORIGIN"),
             ],
         }
     )
@@ -502,7 +562,7 @@ async def _send_static_response(
     await send({"type": "http.response.body", "body": body})
 
 
-def _browser_content_security_policy(browser_origin: str) -> bytes:
+def _browser_content_security_policy(browser_origin: str, *, framing: str) -> bytes:
     origin = urlsplit(browser_origin)
     websocket_scheme = "wss" if origin.scheme == "https" else "ws"
     websocket_origin = f"{websocket_scheme}://{origin.netloc}"
@@ -512,7 +572,7 @@ def _browser_content_security_policy(browser_origin: str) -> bytes:
         f"connect-src 'self' {websocket_origin}; "
         "font-src 'self'; "
         "form-action 'self'; "
-        "frame-ancestors 'self'; "
+        f"frame-ancestors {framing}; "
         "img-src 'self' data:; "
         "object-src 'none'; "
         "script-src 'self'; "
