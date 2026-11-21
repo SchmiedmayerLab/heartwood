@@ -10,7 +10,9 @@ The Hub loads this file from its jupyterhub_config.d directory, with the configu
 object ``c`` defined. Researchers sign in through Keycloak; each named server is one
 researcher's Heartwood gateway for one project, and its name is the project. Before a
 spawn the Hub asks the control service to prepare the session, then starts the gateway
-pod in the sessions namespace with the session's ServiceAccount and Secret.
+pod in the sessions namespace with the session's ServiceAccount and Secret. The Hub
+reaches Keycloak, the control service and the proxy's API over HTTPS and trusts the
+platform CA alone.
 
 A researcher's user name is the researcher identifier that the control service also
 derives: ``r`` and 32 hexadecimal digits of the HMAC-SHA-256 of the issuer, a zero byte
@@ -126,6 +128,7 @@ def pod_settings(launch: dict[str, Any], settings: dict[str, Any]) -> dict[str, 
 
 def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     """Configure the Hub, its authenticator and its spawner."""
+    from jupyterhub.proxy import ConfigurableHTTPProxy
     from kubespawner import KubeSpawner
     from tornado import web
     from tornado.httpclient import AsyncHTTPClient, HTTPRequest
@@ -221,6 +224,33 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         ]
         spawner.args = gateway_arguments(current, researcher, project)
 
+    proxy_clients: list[Any] = []
+
+    class HeartwoodProxy(ConfigurableHTTPProxy):  # type: ignore[misc]
+        """The Hub's proxy, whose API the Hub calls over HTTPS, trusting the platform CA alone."""
+
+        async def api_request(
+            self,
+            path: str,
+            method: str = "GET",
+            body: Any = None,  # noqa: ANN401
+            client: Any = None,  # noqa: ANN401
+        ) -> Any:  # noqa: ANN401
+            if client is None:
+                if not proxy_clients:
+                    proxy_clients.append(
+                        AsyncHTTPClient(
+                            force_instance=True,
+                            defaults={
+                                "ca_certs": settings["ca_file"],
+                                "validate_cert": True,
+                                "prepare_curl_callback": platform_ca_only,
+                            },
+                        )
+                    )
+                client = proxy_clients[0]
+            return await super().api_request(path, method=method, body=body, client=client)
+
     class HeartwoodSpawner(KubeSpawner):  # type: ignore[misc]
         """A KubeSpawner whose named servers are Heartwood gateways."""
 
@@ -263,6 +293,9 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     }
     # Every account of the realm may sign in; the control service authorizes projects.
     c.GenericOAuthenticator.allow_all = True
+
+    c.JupyterHub.proxy_class = HeartwoodProxy
+    c.ConfigurableHTTPProxy.api_url = settings["proxy_api_url"]
 
     c.JupyterHub.allow_named_servers = True
     c.JupyterHub.named_server_limit_per_user = 0
