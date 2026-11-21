@@ -8,16 +8,25 @@ from __future__ import annotations
 
 import ast
 import copy
+import http.server
 import importlib
+import importlib.util
 import os
 import re
 import subprocess
+import sys
+import threading
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 _ROOT = Path(__file__).resolve().parents[3]
 _COMMIT = "1" * 40
@@ -205,3 +214,78 @@ def test_cluster_stage_runs_after_the_candidate_build_it_downloads() -> None:
         assert _selected("kubernetes-qualification.yml", changed)
         assert _selected("worker-candidate.yml", changed)
     assert not _selected("kubernetes-qualification.yml", "documentation/index.md")
+
+
+def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
+    spec = importlib.util.spec_from_file_location("kubernetes_runner", _ROOT / _RUNNER)
+    assert spec is not None
+    assert spec.loader is not None
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    received: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_PUT(self) -> None:
+            received.append(self.headers["Authorization"])
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_arguments: object) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setattr(runner, "_CONTROL", f"http://127.0.0.1:{server.server_port}")
+    sent: list[str] = []
+
+    class Cluster:
+        def json(self, *arguments: str) -> dict[str, Any]:
+            assert arguments == ("configmap", "platform-ca", "--namespace", "heartwood-platform")
+            return {"data": {"ca.crt": _authority()}}
+
+        def kubectl(self, *arguments: str, stdin: str | None = None) -> str:
+            assert stdin is not None
+            # The first attempt reaches the pod shortened, as kubectl exec can deliver it.
+            delivered = stdin[:-3] if not sent else stdin
+            sent.append(delivered)
+            script, *values = arguments[arguments.index("-c") + 1 :]
+            return subprocess.run(
+                [sys.executable, "-I", "-c", script, *values],
+                input=delivered,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+
+    try:
+        reply = runner._call(Cluster(), "PUT", "synthetic-token\n")
+    finally:
+        server.shutdown()
+    assert reply == {"status": 200, "body": "{}"}
+    assert len(sent) == 2
+    # Only the complete token reached the control service.
+    assert received == ["Bearer synthetic-token"]
+
+
+def _authority() -> str:
+    """Return a synthetic CA certificate, which the launch script loads as its trust."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Synthetic Platform CA")])
+    now = datetime.now(UTC)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode()
