@@ -959,18 +959,31 @@ export class GatewayClient implements HeartwoodClient {
   }
 }
 
+// Gateway refusals such as ingress checks carry a stable diagnostic code beside the message.
+const gatewayError = async (response: Response): Promise<Error> => {
+  let error = `Gateway request failed with status ${response.status}`;
+  try {
+    const payload = (await response.json()) as {
+      code?: string;
+      error?: string;
+    };
+    if (payload.error !== undefined) {
+      error =
+        payload.code === undefined ?
+          payload.error
+        : `${payload.code}: ${payload.error}`;
+    }
+  } catch {
+    // Preserve the gateway status when an upstream proxy returns HTML/text.
+  }
+  return new Error(error);
+};
+
 const parseResponse = async (
   response: Response,
 ): Promise<SessionProjectionResponse> => {
   if (!response.ok) {
-    let error = `Gateway request failed with status ${response.status}`;
-    try {
-      const payload = (await response.json()) as { error?: string };
-      error = payload.error ?? error;
-    } catch {
-      // Preserve the gateway status when an upstream proxy returns HTML/text.
-    }
-    throw new Error(error);
+    throw await gatewayError(response);
   }
   return parseProjectionPayload(await response.text());
 };
@@ -980,14 +993,7 @@ const asError = (value: unknown): Error =>
 
 const parseJsonResponse = async <Value>(response: Response): Promise<Value> => {
   if (!response.ok) {
-    let error = `Gateway request failed with status ${response.status}`;
-    try {
-      const payload = (await response.json()) as { error?: string };
-      error = payload.error ?? error;
-    } catch {
-      // Preserve the gateway status when an upstream proxy returns HTML/text.
-    }
-    throw new Error(error);
+    throw await gatewayError(response);
   }
   return (await response.json()) as Value;
 };

@@ -46,3 +46,8 @@ uv run python packages/adapters/scripts/check_platform_response.py mcp-tasks fix
 
 The checker validates individual exchanges against the pinned upstream definitions and Heartwood profile checks.
 It does not contact the server, establish transition history, or authenticate the captured declarations.
+
+## Failure States
+
+`failure-states.json` lists each coded failure state of the platform contract with the diagnostic Heartwood shows for it.
+The gateway tests produce these states, using the deterministic service fakes for the model failures, and check the terminal and notebook presentation; the browser tests render the same file.

@@ -22,7 +22,7 @@ Heartwood reuses OpenHands for the conversation loop and coding tools and does n
 - [reviewed research stages](../use/research-workflows.md) with independent artifact checks, [experiment records](experiments.md), task tracking, and bounded research specialists;
 - verified and explicitly installed [Skills](skills.md);
 - platform-aware model discovery and Heartwood-managed model planning;
-- generic, Terra, and Stanford Carina platform adapters and a versioned Heartwood–platform contract with offline conformance checks; and
+- generic, Terra, and Stanford Carina platform adapters and a versioned Heartwood–platform contract with offline and live conformance checks; and
 - container, native, worker, and qualification artifacts built from pinned inputs, with [native qualification](testing.md#native-qualification) evidence bound to a commit.
 
 ## Outside the Product Boundary

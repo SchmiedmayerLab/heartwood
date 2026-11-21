@@ -1904,6 +1904,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "botocore" },
     { name = "certifi" },
+    { name = "fastmcp" },
     { name = "filelock" },
     { name = "heartwood-adapters" },
     { name = "heartwood-audit" },
@@ -1916,14 +1917,17 @@ dependencies = [
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "keyring" },
+    { name = "mcp" },
     { name = "openai" },
     { name = "openhands-sdk" },
     { name = "openhands-tools" },
     { name = "openshell" },
     { name = "packaging" },
     { name = "pydantic" },
+    { name = "starlette" },
     { name = "tomli-w" },
     { name = "uv" },
+    { name = "uvicorn" },
     { name = "websockets" },
 ]
 
@@ -1932,6 +1936,7 @@ requires-dist = [
     { name = "anthropic", specifier = "==0.120.2" },
     { name = "botocore", specifier = "==1.43.125" },
     { name = "certifi", specifier = "==2026.10.23" },
+    { name = "fastmcp", specifier = "==4.1.6" },
     { name = "filelock", specifier = "==4.2.10" },
     { name = "heartwood-adapters", editable = "packages/adapters" },
     { name = "heartwood-audit", editable = "packages/audit" },
@@ -1944,14 +1949,17 @@ requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
     { name = "huggingface-hub", specifier = "==1.26.1" },
     { name = "keyring", specifier = "==25.7.0" },
+    { name = "mcp", specifier = "==2.3.0" },
     { name = "openai", specifier = "==2.53.0" },
     { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" },
     { name = "openhands-tools", path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.3-py3-none-any.whl" },
     { name = "openshell", path = "vendor/runtime-wheels/openshell-0.1.8+heartwood.2-py3-none-any.whl" },
     { name = "packaging", specifier = "==26.3" },
     { name = "pydantic", specifier = ">=2.12" },
+    { name = "starlette", specifier = "==1.10.0" },
     { name = "tomli-w", specifier = "==1.2.0" },
     { name = "uv", specifier = "==0.13.7" },
+    { name = "uvicorn", specifier = "==0.54.0" },
     { name = "websockets", specifier = "==16.1.1" },
 ]
 
@@ -8418,15 +8426,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "1.4.1"
+version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0f/3c/76d2fd1f1357ed0f0108d8a5aa233dcf16e2946a8559c84912fe08e01ac7/starlette-1.4.1.tar.gz", hash = "sha256:b7332de6e9375593a29ba9eee1e6ecfeb3eb2043e2e19a13b4b71da73ff35540", size = 2709041, upload-time = "2026-08-05T15:17:26.23Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/48/bb/3d8757f21e9a53d9035c9eb039a777047139a16bfdbedfc7a58241c3d914/starlette-1.10.0.tar.gz", hash = "sha256:b8399098d4c1e3522734f7235dc79b1fc967f96cf139c81e0fa30479e0685f9b", size = 2734356, upload-time = "2026-10-24T15:04:12.342Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/0a/67e95f21498de41433babf7b1db0eeab449eb58872dfb831b27747a70fd0/starlette-1.4.1-py3-none-any.whl", hash = "sha256:7d078e0fbefae0d2cecfb80a799d6fb84b1c0c6acd4f14ac79d17d0e7ec27f19", size = 74019, upload-time = "2026-08-05T15:17:24.357Z" },
+    { url = "https://files.pythonhosted.org/packages/88/2e/947cfe02def9371c07cd5bf5b6b61c829e9aecb9904db02a66cfafbc1eec/starlette-1.10.0-py3-none-any.whl", hash = "sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4", size = 80571, upload-time = "2026-10-24T15:04:10.371Z" },
 ]
 
 [[package]]
