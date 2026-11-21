@@ -368,7 +368,7 @@ Restart the gateway to apply the change under the operator's authority; restorin
 
 ### `HW-WORKER-001`: Sandbox Gateway Lacks a Required Deletion Capability
 
-`heartwood gateway serve --deployment` read the registered sandbox gateway's info, and it did not report exactly one Docker compute driver with both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification), or the info could not be read.
+`heartwood gateway serve --deployment` read the registered sandbox gateway's info, and it did not report exactly one compute driver of the implementation the manifest's `driver` selects with both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification), or the info could not be read.
 The message names the reported gateway version and each missing capability when the gateway answered.
 Confirm that the gateway named in the manifest is running and reachable with its registered mutual TLS identity.
 An upstream gateway release that does not provide both deletion behaviors is refused; register a gateway build that reports them.
