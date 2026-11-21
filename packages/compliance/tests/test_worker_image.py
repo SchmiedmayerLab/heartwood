@@ -72,6 +72,8 @@ def test_worker_child_receives_only_explicit_environment(launcher: ModuleType) -
     assert environment["HOME"] == "/home/heartwood"
     assert environment["OH_TELEMETRY_CONSENT"] == "denied"
     assert environment["OPENHANDS_AGENT_SERVER_CONFIG_PATH"] == "/etc/heartwood/worker.json"
+    # The model client resolves each connection, as the supervisor's name mappings expire.
+    assert environment["DISABLE_AIOHTTP_TRANSPORT"] == "True"
     for name in source.keys() - {
         "SESSION_API_KEY",
         "HEARTWOOD_INFERENCE_PLACEHOLDER",
