@@ -47,5 +47,11 @@ node_modules/
 playwright-report/
 test-results/
 
+# OpenTofu working directories and local state
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
 # Rebuilt, digest-pinned runtime dependencies
 /vendor/runtime-wheels/

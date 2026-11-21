@@ -26,6 +26,19 @@ jobs:
           submodules: true
       - name: Keep cloud-specific and platform code out of application packages
         run: python3 reference-platform/tools/check_cloud_boundary.py
+      - name: Install OpenTofu
+        uses: opentofu/setup-opentofu@v2.0.2
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+      # Offline checks only: the backend is skipped and no provider is configured,
+      # so no cloud credential is used or contacted.
+      - name: Check the GKE infrastructure code
+        working-directory: reference-platform/infrastructure/gke
+        run: |
+          tofu fmt -check -recursive -diff
+          tofu init -backend=false -input=false -lockfile=readonly
+          tofu validate
 
   services:
     name: Platform service tests

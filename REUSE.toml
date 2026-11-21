@@ -19,6 +19,7 @@ path = [
     "uv.lock",
     "reference-platform/services/.python-version",
     "reference-platform/services/uv.lock",
+    "reference-platform/infrastructure/gke/.terraform.lock.hcl",
     "agents/**/*.md",
     "images/gpu/vllm-requirements.txt",
     "images/worker/config.json",
