@@ -59,6 +59,34 @@
       "surface": "session",
       "inference_failure": "unavailable",
       "diagnostic": "HW-AGENT-012: The model provider is temporarily unavailable"
+    },
+    {
+      "condition": "Expired or rejected model credential",
+      "code": "HW-AGENT-008",
+      "surface": "model-discovery",
+      "discovery_failure": "authentication",
+      "diagnostic": "HW-AGENT-008: The model provider rejected the configured credential"
+    },
+    {
+      "condition": "Service temporarily unavailable",
+      "code": "HW-AGENT-012",
+      "surface": "model-discovery",
+      "discovery_failure": "unavailable",
+      "diagnostic": "HW-AGENT-012: The model provider is temporarily unavailable"
+    },
+    {
+      "condition": "Unsupported model protocol",
+      "code": "HW-AGENT-011",
+      "surface": "model-discovery",
+      "discovery_failure": "protocol",
+      "diagnostic": "HW-AGENT-011: model is unavailable for OpenHands: The deployment declares no protocol Heartwood supports: synthetic-protocol"
+    },
+    {
+      "condition": "Model no longer authorized",
+      "code": "HW-AGENT-011",
+      "surface": "model-discovery",
+      "discovery_failure": "withdrawn",
+      "diagnostic": "HW-AGENT-011: model is not in the model list for this identity: synthetic-alias"
     }
   ]
 }

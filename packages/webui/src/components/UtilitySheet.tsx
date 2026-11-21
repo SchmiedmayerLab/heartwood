@@ -2399,8 +2399,24 @@ const ModelChoiceStatus = ({
         {status.label}
       </Badge>
       <span>{status.detail}</span>
+      <span className="model-choice-capability">
+        {modelCapabilityText(model)}
+      </span>
     </div>
   );
+};
+
+// Unknown values stay unknown; the gateway reports only what the runtime or deployment states.
+const modelCapabilityText = (model: ModelCatalog["models"][number]): string => {
+  const window =
+    model.context_window === null ?
+      "unknown"
+    : `${model.context_window.toLocaleString()} tokens`;
+  const tools =
+    model.supports_tools === null ? "unknown"
+    : model.supports_tools ? "supported"
+    : "not supported";
+  return `Context window: ${window}; native tool calls: ${tools}`;
 };
 
 const connectionGroups = (connections: ModelConnection[]) => {

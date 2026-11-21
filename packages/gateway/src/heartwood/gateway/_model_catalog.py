@@ -8,12 +8,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -21,6 +20,7 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
+from heartwood.core_adapter import BackendErrorCode, backend_error_message
 from heartwood.gateway._managed_inference import managed_inference_client, require_managed_base_url
 from heartwood.gateway._model_settings import CredentialKind, ModelProfile
 from heartwood.gateway._openhands_models import (
@@ -40,6 +40,7 @@ from heartwood.schemas import (
     ModelConnectionManifest,
     ModelConnectionsManifest,
     ModelDataHandling,
+    PlatformModelMetadata,
     PolicyProfile,
 )
 
@@ -51,6 +52,7 @@ type ConnectionGroup = Literal[
     "compatible-service", "heartwood-managed", "hosted-provider", "research-environment"
 ]
 type ModelAvailability = Literal["available", "experimental", "unsupported"]
+type ApiMode = Literal["chat", "responses"]
 
 _CONNECTION_PROTOCOLS = {
     "anthropic",
@@ -78,10 +80,21 @@ _CATALOG_MAX_RETRIES = 1
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 _SECRET_FIELD_MARKERS = ("api_key", "apikey", "password", "secret", "token")
+# Declared protocols name the OpenHands API modes; other identifiers are unsupported.
+_API_MODES: frozenset[str] = frozenset({"chat", "responses"})
 
 
 class ModelCatalogError(ValueError):
-    """Raised when model connection metadata or discovery is invalid."""
+    """Raised when model connection metadata or discovery is invalid.
+
+    A failure that matches a platform failure state carries its stable diagnostic code,
+    which the message starts with and the gateway's HTTP routes return separately.
+    """
+
+    def __init__(self, detail: str, *, code: BackendErrorCode | None = None) -> None:
+        self.detail = detail
+        self.code = None if code is None else code.value
+        super().__init__(detail if code is None else f"{code.value}: {detail}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +119,8 @@ class ModelConnection:
     static_models: tuple[str, ...] = ()
     subscription_vendor: str | None = None
     data_handling: ModelDataHandling | None = None
+    # Deployment declarations for models the OpenHands model table may not recognize.
+    model_metadata: tuple[PlatformModelMetadata, ...] = ()
 
     def validate(self, *, configurable: bool = False) -> None:
         """Validate connection identity, routes, and credential references."""
@@ -173,6 +188,8 @@ class ModelConnection:
             raise ModelCatalogError("static model identifiers must be non-empty without whitespace")
         if len(self.static_models) != len(set(self.static_models)):
             raise ModelCatalogError("static model identifiers must be unique")
+        if any(item.connection_id != self.connection_id for item in self.model_metadata):
+            raise ModelCatalogError("model metadata must name its own connection")
 
     def _validate_credentials(self, *, configurable: bool) -> None:
         if self.credential_kind == "environment":
@@ -215,14 +232,27 @@ class ModelConnection:
         """Return the provider-facing identifier from a normalized execution model."""
         return execution_model.removeprefix(self.model_prefix)
 
+    def declared_model(self, execution_model: str) -> PlatformModelMetadata | None:
+        """Return the deployment's declaration for one model, if it made one."""
+        model_id = self.provider_model_id(execution_model)
+        return next(
+            (item for item in self.model_metadata if item.model_id in {model_id, execution_model}),
+            None,
+        )
+
     def request_endpoint(self, execution_model: str) -> str:
         """Return the endpoint OpenHands will use for this model."""
         if self.policy_endpoint is None:
             raise ModelCatalogError("model connection does not define a request endpoint")
         if self.protocol not in {"openai", "openai-compatible"}:
             return self.policy_endpoint
+        declared = self.declared_model(execution_model)
         try:
-            return request_endpoint_for_model(execution_model, self.policy_endpoint)
+            return request_endpoint_for_model(
+                execution_model,
+                self.policy_endpoint,
+                api_mode=None if declared is None else declared_api_mode(declared),
+            )
         except OpenHandsModelError as error:
             raise ModelCatalogError(str(error)) from error
 
@@ -308,7 +338,11 @@ class ModelConnection:
     def manifest_dict(self) -> dict[str, object]:
         """Return the non-secret manifest representation of this connection."""
         return {
-            **asdict(self),
+            **{
+                field.name: getattr(self, field.name)
+                for field in fields(self)
+                if field.name != "model_metadata"
+            },
             "data_handling": (
                 None if self.data_handling is None else self.data_handling.model_dump(mode="json")
             ),
@@ -525,7 +559,8 @@ class ModelCatalogService:
         except ModelCatalogError:
             raise
         except Exception as error:
-            raise ModelCatalogError(_safe_discovery_error(error)) from error
+            code = _discovery_error_code(error)
+            raise ModelCatalogError(backend_error_message(code), code=code) from error
         models = self._normalize(connection, discovered)
         catalog = ModelCatalog(
             connection=connection,
@@ -583,8 +618,11 @@ class ModelCatalogService:
                 if model_id.startswith(connection.model_prefix)
                 else f"{connection.model_prefix}{model_id}"
             )
-            availability, reason, context_window, supports_tools = self._compatibility(
-                connection, execution_model
+            declared = connection.declared_model(execution_model)
+            availability, reason, context_window, supports_tools = (
+                self._compatibility(connection, execution_model)
+                if declared is None
+                else _declared_compatibility(declared)
             )
             entries.append(
                 ModelCatalogEntry(
@@ -686,19 +724,6 @@ BUILT_IN_MODEL_CONNECTIONS: tuple[ModelConnection, ...] = (
         description="A service that implements the OpenAI API format.",
     ),
 )
-
-
-def load_model_connections(path: Path | None) -> tuple[ModelConnection, ...]:
-    """Load platform-provided connections and combine them with built-ins."""
-    if path is None:
-        for connection in BUILT_IN_MODEL_CONNECTIONS:
-            connection.validate(configurable=connection.connection_id == "custom-api")
-        return BUILT_IN_MODEL_CONNECTIONS
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ModelCatalogError(f"unable to load model connections {path}") from error
-    return model_connections_from_mapping(value)
 
 
 def model_connections_from_mapping(value: object) -> tuple[ModelConnection, ...]:
@@ -881,6 +906,38 @@ def _model_compatibility(
     )
 
 
+def _declared_compatibility(
+    metadata: PlatformModelMetadata,
+) -> tuple[ModelAvailability, str, int | None, bool | None]:
+    context_window = metadata.context_window_tokens
+    if not _API_MODES.intersection(metadata.protocols):
+        return (
+            "unsupported",
+            "The deployment declares no protocol Heartwood supports: "
+            + ", ".join(metadata.protocols),
+            context_window,
+            metadata.supports_tool_calls,
+        )
+    # The operator's declaration stands in for OpenHands verification of the model.
+    return "available", "Declared by the deployment", context_window, metadata.supports_tool_calls
+
+
+def declared_input_limit(metadata: PlatformModelMetadata) -> int | None:
+    """Return the declared input limit, or the window less the output limit when both are known."""
+    if metadata.max_input_tokens is not None:
+        return metadata.max_input_tokens
+    if metadata.context_window_tokens is not None and metadata.max_output_tokens is not None:
+        remainder = metadata.context_window_tokens - metadata.max_output_tokens
+        return remainder if remainder > 0 else None
+    return None
+
+
+def declared_api_mode(metadata: PlatformModelMetadata) -> ApiMode | None:
+    """Return the one declared OpenHands API mode, or None to let OpenHands choose."""
+    modes = sorted(_API_MODES.intersection(metadata.protocols))
+    return cast(ApiMode, modes[0]) if len(modes) == 1 else None
+
+
 def _verified_openhands_models(connection: ModelConnection) -> set[str]:
     try:
         module = import_module("openhands.sdk.llm.utils.verified_models")
@@ -891,15 +948,34 @@ def _verified_openhands_models(connection: ModelConnection) -> set[str]:
     return set(models.get(provider, ()))
 
 
-def _safe_discovery_error(error: Exception) -> str:
-    name = type(error).__name__.lower()
-    if "authentication" in name or "permission" in name:
-        return "model provider rejected the configured credential"
-    if "timeout" in name:
-        return "model provider catalog request timed out"
-    if "connection" in name:
-        return "model provider catalog is unavailable"
-    return "model provider catalog request failed"
+def _discovery_error_code(error: Exception) -> BackendErrorCode:
+    """Classify a discovery failure as the agent runtime classifies the same response."""
+    # Provider SDKs report HTTP refusals by status; an expired or refused credential is
+    # 401 or 403, which the runtime vocabulary leaves unclassified for a 403.
+    if getattr(error, "status_code", None) in {401, 403}:
+        return BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED
+    prepare_openhands_import()
+    from openhands.sdk.event.error_classification import classify_error
+
+    from heartwood.gateway._openhands_failures import classified_error_code
+
+    code = classified_error_code(
+        classify_error(type(error).__name__, str(error)),
+        fallback=BackendErrorCode.PROVIDER_UNAVAILABLE,
+    )
+    # A model list involves no agent action, so other runtime outcomes do not apply.
+    return code if code in _DISCOVERY_ERROR_CODES else BackendErrorCode.PROVIDER_UNAVAILABLE
+
+
+_DISCOVERY_ERROR_CODES = frozenset(
+    {
+        BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED,
+        BackendErrorCode.PROVIDER_QUOTA_EXHAUSTED,
+        BackendErrorCode.PROVIDER_RATE_LIMITED,
+        BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+        BackendErrorCode.PROVIDER_UNAVAILABLE,
+    }
+)
 
 
 def _validate_endpoint(value: str, name: str) -> None:

@@ -94,6 +94,7 @@ from heartwood.gateway._model_artifacts import (
     load_model_artifact_catalog,
 )
 from heartwood.gateway._model_catalog import (
+    BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalog,
     ModelCatalogEntry,
     ModelCatalogError,
@@ -102,7 +103,8 @@ from heartwood.gateway._model_catalog import (
     active_model_connections,
     custom_model_connection,
     data_handling_summary,
-    load_model_connections,
+    declared_api_mode,
+    declared_input_limit,
     matching_model_connection,
     route_data_handling,
     route_policy_decision,
@@ -483,11 +485,16 @@ class SessionGateway:
     ) -> None:
         prepare_openhands_import()
         if deployment is not None:
-            if deployment_policy is not None or (
-                project is not None and project != deployment.project
+            if (
+                deployment_policy is not None
+                or model_connections is not None
+                or (project is not None and project != deployment.project)
             ):
-                raise ValueError("A deployment binding supplies its own project and policy")
+                raise ValueError(
+                    "A deployment binding supplies its own project, policy and model connections"
+                )
             project, deployment_policy = deployment.project, deployment.policy
+            model_connections = (*BUILT_IN_MODEL_CONNECTIONS, *deployment.model_connections)
         self._deployment = deployment
         # A manifest change that cannot apply safely stops dispatch until the next start.
         self._deployment_refusal: str | None = None
@@ -570,9 +577,7 @@ class SessionGateway:
             else LaunchActionSettingsStore()
         )
         self._base_model_connections = (
-            tuple(model_connections)
-            if model_connections is not None
-            else load_model_connections(None)
+            BUILT_IN_MODEL_CONNECTIONS if model_connections is None else tuple(model_connections)
         )
         self.model_catalog_service = model_catalog_service or ModelCatalogService(env=self.env)
         self._model_connections: dict[str, ModelConnection] = {}
@@ -1752,6 +1757,9 @@ class SessionGateway:
             policy=self.effective_policy(),
             config_store=self.config_store,
             model_connections=self._model_connections.values(),
+            deployment_connections=(
+                () if self._deployment is None else self._deployment.model_connections
+            ),
         )
 
     @gateway_operation
@@ -1916,11 +1924,17 @@ class SessionGateway:
                 refresh=True,
             )
         else:
-            catalog = self.model_catalog_service.cached(connection.connection_id)
+            # A platform can withdraw a model at any time, so its selection rereads the list.
+            catalog = (
+                None
+                if connection.source == "platform"
+                else self.model_catalog_service.cached(connection.connection_id)
+            )
         if catalog is None:
             discovered = self.discover_models(
                 connection_id,
                 base_url=base_url,
+                refresh=connection.source == "platform",
                 remember=remember,
             )
             catalog = self.model_catalog_service.cached(connection.connection_id)
@@ -1929,8 +1943,6 @@ class SessionGateway:
                     f"model catalog did not cache discovery result: {discovered}"
                 )
         entry = _catalog_entry(catalog, model_id)
-        if entry.availability == "unsupported":
-            raise ModelCatalogError(f"model is unavailable for OpenHands: {entry.reason}")
         request_endpoint = connection.request_endpoint(entry.execution_model)
         profile = ModelProfile(
             profile_id=connection.connection_id,
@@ -2054,10 +2066,14 @@ class SessionGateway:
         return self.action_settings()
 
     @gateway_operation
-    @_serialized_state
     def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or replace a non-secret profile and reset active services."""
-        profile = align_model_profile_request_endpoint(profile)
+        profile = self._declared_request_endpoint(align_model_profile_request_endpoint(profile))
+        self._require_listed_platform_model(profile)
+        return self._save_model_profile(profile)
+
+    @_serialized_state
+    def _save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         if profile.profile_id in _RESERVED_MODEL_PROFILE_IDS:
             raise ModelSettingsError(
                 f"model profile id is reserved by Heartwood: {profile.profile_id}"
@@ -2070,9 +2086,13 @@ class SessionGateway:
         return self.model_settings()
 
     @gateway_operation
-    @_serialized_state
     def select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Select a profile and reset active services."""
+        self._require_listed_platform_model(self.settings_store.load().profile(profile_id))
+        return self._select_model_profile(profile_id)
+
+    @_serialized_state
+    def _select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         settings = self.settings_store.load().selecting(profile_id)
         self._save_model_selection(self._model_source_for_profile(settings.profile()), settings)
         self._reset_services()
@@ -2570,6 +2590,15 @@ class SessionGateway:
         except ModelSettingsError:
             return _UnconfiguredAgentBackend()
         selected_model = selected_model if profile.is_local else None
+        connection = matching_model_connection(profile, self._model_connections.values())
+        declared = None if connection is None else connection.declared_model(profile.model)
+        if declared is not None:
+            # Declared limits take precedence; OpenHands resolves any limit left unset.
+            profile = replace(
+                profile,
+                max_input_tokens=declared_input_limit(declared) or profile.max_input_tokens,
+                max_output_tokens=declared.max_output_tokens or profile.max_output_tokens,
+            )
         from heartwood.core_adapter.workflow_runtime import workflow_run
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
@@ -2596,7 +2625,10 @@ class SessionGateway:
                 managed_model_native_tool_calling(selected_model.tool_call_parser)
                 if selected_model is not None
                 else None
+                if declared is None
+                else declared.supports_tool_calls
             ),
+            api_mode=None if declared is None else declared_api_mode(declared),
             structured_task_outcomes=(
                 workflow_run(FileSessionStore(self.sessions_root, session_id).replay_events())
                 is not None
@@ -2945,6 +2977,34 @@ class SessionGateway:
             self._model_connections[connection_id] = dynamic
             self.model_catalog_service.invalidate(connection_id)
         return dynamic
+
+    def _declared_request_endpoint(self, profile: ModelProfile) -> ModelProfile:
+        """Move a platform profile to the request path its model declaration selects."""
+        connection = self._model_connections.get(profile.profile_id)
+        if connection is None or connection.source != "platform":
+            return profile
+        try:
+            declared = replace(profile, policy_endpoint=connection.request_endpoint(profile.model))
+        except ModelCatalogError:
+            return profile
+        # Only the path suffix may change; another origin or route stays as saved.
+        return (
+            declared
+            if connection.matches_profile(declared)
+            and _same_route_base(profile.policy_endpoint, declared.policy_endpoint)
+            else profile
+        )
+
+    def _require_listed_platform_model(self, profile: ModelProfile) -> None:
+        """Refuse a platform route whose model the platform no longer lists for this identity."""
+        connection = matching_model_connection(profile, self._model_connections.values())
+        if connection is None or connection.source != "platform":
+            return
+        self.discover_models(connection.connection_id, refresh=True)
+        catalog = self.model_catalog_service.cached(connection.connection_id)
+        if catalog is None:  # pragma: no cover - discovery caches its result
+            raise ModelCatalogError("model catalog did not cache the discovery result")
+        _catalog_entry(catalog, connection.provider_model_id(profile.model))
 
     def _subscription_connection(self, connection_id: str) -> ModelConnection:
         connection = self._model_connections.get(connection_id)
@@ -3396,9 +3456,24 @@ def _review_mode_unavailable_reason(
     return None
 
 
+def _same_route_base(first: str, second: str) -> bool:
+    def base(endpoint: str) -> str:
+        return endpoint.removesuffix("/chat/completions").removesuffix("/responses")
+
+    return base(first) == base(second)
+
+
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:
     selected = model_id.strip()
     for entry in catalog.models:
         if selected in {entry.model_id, entry.execution_model}:
+            if entry.availability == "unsupported":
+                raise ModelCatalogError(
+                    f"model is unavailable for OpenHands: {entry.reason}",
+                    code=BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+                )
             return entry
-    raise ModelCatalogError(f"model is not present in the discovered catalog: {model_id}")
+    raise ModelCatalogError(
+        f"model is not in the model list for this identity: {model_id}",
+        code=BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+    )

@@ -86,7 +86,7 @@ Opening the browser and running `heartwood doctor` are read-only; project confir
 ## Provide Model Connections
 
 Built-in connections and operator-configured compatible routes are checked against the active policy's endpoints, credential references and capability tiers.
-The model-connection manifest schema exists, but startup does not load it.
+A deployment manifest can supply platform connections and model declarations; see [Model Connections](../reference/configuration.md#model-connections).
 Never place raw tokens in container layers, image labels, project configuration, command arguments, examples or CI logs.
 An isolated worker uses only the `[worker]` model route, and its real credential stays in the OpenShell provider.
 

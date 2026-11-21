@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -273,11 +273,13 @@ def inspect_deployment(
     policy: EffectivePolicy | None = None,
     config_store: ProjectConfigStore | None = None,
     model_connections: Iterable[ModelConnection] | None = None,
+    deployment_connections: Sequence[ModelConnection] = (),
 ) -> DeploymentReadiness:
     """Inspect project setup without creating files or calling external services.
 
     A gateway passes its own configuration store and model connections, so readiness
     applies the deployment ceiling and route data handling its model calls apply.
+    Without a gateway, a deployment passes the platform connections its manifest declares.
     """
     active_env = dict(os.environ if env is None else env)
     adapter = select_platform_adapter(active_env)
@@ -386,8 +388,23 @@ def inspect_deployment(
     else:
         checks.append(ReadinessCheck("configuration", "warning", "Setup is incomplete"))
 
+    model_connections = (
+        active_model_connections(
+            (*BUILT_IN_MODEL_CONNECTIONS, *deployment_connections),
+            () if config is None else config.additional_connections,
+            allowed_connection_ids=(
+                option.connection_id for option in model_source_options(active_env)
+            ),
+        )
+        if model_connections is None
+        else tuple(model_connections)
+    )
     configured_source = config.model_source if config is not None else None
-    source_supported = configured_source in adapter.capabilities().model_sources
+    # A connection the deployment declares is its own model source.
+    source_supported = configured_source in {
+        *adapter.capabilities().model_sources,
+        *(connection.connection_id for connection in deployment_connections),
+    }
     checks.append(
         ReadinessCheck("model-source", "pass", "Model connection is selected")
         if source_supported
@@ -408,17 +425,6 @@ def inspect_deployment(
         )
     )
     credential_ready = True
-    model_connections = (
-        active_model_connections(
-            BUILT_IN_MODEL_CONNECTIONS,
-            () if config is None else config.additional_connections,
-            allowed_connection_ids=(
-                option.connection_id for option in model_source_options(active_env)
-            ),
-        )
-        if model_connections is None
-        else tuple(model_connections)
-    )
     if active_model is not None:
         credential_status, credential_summary, credential_ready = _credential_readiness(
             active_model, active_env

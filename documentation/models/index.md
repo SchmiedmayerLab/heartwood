@@ -70,7 +70,7 @@ Terminal setup, browser settings and the notebook bridge show it before a model 
 
 A descriptor states declared handling; it is not verified provider behavior, data eligibility or an agreement.
 It describes the complete inference route, including an institution's gateway and its ultimate provider; an outside transport proxy that substitutes credentials does not change the declared recipient.
-A service URL entered for **Other compatible service** carries no declaration, because its handling depends on its operator; a deployment that needs one supplies the service as a platform connection with a descriptor.
+A service URL entered for **Other compatible service** carries no declaration, because its handling depends on its operator; a deployment that needs one supplies the service as a [platform connection](../reference/configuration.md#model-connections) with a descriptor.
 A descriptor covers model inference requests; Heartwood has no transcription or embedding route, and a telemetry or trace exporter that a deployment enables is a separate destination for its own review.
 
 Every model-route decision in the session history records the descriptor of the route that the next model call uses, so a route change is recorded before its first request.
