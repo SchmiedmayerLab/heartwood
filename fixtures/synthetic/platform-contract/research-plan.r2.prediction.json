@@ -69,7 +69,8 @@
         "Tasks run independently on one synthetic GPU each."
       ],
       "evidence_ids": [
-        "sample-run"
+        "sample-run",
+        "batch-profile-change"
       ]
     },
     {
@@ -124,6 +125,15 @@
       "kind": "sample-run",
       "reference": "project://results/sample-run",
       "description": "Ten-task synthetic sample on the small batch profile.",
+      "observed_at": "2026-07-01T00:00:00Z",
+      "content_sha256": null
+    },
+    {
+      "evidence_id": "batch-profile-change",
+      "project_context_id": "launch-synthetic-1",
+      "kind": "correction",
+      "reference": "prediction:cohort-prediction@1",
+      "description": "Researcher selected the GPU profile. The speedup remains an assumption.",
       "observed_at": "2026-07-01T00:00:00Z",
       "content_sha256": null
     }

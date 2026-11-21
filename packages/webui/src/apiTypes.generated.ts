@@ -1212,6 +1212,7 @@ export interface EstimatedCost {
 export interface PlanRevision {
   elements: ElementReview[];
   estimates: EstimateState[];
+  observation_evidence?: ObservationEvidence[];
   overview: PlanningOverview;
 }
 /**
@@ -1245,6 +1246,18 @@ export interface EstimateState {
   budget_changed: boolean;
   estimate_id: string;
   state: "current" | "expired";
+}
+/**
+ * A citation for an immutable platform observation in this launch context.
+ */
+export interface ObservationEvidence {
+  backend_operation_ref: string;
+  observed_at: string;
+  operation_id: string;
+  platform_record_ref: string;
+  reference: string;
+  service_id: string;
+  status: string;
 }
 /**
  * One project/plan revision's linked view; neither an accounting nor approval engine.
@@ -1450,6 +1463,11 @@ export interface WorkloadQuantity {
 }
 /**
  * Project-local evidence or researcher correction; absent measurements remain unknown.
+ *
+ * A reference names a project file (``project://PATH``), a local experiment
+ * (``experiment-run:UUID``), a prediction revision (``prediction:ID@REVISION``),
+ * or a platform observation (``observation:SHA256``).
+ * Predictions and platform observations resolve within the active project launch context.
  */
 export interface WorkloadEvidence {
   content_sha256?: string | null;

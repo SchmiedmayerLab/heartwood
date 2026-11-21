@@ -29,6 +29,7 @@ __all__ = [
     "ElementReview",
     "EstimateComparison",
     "EstimateState",
+    "ObservationEvidence",
     "PlanProjection",
     "PlanRevision",
     "PlanningEstimateRequest",
@@ -100,9 +101,22 @@ class EstimateState(_PlanningView):
     )
 
 
+class ObservationEvidence(_PlanningView):
+    """A citation for an immutable platform observation in this launch context."""
+
+    reference: str
+    operation_id: _Text
+    service_id: _Text
+    backend_operation_ref: _Text
+    observed_at: AwareDatetime
+    status: _Text
+    platform_record_ref: _Text
+
+
 class PlanRevision(_PlanningView):
     """One prediction revision with its linked platform records and review states."""
 
+    observation_evidence: tuple[ObservationEvidence, ...] = ()
     overview: PlanningOverview
     elements: tuple[ElementReview, ...]
     estimates: tuple[EstimateState, ...]

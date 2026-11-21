@@ -78,6 +78,7 @@ def test_vendored_skills_load_through_openhands_as_repository_reviewed() -> None
         "heartwood.research.aggregate-export",
         "heartwood.research.baseline-model",
         "heartwood.research.omop-cohort-summary",
+        "heartwood.research.workload-prediction",
     }
     assert all(manifest.review == "repository-reviewed" for manifest in manifests)
     assert all(len(manifest.tree_sha256) == 64 for manifest in manifests)

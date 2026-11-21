@@ -428,6 +428,17 @@ Inspect its record and continue in a new session.
 These conditions appear in the planning overview of the terminal, browser and notebook.
 The platform owns budgets, prices and admission; see [Launch Context, Budgets and Estimates](../operate/platform-contract.md#launch-context-budgets-and-estimates).
 
+### Earlier Planning Evidence References
+
+A journal containing a version 1 prediction with a free-text evidence reference such as `sample.csv` cannot be opened by the current planning reader.
+The gateway identifies the earlier format and leaves the journal in place.
+Because the protected project journal can hold several launch contexts, starting a fresh journal affects planning history for all of them.
+Stop all gateways using that protected project state and archive `planning.jsonl` and any `.planning.jsonl.pending` file under the same access controls.
+Verify the archived bytes. If an append is pending, complete recovery with the matching reader and archive the recovered journal as well.
+With all writers stopped, move the recovered journal to a distinct, unused backup name.
+Restart the gateway with the original journal path vacant to start fresh planning state.
+To inspect the historical evidence, use the matching earlier reader on an isolated copy of the archive.
+
 ### `HW-PLAN-001`: Platform Planning Information Is Unavailable
 
 The platform's planning service could not be reached, did not accept the gateway's credential, or returned a response that did not match the contract or the launch context.

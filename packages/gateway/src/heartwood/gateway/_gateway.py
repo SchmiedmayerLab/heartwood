@@ -575,7 +575,10 @@ class SessionGateway:
             raise ValueError("Platform planning requires protected state")
         self._planning = (
             PlatformPlanning(
-                platform_planning, journal_path=self.project.state_root / "planning.jsonl"
+                platform_planning,
+                journal_path=self.project.state_root / "planning.jsonl",
+                contains_file=self.project.contains,
+                run_ids=lambda: {str(run.run_id) for run in self.experiment_records().runs},
             )
             if platform_planning is not None
             else None

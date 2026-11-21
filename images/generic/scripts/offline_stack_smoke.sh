@@ -104,7 +104,7 @@ try:
     names = {skill.name for skill in load_verified_skills(selected)}
 finally:
     gateway.stop()
-expected = {"aggregate-export", "baseline-model", "omop-cohort-summary"}
+expected = {"aggregate-export", "baseline-model", "omop-cohort-summary", "workload-prediction"}
 if names != expected:
     raise SystemExit(f"verified Skills were not selected for OpenHands: {sorted(names)}")
 PY
