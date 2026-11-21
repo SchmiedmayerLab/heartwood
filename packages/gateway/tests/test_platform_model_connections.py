@@ -655,3 +655,20 @@ def test_a_connection_certificate_authority_file_is_checked_at_load(
     with pytest.raises(ProjectStateError, match=message) as caught:
         _deployment(tmp_path, record)
     assert str(caught.value).startswith(("HW-DEPLOY-001: ", "HW-DEPLOY-"))
+
+
+def test_model_discovery_rejects_an_unusable_operator_ca_before_launch(tmp_path: Path) -> None:
+    record = _record(tmp_path, "https://models.example.invalid/v1")
+    authority = tmp_path / "inference-ca.pem"
+    authority.write_text("incomplete synthetic certificate bundle\n")
+    authority.chmod(0o600)
+    connections = cast(dict[str, list[dict[str, object]]], record["model_connections"])
+    connection = connections["connections"][0]
+    connection["ca_file"] = str(authority)
+
+    with pytest.raises(ProjectStateError) as refused:
+        _deployment(tmp_path, record)
+
+    assert str(refused.value) == (
+        f"HW-DEPLOY-001: model connection {connection['connection_id']} has an unusable ca_file"
+    )
