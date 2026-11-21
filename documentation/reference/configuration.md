@@ -239,6 +239,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 | `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver |
 
 A key of the other driver is rejected with `HW-DEPLOY-001`.
+With this driver, `image_digest` is the registry digest by which a pod references the worker image; with `openshell-docker` it is the image identifier the Docker engine reports.
 `kubectl_cli` and `kubeconfig` follow the same ownership and location rules as the other native tools and configuration files.
 The registered sandbox gateway must report one `openshell/kubernetes` compute driver with both deletion capabilities.
 Worker launch and reconciliation run through the Docker driver: with `openshell-kubernetes`, `heartwood gateway serve` validates the manifest and checks the gateway, and a worker launch or reconciliation stops before any sandbox, volume or deletion request.
