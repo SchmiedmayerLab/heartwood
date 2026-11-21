@@ -296,15 +296,17 @@ hub:
   # empty selects the first. profileId is the gateway's model connection and the
   # worker's model profile, and provider the OpenShell provider that holds the session's
   # key, which the worker sees as a placeholder in placeholderEnv. binaries are the
-  # programs of the worker image that may send the key. dataHandling declares the
-  # recipient and the retention authority of the route.
+  # programs of the worker image that may send the key, by the path that their links
+  # resolve to, and have no default: for the worker image of images/Dockerfile, the
+  # interpreter that deploy/qualify-kubernetes-worker.py images reports as
+  # worker_interpreter. dataHandling declares the recipient and the retention authority
+  # of the route.
   modelRoute:
     profileId: platform-route
     model: ""
     provider: platform-route
     placeholderEnv: HEARTWOOD_PLATFORM_MODEL_KEY
-    binaries:
-      - /usr/local/bin/python3.12
+    binaries: []
     dataHandling:
       destination: operator-defined
       retentionAuthority: service-operator

@@ -35,8 +35,13 @@ _MODELS = (
     'inference.models=[{"name":"synthetic-coder","maxInputTokens":32768,"maxOutputTokens":4096,'
     '"litellmParams":{"model":"openai/synthetic-coder","api_base":"https://models.example.test/v1"}}]'
 )
+# The worker's interpreter, which has no default either.
+_BINARIES = (
+    "hub.modelRoute.binaries="
+    '["/opt/heartwood/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12"]'
+)
 _IMAGES = ["--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
-_IMAGES += ["--set-json", _MODELS]
+_IMAGES += ["--set-json", _MODELS, "--set-json", _BINARIES]
 # Without a cluster, Helm cannot read the API server addresses.
 _API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
 _IMAGES += _API_SERVER
@@ -648,10 +653,21 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
 
 def test_installation_needs_the_api_server_addresses() -> None:
     command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
-    command += ["--set-json", _MODELS]
+    command += ["--set-json", _MODELS, "--set-json", _BINARIES]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
+
+
+def test_the_model_route_needs_the_programs_of_the_worker_image() -> None:
+    command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
+    command += ["--set-json", _MODELS, *_API_SERVER]
+    result = subprocess.run(command, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "hub.modelRoute.binaries must name the programs of hub.worker.image" in result.stderr
+    # The kind values name the program of their stand-in worker image.
+    command += ["--values", str(_CHART / "values-kind.yaml")]
+    assert subprocess.run(command, capture_output=True, text=True).returncode == 0
 
 
 def test_control_service_configuration_holds_the_synthetic_prices(

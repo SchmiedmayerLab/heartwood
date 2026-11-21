@@ -56,6 +56,12 @@ hub:
   worker:
     # The staging stand-in above in place of the worker image.
     image: registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+  # The program of the stand-in worker image. An installation with the worker image
+  # passes its interpreter, which deploy/qualify-kubernetes-worker.py images reports as
+  # worker_interpreter.
+  modelRoute:
+    binaries:
+      - /agnhost
 
 # The deterministic synthetic model as the route's only model. One request reports 1000
 # input and 500 output tokens.

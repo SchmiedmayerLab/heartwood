@@ -645,8 +645,8 @@
               "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
             },
             "binaries": {
+              "description": "Programs of the worker image that may send the key, by resolved path; the chart refuses an empty list.",
               "type": "array",
-              "minItems": 1,
               "items": {
                 "type": "string",
                 "pattern": "^/\\S+$"
