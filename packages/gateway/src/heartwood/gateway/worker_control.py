@@ -30,7 +30,7 @@ from heartwood.core_adapter.worker_attempts import (
 )
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway._project import ProjectContext
-from heartwood.gateway.worker_deployment import WorkerDeployment
+from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment, WorkerDeployment
 from heartwood.persistence import read_private_text
 
 # Revocation and cleanup evidence depends on these deletion behaviors of the gateway and its
@@ -42,6 +42,9 @@ REQUIRED_GATEWAY_CAPABILITIES = frozenset(
         "openshell.compute.delete-retries-deleting",
     }
 )
+# With this behavior, a deletion that finds no sandbox under a name makes the gateway reject a
+# creation under that name, so its answer is evidence that an unresolved creation made nothing.
+ABSENCE_REJECTS_CREATION = "openshell.compute.create-rejects-deleted-name"
 
 
 class NativeWorkerControl:
@@ -186,6 +189,12 @@ class NativeWorkerControl:
             or policy.process.run_as_user != "10001"
             or policy.process.run_as_group != "10001"
             or not {"/inputs", "/skills"}.issubset(policy.filesystem.read_only)
+            # The Kubernetes driver's own working directory is its `/sandbox` volume, so
+            # the policy must list the worker's working directory as writable.
+            or (
+                isinstance(self.settings, KubernetesWorkerDeployment)
+                and "/workspace" not in policy.filesystem.read_write
+            )
         ):
             raise WorkerAttemptError(
                 "native policy does not match the qualified worker identity and projections"

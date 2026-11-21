@@ -420,6 +420,58 @@ def _kubectl(settings: KubernetesWorkerDeployment, *args: str, stdin: bytes | No
     return result.stdout
 
 
+def cluster_sha256(settings: KubernetesWorkerDeployment) -> str:
+    """Identify the cluster, namespace and workspace an attempt's objects are named in.
+
+    A cluster keeps its API server address and certificate authority, and a namespace keeps
+    its identity until it is deleted, so another cluster behind the same configuration path,
+    or a namespace created again under the same name, yields a different identity. The
+    workspace is part of every sandbox and Sandbox resource name, so absence under another
+    workspace says nothing about the attempt.
+    """
+    unobserved = WorkerAttemptError("cluster identity was not observed")
+    view = _kubectl(
+        settings,
+        "config",
+        "view",
+        "--raw",
+        "--minify",
+        "--flatten",
+        # Only the cluster entry is printed, never the credential of the configuration.
+        "--output=jsonpath={.clusters[0].cluster.server}"
+        '{"\\n"}{.clusters[0].cluster.certificate-authority-data}',
+    )
+    try:
+        server, _, authority = view.decode().partition("\n")
+        namespace = json.loads(
+            _kubectl(settings, "get", "namespace", settings.namespace, "--output=json")
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        raise unobserved from None
+    uid = _field(namespace, "metadata", "uid")
+    if (
+        not server
+        or not authority.strip()
+        or _field(namespace, "kind") != "Namespace"
+        or _field(namespace, "metadata", "name") != settings.namespace
+        or not isinstance(uid, str)
+        or not uid
+        or len(uid) > 256
+    ):
+        raise unobserved
+    identity = json.dumps(
+        {
+            "server": server,
+            "certificate_authority": hashlib.sha256(authority.strip().encode()).hexdigest(),
+            "namespace": settings.namespace,
+            "namespace_uid": uid,
+            "workspace": settings.workspace,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(identity.encode()).hexdigest()
+
+
 def _recorded(value: object, *path: str) -> list[dict[str, Any]]:
     """Return the objects of a list for the record; a rejected pod may report anything."""
     reported = _field(value, *path)
@@ -469,6 +521,15 @@ def admission_record(observed: dict[str, Any]) -> dict[str, Any]:
                 "spec": _reported(_field(observed.get(name), "spec")),
             }
             for name in ("control_policy", "workload_policy")
+        }
+        | {
+            "others": [
+                {
+                    "name": _reported(_field(policy, "metadata", "name")),
+                    "spec": _reported(_field(policy, "spec")),
+                }
+                for policy in _recorded(observed, "other_policies")
+            ]
         },
         "namespace": {
             "phase": _reported(_field(namespace, "status", "phase")),
@@ -602,6 +663,8 @@ class KubernetesWorkerAdmission:
         self.worker_name = f"hw-{intent.attempt_id.hex[:16]}"
         # The driver names the Sandbox resource and its workload pod after both.
         self.pod_name = f"{settings.workspace}--{self.worker_name}"
+        # What the cluster reported at the latest inspection, accepted or refused.
+        self.record: dict[str, Any] | None = None
 
     def command(self, *args: str, stdin: bytes | None = None) -> bytes:
         """Use the explicit cluster configuration without inherited Kubernetes settings."""
@@ -624,22 +687,43 @@ class KubernetesWorkerAdmission:
             raise WorkerAttemptError("native resource inspection was incomplete")
         return value
 
+    def _list(self, resource: str) -> list[dict[str, Any]]:
+        """Read every object of one kind in the namespace."""
+        listing = _parsed(self.command("get", resource, "--output=json"))
+        items = _objects(listing, "items")
+        # An answer without a list of items is never read as an empty namespace.
+        if (
+            not str(listing.get("kind", "")).endswith("List")
+            or not isinstance(listing.get("items"), list)
+            or any(
+                _field(item, "metadata", "namespace") != self.settings.namespace for item in items
+            )
+        ):
+            raise WorkerAttemptError("native resource inspection was incomplete")
+        return items
+
     def observe(self, sandbox_id: str) -> dict[str, Any]:
         """Read the objects admission decides on, as the Kubernetes API reports them."""
         if _SANDBOX_ID.fullmatch(sandbox_id) is None:
             raise WorkerAttemptError("native sandbox identity cannot name Kubernetes objects")
-        policy = "networkpolicy.networking.k8s.io"
+        driver_policies = ("os-control-" + sandbox_id, _FENCE_POLICY)
         return {
             "workload_pod": self._get("pod", "Pod", self.pod_name),
             "supervisor_pod": self._get("pod", "Pod", "os-supervisor-" + sandbox_id),
-            "control_policy": self._get(policy, "NetworkPolicy", "os-control-" + sandbox_id),
-            "workload_policy": self._get(policy, "NetworkPolicy", _FENCE_POLICY),
+            "control_policy": self._get(_POLICY, "NetworkPolicy", driver_policies[0]),
+            "workload_policy": self._get(_POLICY, "NetworkPolicy", driver_policies[1]),
+            "other_policies": [
+                policy
+                for policy in self._list(_POLICY)
+                if _field(policy, "metadata", "name") not in driver_policies
+            ],
             "namespace": self._get("namespace", "Namespace", self.settings.namespace),
         }
 
     def inspect_worker(self, sandbox_id: str) -> None:
         """Observe the worker's pods, policies and namespace outside the worker, and decide."""
         observed = self.observe(sandbox_id)
+        self.record = admission_record(observed)
         sandbox = self._inspect_workload(observed["workload_pod"], sandbox_id)
         self._inspect_supervisor(observed["supervisor_pod"], sandbox_id, sandbox)
         self._inspect_policies(observed, sandbox_id, sandbox)
@@ -869,6 +953,14 @@ class KubernetesWorkerAdmission:
             or _field(observed["workload_policy"], "spec") != _FENCE_SPEC
         ):
             raise WorkerAttemptError("native worker network policies do not match admission")
+        # Policies add up: any further policy that selects the workload pod and has a rule
+        # would allow traffic the driver's policies deny.
+        labels = _field(observed["workload_pod"], "metadata", "labels")
+        if not isinstance(labels, dict) or any(
+            _selects(_field(policy, "spec", "podSelector"), labels) and _allows_traffic(policy)
+            for policy in observed["other_policies"]
+        ):
+            raise WorkerAttemptError("native worker network policies do not match admission")
 
 
 class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
@@ -886,21 +978,6 @@ class KubernetesWorkerVolumes(KubernetesWorkerAdmission):
         """Read one object, or nothing when the cluster answers that it does not exist."""
         output = self.command("get", resource, name, "--ignore-not-found", "--output=json")
         return self._object(output, kind, name) if output.strip() else None
-
-    def _list(self, resource: str) -> list[dict[str, Any]]:
-        """Read every object of one kind in the namespace."""
-        listing = _parsed(self.command("get", resource, "--output=json"))
-        items = _objects(listing, "items")
-        # An answer without a list of items is never read as an empty namespace.
-        if (
-            not str(listing.get("kind", "")).endswith("List")
-            or not isinstance(listing.get("items"), list)
-            or any(
-                _field(item, "metadata", "namespace") != self.settings.namespace for item in items
-            )
-        ):
-            raise WorkerAttemptError("native resource inspection was incomplete")
-        return items
 
     def _owned(self, observed: dict[str, Any], *, role: str) -> str:
         """Require the attempt's complete identity and return the object's own identity."""
