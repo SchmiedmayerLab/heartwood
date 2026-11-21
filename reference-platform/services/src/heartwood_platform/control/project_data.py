@@ -47,6 +47,26 @@ _COPY_LIMITS = {"cpu": "500m", "memory": "256Mi"}
 _STORAGE_MARGIN = 64 * 1024 * 1024
 
 
+class MountedDataset(BaseModel):
+    """Operator's grant for a sealed dataset version in the project's bucket."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$|^[a-z0-9]$")
+    version: str = Field(pattern=r"^[0-9a-f]{64}$")
+    objects: int = Field(gt=0)
+    size: int = Field(gt=0)
+
+    @property
+    def selection(self) -> str:
+        """Return the exact version selector accepted by the launch API."""
+        return f"{self.id}@{self.version}"
+
+
+class DatasetDeniedError(Exception):
+    """The requested dataset version is outside the project grant."""
+
+
 class ProjectDataSettings(BaseModel):
     """How the control service fills project data volumes."""
 
@@ -66,6 +86,7 @@ class ProjectDataSettings(BaseModel):
     object_store_namespace: str
     object_store_labels: dict[str, str]
     object_store_port: int
+    mounted_datasets: dict[str, MountedDataset] = Field(default_factory=dict)
     attempts: int = Field(default=3, ge=1, le=10)
 
 
@@ -359,6 +380,140 @@ class ProjectData:
             labels.get(_ATTACHABLE) == "true"
             and labels.get(_ATTACHABLE_WORKSPACE) == self._settings.workspace
             and (metadata.get("annotations") or {}).get(_CONTENT) == content
+        )
+
+    def selection(self, project: str) -> str | None:
+        """Return the interactive grant selected by the project operator."""
+        grant = self._settings.mounted_datasets.get(project)
+        return grant.selection if grant else None
+
+    def mount(
+        self, session: str, namespace: str, namespace_uid: str, project: str
+    ) -> ProjectDataVolume:
+        """Reserve a static driver volume for exactly one verified session claim."""
+        grant = self._settings.mounted_datasets[project]
+        if namespace != f"hw-s-{session}" or not namespace_uid:
+            raise SessionError("invalid dataset session namespace")
+        name = "hw-mounted-data"
+        pv_name = f"{namespace}-dataset"
+        labels = {_SESSION_LABEL: session, _PROJECT_LABEL: project}
+        annotations = {_CONTENT: grant.version, "heartwood.platform/dataset": grant.id}
+        owner = {"apiVersion": "v1", "kind": "Namespace", "name": namespace, "uid": namespace_uid}
+        claim_spec = {
+            "volumeName": pv_name,
+            "storageClassName": "",
+            "accessModes": ["ReadOnlyMany"],
+            # A static object mount consumes no session disk capacity.
+            "resources": {"requests": {"storage": "1"}},
+        }
+        kube = self._kubernetes
+        kube.create(
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
+                    "labels": labels,
+                    "annotations": annotations,
+                },
+                "spec": claim_spec,
+            }
+        )
+        claim = kube.get("PersistentVolumeClaim", name, namespace)
+        if (
+            not claim
+            or claim["metadata"].get("deletionTimestamp")
+            or (
+                any(claim["metadata"].get("labels", {}).get(k) != v for k, v in labels.items())
+                or any(
+                    claim["metadata"].get("annotations", {}).get(k) != v
+                    for k, v in annotations.items()
+                )
+                or any(
+                    claim["spec"].get(k) != claim_spec[k]
+                    for k in ("volumeName", "storageClassName", "accessModes")
+                )
+                or any(claim["spec"].get(k) for k in ("dataSource", "dataSourceRef", "selector"))
+            )
+        ):
+            raise SessionError("dataset claim does not match its session grant")
+        uid = claim["metadata"]["uid"]
+        settings = self._settings
+        endpoint = f"https://versitygw.{settings.object_store_namespace}.svc.cluster.local:{settings.object_store_port}"
+        spec: dict[str, Any] = {
+            "capacity": {"storage": str(grant.size)},
+            "storageClassName": "",
+            "accessModes": ["ReadOnlyMany"],
+            "persistentVolumeReclaimPolicy": "Retain",
+            "claimRef": {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "namespace": namespace,
+                "name": name,
+                "uid": uid,
+            },
+            "mountOptions": [
+                "read-only",
+                "allow-other",
+                "region us-east-1",
+                "force-path-style",
+                f"endpoint-url {endpoint}",
+                f"prefix datasets/{grant.id}/{grant.version}/",
+            ],
+            "csi": {
+                "driver": "s3.csi.aws.com",
+                "volumeHandle": pv_name,
+                "readOnly": True,
+                "volumeAttributes": {
+                    "bucketName": f"hw-project-{project}",
+                    "authenticationSource": "driver",
+                },
+            },
+        }
+        kube.create(
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolume",
+                "metadata": {"name": pv_name, "ownerReferences": [owner], "labels": labels},
+                "spec": spec,
+            }
+        )
+        pv = kube.get("PersistentVolume", pv_name)
+        if (
+            not pv
+            or pv["metadata"].get("deletionTimestamp")
+            or (
+                pv["metadata"].get("ownerReferences") != [owner]
+                or pv["spec"].get("storageClassName", "") != ""
+                or any(
+                    pv["spec"].get(k) != spec[k]
+                    for k in ("accessModes", "persistentVolumeReclaimPolicy", "csi", "mountOptions")
+                )
+                or any(
+                    pv["spec"].get("claimRef", {}).get(k) != v for k, v in spec["claimRef"].items()
+                )
+            )
+        ):
+            raise SessionError("dataset volume does not match its authorized binding")
+        kube.apply(
+            {
+                "apiVersion": "v1",
+                "kind": "PersistentVolumeClaim",
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
+                    "uid": uid,
+                    "labels": {_ATTACHABLE: "true", _ATTACHABLE_WORKSPACE: settings.workspace},
+                },
+            }
+        )
+        return ProjectDataVolume(
+            claim_name=name,
+            claim_uid=uid,
+            content_sha256=grant.version,
+            mount_path=settings.mount_path,
+            objects=grant.objects,
         )
 
     def fill(

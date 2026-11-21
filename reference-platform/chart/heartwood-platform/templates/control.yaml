@@ -8,7 +8,11 @@ SPDX-License-Identifier: MIT
 
 {{- define "heartwood.controlConfiguration" -}}
 {{- $projects := list -}}
+{{- $mounted := dict -}}
 {{- range .Values.projects -}}
+{{- if .interactiveDataset -}}
+{{- $_ := set $mounted .id (omit .interactiveDataset "reader") -}}
+{{- end -}}
 {{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list) "budgets" (.budgets | default dict)) -}}
 {{- end -}}
 {{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-control/platform-ca/ca.crt" "issuer" (include "heartwood.issuer" .) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
@@ -53,7 +57,7 @@ SPDX-License-Identifier: MIT
 {{- $redirect := printf "%s/user/{researcher}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
 {{- /* Project data volumes are attached to the sandboxes of the hosted gateways' workspace, research. */ -}}
 {{- $store := include "heartwood.selector" (dict "context" . "component" "versitygw") | fromYaml -}}
-{{- $projectData := dict "data_url" (printf "https://heartwood-data.%s.svc.cluster.local:8443" .Release.Namespace) "token_file" "/var/run/secrets/heartwood/data/token" "copy_image" .Values.images.platformServices "storage_class" "heartwood-project-data" "workspace" "research" "mount_path" "/data" "object_store_namespace" .Release.Namespace "object_store_labels" $store "object_store_port" 7070 -}}
+{{- $projectData := dict "mounted_datasets" $mounted "data_url" (printf "https://heartwood-data.%s.svc.cluster.local:8443" .Release.Namespace) "token_file" "/var/run/secrets/heartwood/data/token" "copy_image" .Values.images.platformServices "storage_class" "heartwood-project-data" "workspace" "research" "mount_path" "/data" "object_store_namespace" .Release.Namespace "object_store_labels" $store "object_store_port" 7070 -}}
 {{- /* The data service and the job service read launch contexts for their operation observations, and so may the accounts in control.contextCallers. */ -}}
 {{- $services := list (printf "system:serviceaccount:%s:heartwood-data" .Release.Namespace) (printf "system:serviceaccount:%s:heartwood-jobs" .Release.Namespace) -}}
 {{- $contextCallers := concat $services .Values.control.contextCallers | uniq -}}

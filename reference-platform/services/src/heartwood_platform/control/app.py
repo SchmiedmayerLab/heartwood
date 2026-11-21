@@ -55,6 +55,7 @@ from heartwood_platform.control.litellm import InferenceGatewayError
 from heartwood_platform.control.openshell import ProviderError
 from heartwood_platform.control.planning import MCP_PATH, UNAVAILABLE, create_planning_app
 from heartwood_platform.control.prices import PriceSheet, UnpricedError, task_rate
+from heartwood_platform.control.project_data import DatasetDeniedError
 from heartwood_platform.control.registry import NotAMemberError
 from heartwood_platform.control.researchers import RESEARCHER_ID_PATTERN, Subject
 from heartwood_platform.control.sessions import SessionError
@@ -155,6 +156,8 @@ def create_app(
                 return _error(401, "authentication failed")
             except NotAMemberError:
                 return _error(403, "not a member of the project")
+            except DatasetDeniedError:
+                return _error(403, "dataset version is not granted to this project")
             except NoSessionError:
                 return _error(404, "no session")
             except UnknownProjectError:
@@ -202,7 +205,14 @@ def create_app(
     def prepare(request: Request) -> Response:
         services.verify(_bearer(request))
         launch = launch_request(request)
-        prepared = launches.prepare(launches.subject_of(launch.researcher), launch.project)
+        requested = request.query_params.getlist("dataset")
+        if len(requested) > 1:
+            raise DatasetDeniedError
+        prepared = launches.prepare(
+            launches.subject_of(launch.researcher),
+            launch.project,
+            requested[0] if requested else None,
+        )
         return JSONResponse(prepared.model_dump(mode="json"))
 
     def delete(request: Request) -> Response:

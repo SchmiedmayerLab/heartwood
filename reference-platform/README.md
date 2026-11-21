@@ -199,6 +199,10 @@ Its Keycloak role `manage-clients` covers every client of the realm.
 ### Permitted Data
 
 The reference platform is for synthetic and open data only.
+For a platform-mounted interactive dataset, set `projects[].interactiveDataset` to its `id`, `version` (the SHA-256 digest of its verified content manifest), logical byte `size`, object count `objects`, and the platform mount account name `reader`. Publish and verify the version under `datasets/<id>/<version>/` in the project bucket before granting it. Preserve the version after retirement. The bucket policy seals each admitted version against writes and deletes. On upgrade the policy writer reads the project bucket policies, preserves their seals and withdraws reader grants for retired versions and removed projects. The active reader can read objects and list its version prefix. Supply the Mountpoint S3 CSI driver with that account and the platform CA outside the worker pod. The chart admits mount readers labeled `heartwood.platform/role: dataset-reader` from the platform-managed `mount-s3` namespace to the store.
+
+The launch API selects the project's configured version for members. An optional `dataset=<id>@<version>` query parameter requires that exact selection. A session receives the version at `/data` through a read-only claim. Reapplying a changed configuration restarts control, which removes sessions whose membership or version grant expired. The session namespace owns the static volume. Namespace deletion retires the claim and volume while the underlying objects remain in the project bucket. Projects without a mount grant use the catalog copy path. Batch tasks stage their declared inputs.
+
 The chart loads the synthetic datasets in `files/datasets/`, and the cluster tests write further synthetic objects into the project buckets.
 The platform is not set up for controlled, sensitive or identifiable data, and such data must not be loaded into it.
 

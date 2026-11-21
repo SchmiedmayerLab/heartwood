@@ -6,7 +6,6 @@ SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CO
 SPDX-License-Identifier: MIT
 */ -}}
 
-{{- if .Values.projects }}
 {{- /*
 The grants of each project bucket. The store keeps one policy for each bucket, so one
 writer sets it with every grant: the data service's account reads all objects, and the
@@ -16,6 +15,9 @@ project's job account reads all objects and writes below results/.
 {{- range .Values.projects -}}
 {{- $jobs := printf "hw-jobs-%s" .id -}}
 {{- $grants := list (dict "account_file" "/etc/heartwood-store/data/access-key" "actions" (list "s3:GetObject")) (dict "account" $jobs "actions" (list "s3:GetObject")) (dict "account" $jobs "actions" (list "s3:PutObject") "prefix" "results/") -}}
+{{- with .interactiveDataset -}}
+{{- $grants = append $grants (dict "account" .reader "actions" (list "s3:GetObject") "prefix" (printf "datasets/%s/%s/" .id .version) "sealed_mount" true) -}}
+{{- end -}}
 {{- $_ := set $buckets (printf "hw-project-%s" .id) $grants -}}
 {{- end -}}
 {{- $settings := dict "endpoint" "https://versitygw:7070" "region" "us-east-1" "ca_file" "/etc/platform-ca/ca.crt" "root_access_key_file" "/etc/heartwood-store/root/access-key" "root_secret_key_file" "/etc/heartwood-store/root/secret-key" "buckets" $buckets -}}
@@ -100,4 +102,3 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
-{{- end }}

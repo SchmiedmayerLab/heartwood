@@ -28,7 +28,11 @@ from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import project_client
 from heartwood_platform.control.litellm import InferenceGatewayError
 from heartwood_platform.control.openshell import ProviderError
-from heartwood_platform.control.project_data import ProjectData, ProjectDataVolume
+from heartwood_platform.control.project_data import (
+    DatasetDeniedError,
+    ProjectData,
+    ProjectDataVolume,
+)
 from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession, SessionError
 
@@ -238,21 +242,49 @@ class LaunchService:
             issued_at=self._clock(),
         )
 
-    def prepare(self, subject: str, project: str) -> Launch:
+    def prepare(self, subject: str, project: str, dataset: str | None = None) -> Launch:
         """Prepare the session of a member, creating it at the first launch.
 
         Every step can be repeated, so a launch that failed midway is completed by the
         next one.
         """
         found = self._registry.project(subject, project)
+        if dataset is not None and dataset != self._dataset_selection(project):
+            raise DatasetDeniedError
         with self._serialized(subject, project):
             return self._prepare(found, subject, project)
+
+    def _dataset_selection(self, project: str) -> str | None:
+        return self._project_data.selection(project) if self._project_data else None
+
+    def reconcile_dataset_grants(self) -> None:
+        """Revoke active sessions on membership removal or dataset replacement at startup."""
+        failures: list[Exception] = []
+        for subject, project, selection, member, retiring in self._registry.session_grants():
+            if (
+                retiring
+                or selection != self._dataset_selection(project)
+                or (selection and not member)
+            ):
+                try:
+                    self.delete(subject, project, revoke=True)
+                except (
+                    httpx.HTTPError,
+                    SessionError,
+                    InferenceGatewayError,
+                    ProviderError,
+                ) as error:
+                    failures.append(error)
+        if failures:
+            raise ExceptionGroup("could not retire all expired dataset sessions", failures)
 
     def _prepare(
         self, found: Project, subject: str, project: str, *, rotate_model_key: bool = False
     ) -> Launch:
         existed = self._registry.session(subject, project) is not None
-        session = self._registry.session(subject, project, create=True)
+        session = self._registry.session(
+            subject, project, create=True, selection=self._dataset_selection(project)
+        )
         assert session is not None
         if self._inference is not None and self._inference.settled(session.id):
             # A deletion settled the session and did not finish; it must be completed first.
@@ -286,6 +318,10 @@ class LaunchService:
         volume = (
             None
             if self._project_data is None
+            else self._project_data.mount(
+                session.id, provisioned.namespace, provisioned.namespace_uid, project
+            )
+            if self._dataset_selection(project)
             else self._project_data.fill(session.id, provisioned.namespace, subject, project)
         )
         launch = Launch(
@@ -393,17 +429,22 @@ class LaunchService:
                 raise NoSessionError
             return self._prepare(found, subject, project, rotate_model_key=True)
 
-    def delete(self, subject: str, project: str) -> None:
+    def delete(self, subject: str, project: str, *, revoke: bool = False) -> None:
         """Remove the session of a researcher in a project, whether or not it exists."""
         with self._serialized(subject, project):
             session = self._registry.session(subject, project)
             if session is None:
                 return
+            if revoke:
+                self._registry.mark_retiring(session.id)
+                # Expired access must end even if later accounting or identity cleanup fails.
+                self._sessions.remove(session.id)
             # Settled first, so a deletion that fails afterwards keeps the record of
             # what the session incurred, and a repeated deletion completes the rest.
             incurred = Decimal(0) if self._inference is None else self._inference.settle(session.id)
             self._ledger.settle(session_holder(session.id), incurred)
-            self._sessions.remove(session.id)
+            if not revoke:
+                self._sessions.remove(session.id)
             self._clients.remove_redirect_uri(project, self._redirect_uri(session))
             self._registry.delete_session(subject, project)
             if self._inference is not None:

@@ -54,11 +54,40 @@ spec:
   validations:
     - expression: >-
         (variables.requestNamespace == '' && variables.resource in
-        ['namespaces', 'clusterrolebindings', 'tokenreviews', 'selfsubjectaccessreviews', 'selfsubjectrulesreviews'])
+        ['namespaces', 'persistentvolumes', 'clusterrolebindings', 'tokenreviews', 'selfsubjectaccessreviews', 'selfsubjectrulesreviews'])
         || (variables.resource == 'namespaces' && variables.requestNamespace == variables.requestName)
         || variables.sessionNamespace
         || (variables.requestNamespace == '{{ .Values.sessions.namespace }}' && variables.resource in ['serviceaccounts', 'secrets'])
       message: the control service writes only in session namespaces and the listed platform objects
+    - expression: >-
+        variables.resource != 'persistentvolumes' || (request.operation == 'CREATE'
+        && object.spec.claimRef.namespace.matches('^hw-s-[a-f0-9]{16}$')
+        && object.metadata.name == object.spec.claimRef.namespace + '-dataset'
+        && object.spec.claimRef.name == 'hw-mounted-data' && object.spec.claimRef.uid != ''
+        && object.metadata.ownerReferences.size() == 1
+        && object.metadata.ownerReferences[0].apiVersion == 'v1'
+        && object.metadata.ownerReferences[0].kind == 'Namespace'
+        && object.metadata.ownerReferences[0].name == object.spec.claimRef.namespace
+        && object.spec.accessModes == ['ReadOnlyMany']
+        && (!has(object.spec.storageClassName) || object.spec.storageClassName == '')
+        && object.spec.persistentVolumeReclaimPolicy == 'Retain'
+        && object.spec.csi.driver == 's3.csi.aws.com' && object.spec.csi.readOnly
+        && object.spec.csi.volumeHandle == object.metadata.name
+        && !has(object.spec.csi.controllerPublishSecretRef) && !has(object.spec.csi.nodeStageSecretRef)
+        && !has(object.spec.csi.nodePublishSecretRef) && !has(object.spec.csi.controllerExpandSecretRef)
+        && !has(object.spec.csi.nodeExpandSecretRef)
+        && (false
+        {{- range .Values.projects }}
+        {{- if .interactiveDataset }}
+        || (object.metadata.labels['heartwood.platform/project'] == '{{ .id }}'
+        && object.spec.csi.volumeAttributes == {'bucketName': 'hw-project-{{ .id }}', 'authenticationSource': 'driver'}
+        && object.spec.mountOptions == ['read-only', 'allow-other', 'region us-east-1', 'force-path-style',
+        'endpoint-url https://versitygw.{{ $.Release.Namespace }}.svc.cluster.local:7070',
+        'prefix datasets/{{ .interactiveDataset.id }}/{{ .interactiveDataset.version }}/'])
+        {{- end }}
+        {{- end }}
+        ))
+      message: the control service reserves only read-only volumes of configured dataset versions for session claims
     - expression: >-
         variables.resource != 'namespaces'
         || (variables.requestSubResource == '' && request.operation in ['CREATE', 'DELETE']
