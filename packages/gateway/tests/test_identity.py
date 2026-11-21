@@ -1601,8 +1601,12 @@ def test_the_expiry_of_an_exchanged_token_bounds_its_reuse(tmp_path: Path) -> No
 
 
 def test_a_service_token_is_exchanged_for_the_sign_in_and_kept_until_it_expires(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # JWT expiry uses whole wall-clock seconds. Keep issuance and conversion to the
+    # gateway clock at the same instant when checking the exact refresh boundary.
+    issued_at = int(time.time())
+    monkeypatch.setattr(time, "time", lambda: issued_at)
     provider = _Provider()
     clock = _Clock()
     access = _access(tmp_path, provider, clock=clock)
