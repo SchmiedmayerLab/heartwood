@@ -59,7 +59,7 @@ The platform is for synthetic and open data only.
 | LiteLLM | The proxy of the model route, one Deployment that serves HTTPS on port 4000, with one virtual key for each session's workers |
 | Synthetic model | With `inference.syntheticModel.enabled`, a deterministic model behind LiteLLM for tests |
 | Local model | With `inference.localModel.enabled`, `llama-server` from `images.modelRuntime` behind LiteLLM |
-| Data service | One Deployment that serves HTTPS on port 8443, with the project data catalog and the DRS read endpoints |
+| Data service | One StatefulSet that serves HTTPS on port 8443, with the project data catalog, the DRS read endpoints and the MCP catalog tools |
 | versitygw | S3-compatible object store that serves HTTPS on port 7070, with one bucket `hw-project-<id>` for each entry in `projects` |
 | JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
 | Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `heartwood-data-tls`, `versitygw-tls`, `litellm-tls`, `synthetic-model-tls` and `llama-server-tls` with the serving certificates of those services |
