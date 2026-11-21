@@ -51,7 +51,7 @@ by the platform CA for the names of each Service. An existing certificate is kep
 while the CA is kept.
 */ -}}
 {{- $authority := buildCustomCert ($certificate | b64enc) ($key | b64enc) -}}
-{{- $services := list "keycloak" "heartwood-control" "litellm" -}}
+{{- $services := list "keycloak" "heartwood-control" "heartwood-data" "versitygw" "litellm" -}}
 {{- if .Values.inference.syntheticModel.enabled -}}
 {{- $services = append $services "synthetic-model" -}}
 {{- end -}}

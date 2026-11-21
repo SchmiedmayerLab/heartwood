@@ -88,6 +88,13 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "Apache-2.0"
 
+# Synthetic datasets of the reference platform, served byte for byte, so they carry no header.
+[[annotations]]
+path = ["reference-platform/chart/heartwood-platform/files/datasets/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"
+SPDX-License-Identifier = "MIT"
+
 # The Zero to JupyterHub chart archive, byte for byte as the chart repository serves it.
 [[annotations]]
 path = ["reference-platform/chart/heartwood-platform/charts/jupyterhub-4.4.5.tgz"]

@@ -112,8 +112,10 @@ def test_schema_rejects_an_image_without_a_digest() -> None:
 
 def test_pods_meet_the_restricted_pod_security_standard(objects: list[dict[str, Any]]) -> None:
     for name, spec in _pod_specs(objects):
-        # The control service and the Hub use their ServiceAccount tokens.
-        assert spec["automountServiceAccountToken"] is (name in {"heartwood-control", "hub"}), name
+        # The control and data services and the Hub use their ServiceAccount tokens.
+        assert spec["automountServiceAccountToken"] is (
+            name in {"heartwood-control", "heartwood-data", "hub"}
+        ), name
         assert spec["securityContext"]["runAsNonRoot"] is True, name
         assert spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}, name
         for container in spec["containers"] + spec.get("initContainers", []):
@@ -138,6 +140,7 @@ def test_fixed_cluster_roles_grant_no_role_management(objects: list[dict[str, An
     roles = [item for item in objects if item["kind"] in {"ClusterRole", "Role"}]
     assert {role["metadata"]["name"] for role in roles} == _FIXED_ROLES | {
         "heartwood-control",
+        "heartwood-data",
         "heartwood-hub-spawner",
     }
     for role in roles:

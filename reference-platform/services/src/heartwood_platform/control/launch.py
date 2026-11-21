@@ -27,6 +27,7 @@ from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import project_client
 from heartwood_platform.control.litellm import InferenceGatewayError
 from heartwood_platform.control.openshell import ProviderError
+from heartwood_platform.control.project_data import ProjectData, ProjectDataVolume
 from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession, SessionError
 
@@ -114,6 +115,8 @@ class Launch(BaseModel):
     kube_system_uid: str
     gateway_service_account: str
     openshell_endpoint: str
+    # The session's read-only copy of the project's catalog objects, if the project has any.
+    project_data: ProjectDataVolume | None = None
 
 
 class NoSessionError(Exception):
@@ -153,6 +156,7 @@ class LaunchService:
         ledger: Ledger,
         session_reservation: Decimal,
         inference: SessionInference | None = None,
+        project_data: ProjectData | None = None,
     ) -> None:
         """Launch sessions of one platform; ``hosted`` renders their gateways' files.
 
@@ -163,6 +167,8 @@ class LaunchService:
         in ``ledger`` at its first launch, or what is left of it, and settles the
         reservation with what ``inference`` measured when it is deleted. Without an
         inference route a session incurs nothing.
+
+        ``project_data`` fills their project data volumes.
         """
         self._registry = registry
         self._clients = clients
@@ -175,6 +181,7 @@ class LaunchService:
         self._ledger = ledger
         self._session_reservation = session_reservation
         self._inference = inference
+        self._project_data = project_data
         # A launch waits for the session's gateway. A deletion that ran meanwhile
         # would leave what the launch writes afterwards, so both hold one lock for
         # each researcher and project.
@@ -272,6 +279,11 @@ class LaunchService:
         redirect_uri = self._redirect_uri(session)
         self._clients.ensure_project_client(project)
         self._clients.add_redirect_uri(project, redirect_uri)
+        volume = (
+            None
+            if self._project_data is None
+            else self._project_data.fill(session.id, provisioned.namespace, subject, project)
+        )
         launch = Launch(
             session=session.id,
             researcher=self._researcher_id(subject),
@@ -284,6 +296,7 @@ class LaunchService:
             kube_system_uid=provisioned.kube_system_uid,
             gateway_service_account=provisioned.gateway_account,
             openshell_endpoint=provisioned.openshell_endpoint,
+            project_data=volume,
         )
         hosted = (
             {}

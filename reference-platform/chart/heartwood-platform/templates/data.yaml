@@ -1,0 +1,482 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+The data service: the project data catalog, the DRS read endpoints and short-lived access
+to the catalog objects. The catalog comes from projects[].datasets; each file of a dataset
+is read from files/datasets/<dataset>/<file>, and its size and checksum are computed here.
+*/ -}}
+{{- define "heartwood.dataCatalog" -}}
+{{- $total := 0 -}}
+{{- $mimeTypes := dict "csv" "text/csv" "tsv" "text/tab-separated-values" "md" "text/markdown" "json" "application/json" "txt" "text/plain" -}}
+{{- $projects := list -}}
+{{- range $project := .Values.projects -}}
+{{- $datasets := list -}}
+{{- range $dataset := $project.datasets | default list -}}
+{{- $objects := list -}}
+{{- range $file := $dataset.files -}}
+{{- $content := $.Files.Get (printf "files/datasets/%s/%s" $dataset.id $file) -}}
+{{- if not $content -}}
+{{- fail (printf "files/datasets/%s/%s is missing or empty" $dataset.id $file) -}}
+{{- end -}}
+{{- $total = add $total (len $content) -}}
+{{- $extension := splitList "." $file | last -}}
+{{- $objects = append $objects (dict "name" $file "size" (len $content) "sha256" (sha256sum $content) "mime_type" (get $mimeTypes $extension | default "text/plain")) -}}
+{{- end -}}
+{{- $datasets = append $datasets (dict "id" $dataset.id "name" $dataset.name "description" $dataset.description "created" $dataset.created "objects" $objects) -}}
+{{- end -}}
+{{- $projects = append $projects (dict "id" $project.id "members" ($project.members | default list) "datasets" $datasets) -}}
+{{- if and $datasets (not $.Values.sessions.attemptStorageClass.provisioner) -}}
+{{- fail "projects with datasets need sessions.attemptStorageClass.provisioner for their project data volumes" -}}
+{{- end -}}
+{{- end -}}
+{{- /* The bootstrap Job reads the files from one ConfigMap, which holds at most 1 MiB. */ -}}
+{{- if gt $total 786432 -}}
+{{- fail "the files of projects[].datasets exceed 768 KiB, the limit of the dataset ConfigMap" -}}
+{{- end -}}
+{{- dict "projects" $projects | toJson -}}
+{{- end }}
+
+{{- define "heartwood.dataConfiguration" -}}
+{{- $hostname := printf "heartwood-data.%s.svc.cluster.local:8443" .Release.Namespace -}}
+{{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-data/platform-ca/ca.crt" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" -}}
+{{- $store := dict "endpoint" (printf "https://versitygw.%s.svc.cluster.local:7070" .Release.Namespace) "region" "us-east-1" "access_key_file" "/etc/heartwood-data/store/access-key" "secret_key_file" "/etc/heartwood-data/store/secret-key" -}}
+{{- $tls := dict "certificate_file" "/etc/heartwood-data/tls/tls.crt" "key_file" "/etc/heartwood-data/tls/tls.key" -}}
+{{- $callers := list (printf "system:serviceaccount:%s:heartwood-control" .Release.Namespace) -}}
+{{- dict "platform_id" .Values.control.platformId "hostname" $hostname "audience" "heartwood-data" "service_callers" $callers "keycloak" $keycloak "object_store" $store "tls" $tls "catalog" (include "heartwood.dataCatalog" . | fromJson) | toPrettyJson -}}
+{{- end }}
+
+{{- /* The objects of every dataset, by DRS identifier, and where the bootstrap Job writes them. */ -}}
+{{- define "heartwood.dataSeed" -}}
+{{- $objects := list -}}
+{{- $buckets := list -}}
+{{- range $project := .Values.projects -}}
+{{- $buckets = append $buckets (printf "hw-project-%s" $project.id) -}}
+{{- range $dataset := $project.datasets | default list -}}
+{{- range $file := $dataset.files -}}
+{{- $content := $.Files.Get (printf "files/datasets/%s/%s" $dataset.id $file) -}}
+{{- $objects = append $objects (dict "bucket" (printf "hw-project-%s" $project.id) "key" (printf "datasets/%s/%s" $dataset.id $file) "file" (printf "/etc/heartwood-data/objects/%s.%s" $dataset.id $file) "sha256" (sha256sum $content)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- dict "endpoint" "https://versitygw:7070" "region" "us-east-1" "ca_file" "/etc/heartwood-data/platform-ca/ca.crt" "root_access_key_file" "/etc/heartwood-data/root/access-key" "root_secret_key_file" "/etc/heartwood-data/root/secret-key" "data_access_key_file" "/etc/heartwood-data/store/access-key" "buckets" $buckets "objects" $objects | toPrettyJson -}}
+{{- end }}
+# The data service's account of the object store, which reads the objects of every
+# project bucket and nothing else.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: versitygw-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  access-key: {{ "heartwood-data" | b64enc }}
+  secret-key: {{ include "heartwood.credential" (dict "context" . "name" "versitygw-data" "key" "secret-key") }}
+---
+# The catalog and the settings of the data service. It holds no credential.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  configuration.json: |
+    {{- include "heartwood.dataConfiguration" . | nindent 4 }}
+  seed.json: |
+    {{- include "heartwood.dataSeed" . | nindent 4 }}
+---
+# The bytes of the synthetic datasets, which the bootstrap Job writes into the buckets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-data-objects
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  {{- range $project := .Values.projects }}
+  {{- range $dataset := $project.datasets | default list }}
+  {{- range $file := $dataset.files }}
+  {{ printf "%s.%s" $dataset.id $file }}: {{ $.Files.Get (printf "files/datasets/%s/%s" $dataset.id $file) | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: heartwood-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+# The data service verifies the control service's tokens with a TokenReview.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: heartwood-data
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: heartwood-data
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: heartwood-data
+subjects:
+  - kind: ServiceAccount
+    name: heartwood-data
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: heartwood-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 4 }}
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+# The service keeps no state: the catalog comes from its configuration.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heartwood-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 8 }}
+      annotations:
+        checksum/configuration: {{ include "heartwood.dataConfiguration" . | sha256sum }}
+    spec:
+      serviceAccountName: heartwood-data
+      # The service reviews the tokens of the control service through the Kubernetes API.
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      containers:
+        - name: data
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.data, /etc/heartwood-data/configuration.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: https
+              containerPort: 8443
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 96Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - name: configuration
+              mountPath: /etc/heartwood-data
+              readOnly: true
+            - name: store
+              mountPath: /etc/heartwood-data/store
+              readOnly: true
+            - name: tls
+              mountPath: /etc/heartwood-data/tls
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/heartwood-data/platform-ca
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: configuration
+          configMap:
+            name: heartwood-data
+            items:
+              - key: configuration.json
+                path: configuration.json
+        - name: store
+          secret:
+            secretName: versitygw-data
+        - name: tls
+          secret:
+            secretName: heartwood-data-tls
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        # In memory, because the service copies its serving key here when it reloads it.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+---
+# Heartwood gateways call the DRS endpoints, and the control service asks for access plans.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: heartwood-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+# The data service reads the keys that sign researchers' tokens from Keycloak.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-from-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "data") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+# The object store accepts the data bootstrap Job and the copy jobs of session namespaces,
+# which hold presigned URLs and no account.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: versitygw-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "versitygw") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "data-bootstrap") | nindent 14 }}
+        - namespaceSelector:
+            matchExpressions:
+              - key: heartwood.platform/session
+                operator: Exists
+          podSelector:
+            matchLabels:
+              heartwood.platform/role: project-data-copy
+      ports:
+        - protocol: TCP
+          port: 7070
+{{- if .Values.sessions.attemptStorageClass.provisioner }}
+---
+# StorageClass of project data volumes, with the provisioner of the attempt volumes.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: heartwood-project-data
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+provisioner: {{ .Values.sessions.attemptStorageClass.provisioner }}
+{{- with .Values.sessions.attemptStorageClass.parameters }}
+parameters:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+{{- end }}
+{{- if .Values.projects }}
+---
+# Creates the data service's account and loads the catalog objects into the project
+# buckets, after the bucket Job. Each step can be repeated.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: heartwood-data-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "data-bootstrap") | nindent 8 }}
+      annotations:
+        checksum/seed: {{ include "heartwood.dataSeed" . | sha256sum }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      initContainers:
+        - name: create-account
+          image: {{ .Values.images.versitygw }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          command: [/bin/sh, -c]
+          args:
+            - |
+              set -eu
+              if versitygw admin list-users | grep -q "^${DATA_ACCESS_KEY} "; then
+                # A replaced secret of the account takes effect at the store.
+                versitygw admin update-user --access "${DATA_ACCESS_KEY}" --secret "${DATA_SECRET_KEY}" --role user
+              else
+                versitygw admin create-user --access "${DATA_ACCESS_KEY}" --secret "${DATA_SECRET_KEY}" --role user
+              fi
+          env:
+            - name: ADMIN_ENDPOINT_URL
+              value: https://versitygw:7070
+            # The admin client verifies the store against the platform CA alone.
+            - name: SSL_CERT_FILE
+              value: /etc/heartwood-data/platform-ca/ca.crt
+            - name: ADMIN_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: versitygw-root
+                  key: access-key
+            - name: ADMIN_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: versitygw-root
+                  key: secret-key
+            - name: DATA_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: versitygw-data
+                  key: access-key
+            - name: DATA_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: versitygw-data
+                  key: secret-key
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: platform-ca
+              mountPath: /etc/heartwood-data/platform-ca
+              readOnly: true
+      containers:
+        - name: load-objects
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.data.seed, /etc/heartwood-data/seed/seed.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: seed
+              mountPath: /etc/heartwood-data/seed
+              readOnly: true
+            - name: objects
+              mountPath: /etc/heartwood-data/objects
+              readOnly: true
+            - name: root
+              mountPath: /etc/heartwood-data/root
+              readOnly: true
+            - name: store
+              mountPath: /etc/heartwood-data/store
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/heartwood-data/platform-ca
+              readOnly: true
+      volumes:
+        - name: seed
+          configMap:
+            name: heartwood-data
+            items:
+              - key: seed.json
+                path: seed.json
+        - name: objects
+          configMap:
+            name: heartwood-data-objects
+        - name: root
+          secret:
+            secretName: versitygw-root
+        # Only the access key: the Job grants the account read access by its key identifier.
+        - name: store
+          secret:
+            secretName: versitygw-data
+            items:
+              - key: access-key
+                path: access-key
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+{{- end }}

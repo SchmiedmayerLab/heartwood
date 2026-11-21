@@ -282,6 +282,11 @@ class FakeKubernetes:
         self.reads_until_ready = 1
         self._reads = 0
         self._created = 0
+        # The outcome each new Job reports when it is read, in order: "Complete" or "Failed".
+        self.job_outcomes: list[str] = []
+        self.deletions: list[tuple[str, str | None]] = []
+        # Every created object as the request carried it.
+        self.posted: list[dict[str, Any]] = []
 
     def client(self) -> httpx.Client:
         transport = httpx.MockTransport(self._handle)
@@ -302,11 +307,15 @@ class FakeKubernetes:
             return httpx.Response(500)
         if request.method == "POST":
             body = json.loads(request.content)
+            self.posted.append(json.loads(request.content))
             item = f"{path}/{body['metadata']['name']}"
             if item in self.objects:
                 return httpx.Response(409)
             self._created += 1
             body["metadata"]["uid"] = f"uid-{self._created}"
+            if body.get("kind") == "Job" and self.job_outcomes:
+                outcome = self.job_outcomes.pop(0)
+                body["status"] = {"conditions": [{"type": outcome, "status": "True"}]}
             self.objects[item] = body
             return httpx.Response(201, json=body)
         if request.method == "PATCH":
@@ -316,9 +325,22 @@ class FakeKubernetes:
                 or request.url.params.get("force") != "true"
             ):
                 return httpx.Response(415)
-            self.objects[path] = {**self.objects.get(path, {}), **json.loads(request.content)}
+            applied = json.loads(request.content)
+            existing = self.objects.get(path, {})
+            merged = {**existing, **applied}
+            if "metadata" in existing:
+                # Server-side apply merges labels and annotations.
+                metadata = {**existing["metadata"], **applied["metadata"]}
+                for field in ("labels", "annotations"):
+                    metadata[field] = {
+                        **existing["metadata"].get(field, {}),
+                        **applied["metadata"].get(field, {}),
+                    }
+                merged["metadata"] = metadata
+            self.objects[path] = merged
             return httpx.Response(200, json=self.objects[path])
         if request.method == "DELETE":
+            self.deletions.append((path, request.url.params.get("propagationPolicy")))
             if path not in self.objects:
                 return httpx.Response(404)
             # Deleting a namespace deletes the objects in it.
@@ -328,6 +350,17 @@ class FakeKubernetes:
                 if key == path or (inside is not None and inside in key):
                     del self.objects[key]
             return httpx.Response(200)
+        if "labelSelector" in request.url.params:
+            wanted = dict(
+                term.split("=", 1) for term in request.url.params["labelSelector"].split(",")
+            )
+            items = [
+                item
+                for key, item in self.objects.items()
+                if key.rsplit("/", 1)[0] == path
+                and all(item["metadata"].get("labels", {}).get(k) == v for k, v in wanted.items())
+            ]
+            return httpx.Response(200, json={"items": items})
         return self._get(path)
 
     def _get(self, path: str) -> httpx.Response:

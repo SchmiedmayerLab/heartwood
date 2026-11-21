@@ -43,6 +43,7 @@ from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.litellm import LiteLLM
 from heartwood_platform.control.openshell import OpenShellProviders, ProviderRoute
 from heartwood_platform.control.prices import PriceSheet
+from heartwood_platform.control.project_data import ProjectData, ProjectDataSettings
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.researchers import Subject, read_key, researcher_id
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
@@ -156,6 +157,8 @@ class Settings(_Settings):
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
     inference: InferenceSettings
+    # How project data volumes are filled; without it, sessions get none.
+    project_data: ProjectDataSettings | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -293,6 +296,19 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         sandbox=sandbox,
         models=route_models(settings),
     )
+    project_data = (
+        None
+        if settings.project_data is None
+        else ProjectData(
+            kubernetes,
+            settings.project_data,
+            # The data service serves HTTPS with a certificate of the platform CA.
+            httpx.Client(
+                timeout=30,
+                verify=ssl.create_default_context(cafile=namespaces.platform_ca_file),
+            ),
+        )
+    )
     researcher_key = read_key(settings.researcher_id_key_file).encode()
     issuer = settings.keycloak.issuer
     launches = LaunchService(
@@ -306,6 +322,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         ledger=ledger,
         session_reservation=Decimal(settings.inference.session_reservation),
         inference=_inference(settings, settings.sessions.platform_ca_file),
+        project_data=project_data,
     )
     return create_app(
         launches,
