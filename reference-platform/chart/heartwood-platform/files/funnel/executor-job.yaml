@@ -22,6 +22,15 @@ spec:
         heartwood.platform/role: funnel-executor
         heartwood.platform/task: "{{.TaskId}}"
     spec:
+      {{- if and .GPUCount .Tolerations}}
+      tolerations:
+        {{- range .Tolerations}}
+        - key: {{printf "%q" .Key}}
+          operator: {{printf "%q" .Operator}}
+          value: {{printf "%q" .Value}}
+          effect: {{printf "%q" .Effect}}
+        {{- end}}
+      {{- end}}
       restartPolicy: Never
       serviceAccountName: funnel-executor
       automountServiceAccountToken: false

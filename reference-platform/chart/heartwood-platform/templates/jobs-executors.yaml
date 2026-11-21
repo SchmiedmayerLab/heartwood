@@ -288,6 +288,9 @@ data:
   server.yaml: {{ toYaml $serverConfig | b64enc }}
 ---
 {{- $workerKubernetes := dict "Namespace" $namespace "JobsNamespace" $namespace "ServiceAccount" "funnel-executor" "ExecutorTemplate" ($.Files.Get "files/funnel/executor-job.yaml") }}
+{{- if $project.gpu }}
+{{- $_ := set $workerKubernetes "Tolerations" (list (dict "Key" "nvidia.com/gpu" "Operator" "Equal" "Value" "present" "Effect" "NoSchedule")) }}
+{{- end }}
 {{- $rpc := dict "ServerAddress" (printf "%s:9090" $host) "TLSCAFile" "/etc/platform-ca/ca.crt" "CredentialFile" "/etc/funnel-task/credential" }}
 {{- $workerConfig := merge (dict "Compute" "kubernetes" "Database" "rpc" "EventWriters" (list "log") "Logger" (dict "Level" "info") "RPCClient" $rpc "Worker" (dict "WorkDir" "/tmp/funnel-work") "Kubernetes" $workerKubernetes) $backends }}
 # The worker's configuration. It holds no credential; each worker reads its task's

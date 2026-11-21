@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import base64
 import json
+import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -48,6 +50,41 @@ def _worker_config(objects: list[dict[str, Any]], project: str) -> dict[str, Any
     config = yaml.safe_load(config_map["data"]["worker.yaml"])
     assert isinstance(config, dict)
     return config
+
+
+def _executor_job(
+    kubernetes: dict[str, Any], tmp_path: Path, project: str, count: int
+) -> dict[str, Any]:
+    # Render the deployed Go template with the data the Funnel worker supplies.
+    (tmp_path / "Chart.yaml").write_text("apiVersion: v2\nname: executor\nversion: 1.0.0\n")
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "job.yaml").write_text(
+        "{{ with .Values.task }}" + kubernetes["ExecutorTemplate"] + "{{ end }}"
+    )
+    task = {
+        "TaskId": "task",
+        "JobId": 0,
+        "JobsNamespace": f"hw-jobs-{project}",
+        "Image": "example.test/task",
+        "Command": ["true"],
+        "Workdir": "/work",
+        "Cpus": 1,
+        "RamGb": 1,
+        "GPUCount": count,
+        "Tolerations": kubernetes.get("Tolerations", []),
+    }
+    values = tmp_path / "task.json"
+    values.write_text(json.dumps({"task": task}))
+    rendered = subprocess.run(
+        ["helm", "template", "executor", str(tmp_path), "-f", str(values)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    job = yaml.safe_load(rendered.stdout)
+    assert isinstance(job, dict)
+    return job
 
 
 @pytest.mark.parametrize("project", _PROJECTS)
@@ -134,7 +171,7 @@ def test_the_server_serves_tls_and_issues_per_task_worker_credentials(
 
 @pytest.mark.parametrize("project", _PROJECTS)
 def test_workers_hold_no_credential_and_executors_no_token(
-    objects: list[dict[str, Any]], project: str
+    objects: list[dict[str, Any]], tmp_path: Path, project: str
 ) -> None:
     config = _worker_config(objects, project)
     assert config["RPCClient"] == {
@@ -143,12 +180,7 @@ def test_workers_hold_no_credential_and_executors_no_token(
         "CredentialFile": "/etc/funnel-task/credential",
     }
     assert "Server" not in config
-    template = yaml.safe_load(
-        config["Kubernetes"]["ExecutorTemplate"]
-        .split("{{- if")[0]
-        .replace("{{", "")
-        .replace("}}", "")
-    )
+    template = _executor_job(config["Kubernetes"], tmp_path, project, 0)
     pod = template["spec"]["template"]["spec"]
     assert pod["automountServiceAccountToken"] is False
     assert pod["hostUsers"] is False
@@ -320,3 +352,25 @@ def test_worker_created_jobs_tolerate_only_the_gpu_taint_and_only_for_gpu_tasks(
         in (variables["gpuEntitled"])
     )
     assert "'nvidia.com/gpu' in c.resources.limits" in variables["gpuTask"]
+
+
+@pytest.mark.parametrize(
+    ("project", "count"), [("demo", 0), ("demo", 2), ("other", 0), ("other", 2)]
+)
+def test_executor_template_gpu_toleration(
+    objects: list[dict[str, Any]], tmp_path: Path, project: str, count: int
+) -> None:
+    kubernetes = _worker_config(objects, project)["Kubernetes"]
+    pod = _executor_job(kubernetes, tmp_path, project, count)["spec"]["template"]["spec"]
+    if project == "other" and count > 0:
+        assert pod["tolerations"] == [
+            {
+                "key": "nvidia.com/gpu",
+                "operator": "Equal",
+                "value": "present",
+                "effect": "NoSchedule",
+            }
+        ]
+    else:
+        assert "tolerations" not in pod
+    assert "Tolerations" not in _server_config(objects, project)["Kubernetes"]
