@@ -95,9 +95,18 @@ jobs:
         run: >-
           bash reference-platform/cluster/network-policy-controls.sh heartwood
           test-results/kubernetes-qualification
+      - name: Build the platform services image and push it to the cluster registry
+        run: |
+          docker build --file reference-platform/services/Dockerfile \
+            --tag heartwood-platform-services:candidate .
+          image="$(bash reference-platform/cluster/push-image.sh heartwood \
+            heartwood-platform-services:candidate)"
+          echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Install the platform chart
-        run: bash reference-platform/cluster/install-chart.sh heartwood
-      - name: Test the admission and network policies of the installed chart
+        run: >-
+          bash reference-platform/cluster/install-chart.sh heartwood
+          --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
+      - name: Test the installed chart
         working-directory: reference-platform/services
         run: |
           uv sync --locked

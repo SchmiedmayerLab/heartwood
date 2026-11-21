@@ -6,9 +6,19 @@
 
 # Chart values for the kind cluster that reference-platform/cluster creates.
 
+# The members are the subject identifiers of two synthetic researchers.
 projects:
   - id: demo
+    billingAttributionRef: synthetic-grant-demo
+    policyRef: synthetic-policy-1
+    members:
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002
   - id: other
+    billingAttributionRef: synthetic-grant-other
+    policyRef: synthetic-policy-1
+    members:
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
 
 sessions:
   # Stand-in for the worker image, which is not published by digest.

@@ -58,6 +58,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "heartwood.selector" (dict "context" . "component" "keycloak-bootstrap") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 14 }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
@@ -85,3 +88,25 @@ spec:
       ports:
         - protocol: TCP
           port: 7070
+---
+# The Hub and the Heartwood gateways call the control service, which verifies every caller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: heartwood-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
+      ports:
+        - protocol: TCP
+          port: 8080

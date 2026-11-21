@@ -15,7 +15,14 @@ description = "Platform services of the Heartwood Kubernetes reference platform.
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
-dependencies = ["heartwood-schemas"]
+dependencies = [
+    "heartwood-schemas",
+    "pydantic>=2.12",
+    "httpx>=0.28.1",
+    "pyjwt[crypto]>=2.15",
+    "starlette>=1.10",
+    "uvicorn>=0.54",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -50,5 +57,5 @@ files = ["src", "tests", "../tools", "../tests"]
 minversion = "8.0"
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 testpaths = ["tests"]
-# Lets the cluster tests under ../tests/cluster import their kubectl helper.
-pythonpath = ["../tests/cluster"]
+# Lets the tests import their helper modules.
+pythonpath = ["tests", "../tests/cluster"]

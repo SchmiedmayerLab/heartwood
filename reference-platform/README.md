@@ -20,7 +20,7 @@ It is kept apart from the Heartwood application packages under `packages/`.
 | `chart/heartwood-platform/` | Helm chart of the platform; `values-kind.yaml` and `values-gke.yaml` hold the cluster-specific values |
 | `cluster/` | kind cluster fixture: configuration, creation and deletion scripts, the network policy controls and the chart installation script |
 | `infrastructure/gke/` | OpenTofu configuration of the GKE cluster; see its [README](infrastructure/gke/README.md) |
-| `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, service and chart template tests in `tests/` |
+| `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, service and chart template tests in `tests/`, and the `Dockerfile` of the platform services image |
 | `tests/cluster/` | Tests that run against a cluster with the chart installed |
 | `tools/` | `check_cloud_boundary.py`, the cloud boundary check, and `render_openshell.py` with its values file |
 
@@ -55,6 +55,7 @@ The platform is for synthetic and open data only.
 |---|---|
 | PostgreSQL | One StatefulSet with a role and a database for Keycloak |
 | Keycloak | One Deployment that imports the realm `heartwood` at its first start |
+| Control service | One StatefulSet with the project registry and the launch interface |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
 | Platform certificate authority | Secret `platform-ca` with the key, and ConfigMap `platform-ca` with the certificate |
 | Session roles | Six fixed ClusterRoles for session namespaces, and the ServiceAccount and rights of the control service |
@@ -62,6 +63,7 @@ The platform is for synthetic and open data only.
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
 Every image is pinned by digest in `values.yaml`, and `values.schema.json` rejects an image reference without a digest.
+`images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
@@ -74,11 +76,34 @@ It creates the client `heartwood-control` with the role `manage-clients` and the
 The Job `keycloak-bootstrap` disables the temporary administrator that Keycloak creates at its first start.
 Keycloak skips the import when the realm exists, so a later change to the realm needs a temporary administrator from `kc.sh bootstrap-admin`.
 
+### Control Service
+
+The control service keeps the project registry in a SQLite database on its volume: projects with their billing binding and policy, their members, and one session for each researcher and project.
+The chart value `projects` is the source of projects and members, and the service replaces the registry's projects with it at each start.
+
+| Request | Caller | Result |
+|---|---|---|
+| `GET /v1/researchers/{subject}/projects` | Platform component | The projects that the researcher is a member of |
+| `PUT /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session, the project client and the launch context; the session is created at the first launch |
+| `DELETE /v1/researchers/{subject}/projects/{project}/launch` | Platform component | The session and its redirect URI are removed |
+| `GET /v1/launch-context` | Heartwood gateway | The launch context of the researcher and project that the token names |
+
+A platform component sends a projected service account token with the audience `heartwood-control`.
+The service verifies it with a TokenReview and accepts the service accounts in `control.serviceCallers`.
+A Heartwood gateway sends a Keycloak access token that the project client obtained by token exchange.
+The service verifies its signature, issuer, expiry and type, requires `heartwood-control` as its only audience, and takes the project from the authorized party `hw-proj-<project>` and the researcher from the subject.
+Every request is checked against the registry, and the billing binding of a launch context comes from the registry only.
+
+At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
+It adds the redirect URI of the researcher's gateway, from `control.redirectUriTemplate`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
+Its Keycloak role `manage-clients` covers every client of the realm.
+
 ### Network Policies
 
 Both namespaces deny ingress by default.
 PostgreSQL accepts connections from Keycloak.
-Keycloak accepts connections from `heartwood-sessions` and from its bootstrap Job.
+Keycloak accepts connections from `heartwood-sessions`, from the control service and from its bootstrap Job.
+The control service accepts connections from `heartwood-sessions`.
 versitygw accepts connections from its bootstrap Job.
 
 ### Session Roles and Admission Policies
@@ -157,12 +182,16 @@ kind writes the cluster's credentials to the kubeconfig that `KUBECONFIG` select
 export KUBECONFIG="${TMPDIR:-/tmp}/heartwood-kubeconfig"
 bash reference-platform/cluster/create-cluster.sh heartwood
 bash reference-platform/cluster/network-policy-controls.sh heartwood test-results/kubernetes-qualification
-bash reference-platform/cluster/install-chart.sh heartwood
+docker build --file reference-platform/services/Dockerfile --tag heartwood-platform-services:candidate .
+image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-platform-services:candidate)"
+bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood)
 bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
+It also starts a registry on the kind network.
+`push-image.sh` pushes a local image to that registry and prints the reference by digest under which the cluster pulls it.
 `network-policy-controls.sh` runs a reachable-connection control and two blocked-connection controls, one denied by an ingress policy and one by an egress policy.
 A blocked control passes only after three consecutive connection timeouts.
 The reachable control then runs again, and after the policies are deleted both blocked pods must connect.
@@ -170,4 +199,4 @@ The script writes `network-policy-controls.json` and exits with an error unless 
 
 `install-chart.sh` installs the chart with `values-kind.yaml` and waits until every component is ready.
 The cluster tests send each admission policy admitted requests and one denied request for each condition, including each ClusterRole with a subject other than its own, as the confined ServiceAccount.
-They also check which connections the network policies allow.
+They also check which connections the network policies allow, and call the control service as a stand-in for the spawner.
