@@ -78,3 +78,33 @@ metadata:
 spec:
   policyName: heartwood-project-data-copy
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-mounted-dataset-claims
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: [persistentvolumeclaims]
+        operations: [CREATE]
+  validations:
+    - expression: >-
+        !(object.metadata.name == 'hw-mounted-data' ||
+        (has(object.spec.volumeName) && object.spec.volumeName.matches('^hw-s-[a-f0-9]{16}-dataset$')))
+        || (request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:heartwood-control'
+        && request.namespace.matches('^hw-s-[a-f0-9]{16}$')
+        && object.metadata.name == 'hw-mounted-data' && object.spec.volumeName == request.namespace + '-dataset'
+        && object.spec.accessModes == ['ReadOnlyMany'] && object.spec.storageClassName == '')
+      message: the control service reserves mounted dataset claims in their session namespace
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-mounted-dataset-claims
+spec:
+  policyName: heartwood-mounted-dataset-claims
+  validationActions: [Deny]

@@ -437,7 +437,16 @@ class Sessions:
     def remove(self, session: str) -> None:
         """Delete everything of a session, whether or not it was fully provisioned."""
         namespace = self._settings.gateway_namespace
+        target = session_namespace(session)
+        absent = self._kubernetes.delete("Namespace", target)
         self._apply_node_reader(session, removed=True)
         self._kubernetes.delete("Secret", gateway_account(session), namespace)
         self._kubernetes.delete("ServiceAccount", gateway_account(session), namespace)
-        self._kubernetes.delete("Namespace", session_namespace(session))
+        if not absent:
+            # A terminating namespace can still contain running pods. DELETE remains
+            # authorized after its namespace-local read RoleBinding disappears.
+            self._wait(
+                "session namespace retirement",
+                self._clock() + self._settings.ready_timeout_seconds,
+                lambda: self._kubernetes.delete("Namespace", target),
+            )

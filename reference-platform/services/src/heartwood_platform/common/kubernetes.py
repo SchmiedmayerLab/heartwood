@@ -44,6 +44,7 @@ def in_cluster_client(directory: Path = _SERVICE_ACCOUNT) -> httpx.Client:
 _RESOURCES = {
     "Namespace": ("/api/v1", "namespaces", False),
     "ConfigMap": ("/api/v1", "configmaps", True),
+    "PersistentVolume": ("/api/v1", "persistentvolumes", False),
     "PersistentVolumeClaim": ("/api/v1", "persistentvolumeclaims", True),
     "Pod": ("/api/v1", "pods", True),
     "LimitRange": ("/api/v1", "limitranges", True),
@@ -119,8 +120,8 @@ class Kubernetes:
 
     def delete(
         self, kind: str, name: str, namespace: str | None = None, *, propagation: str | None = None
-    ) -> None:
-        """Delete an object, whether or not it exists or is already being deleted.
+    ) -> bool:
+        """Request deletion and return True only when the API confirms absence.
 
         The API server answers a repeated deletion of a namespace that is still being
         emptied with a conflict. ``propagation`` sets the deletion's propagation policy:
@@ -133,6 +134,7 @@ class Kubernetes:
         )
         if response.status_code not in {httpx.codes.NOT_FOUND, httpx.codes.CONFLICT}:
             response.raise_for_status()
+        return response.status_code == httpx.codes.NOT_FOUND
 
     def review_token(self, token: str, audience: str) -> dict[str, Any]:
         """Return the status of a TokenReview of a token for one audience."""

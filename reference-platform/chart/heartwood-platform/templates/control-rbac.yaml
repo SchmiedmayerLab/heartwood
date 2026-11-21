@@ -35,6 +35,13 @@ metadata:
   labels:
     {{- include "heartwood.labels" . | nindent 4 }}
 rules:
+  {{- $mounts := false }}
+  {{- range .Values.projects }}{{- if .interactiveDataset }}{{- $mounts = true }}{{- end }}{{- end }}
+  {{- if $mounts }}
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [create, get]
+  {{- end }}
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [create, delete]

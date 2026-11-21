@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from heartwood_platform.common.bucket_policies import PolicySettings, bucket_policy
 from heartwood_platform.control.__main__ import Settings as ControlSettings
 from heartwood_platform.data.__main__ import Settings
 from heartwood_platform.data.seed import SeedSettings
@@ -299,3 +300,39 @@ def test_the_data_service_reads_launch_contexts_from_the_control_service(
     (source_pods,) = rule["from"]
     assert set(source_pods) == {"podSelector"}
     assert source_pods["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "data"
+
+
+def test_mounted_dataset_grant_reaches_control_admission_and_store(tmp_path: Path) -> None:
+    project = {
+        "id": "demo",
+        "billingAttributionRef": "grant",
+        "policyRef": "policy",
+        "interactiveDataset": {
+            "id": "cohort",
+            "version": "a" * 64,
+            "size": 2**40,
+            "objects": 9,
+            "reader": "mounted-reader",
+        },
+    }
+    values = tmp_path / "mounted.yaml"
+    values.write_text(json.dumps({"projects": [project]}))
+    objects = _render(str(values))
+    settings = ControlSettings.model_validate_json(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    assert settings.project_data is not None
+    mount = settings.project_data.mounted_datasets["demo"]
+    assert mount.selection == "cohort@" + "a" * 64
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-control-scope")
+    prefix = f"datasets/cohort/{mount.version}/"
+    assert any(prefix in rule["expression"] for rule in policy["spec"]["validations"])
+    policy_data = _named(objects, "ConfigMap", "heartwood-bucket-policies")["data"]
+    store = PolicySettings.model_validate_json(next(iter(policy_data.values())))
+    (grant,) = [g for g in store.buckets["hw-project-demo"] if g.sealed_mount]
+    reads, listing, seal = bucket_policy("hw-project-demo", (grant,))["Statement"]
+    assert reads["Resource"] == ["arn:aws:s3:::hw-project-demo/" + prefix + "*"]
+    assert reads["Action"] == ["s3:GetObject"]
+    assert listing["Condition"] == {"StringLike": {"s3:prefix": [prefix + "*"]}}
+    assert seal["Effect"] == "Deny"
+    assert "s3:PutObject" in seal["Action"]

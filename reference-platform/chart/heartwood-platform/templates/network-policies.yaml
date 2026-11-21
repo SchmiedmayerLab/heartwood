@@ -99,6 +99,16 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 14 }}
+        {{- $mounts := false }}
+        {{- range .Values.projects }}{{- if .interactiveDataset }}{{- $mounts = true }}{{- end }}{{- end }}
+        {{- if $mounts }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mount-s3
+          podSelector:
+            matchLabels:
+              heartwood.platform/role: dataset-reader
+        {{- end }}
         # Funnel workers move the files of their tasks with presigned URLs.
         - namespaceSelector:
             matchLabels:

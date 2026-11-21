@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS session (
     created_at TEXT NOT NULL,
     UNIQUE (subject, project_id)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS session_dataset (
+    session_id TEXT PRIMARY KEY REFERENCES session (id) ON DELETE CASCADE,
+    selection TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS retiring_session (
+    session_id TEXT PRIMARY KEY REFERENCES session (id) ON DELETE CASCADE
+) STRICT;
 """
 
 
@@ -137,14 +144,21 @@ class Registry:
                 return candidate
         raise NotAMemberError
 
-    def session(self, subject: str, project: str, *, create: bool = False) -> Session | None:
+    def session(
+        self, subject: str, project: str, *, create: bool = False, selection: str | None = None
+    ) -> Session | None:
         """Return the session of a subject in a project, creating it on request."""
         with self._transaction() as connection:
             if create:
-                connection.execute(
+                identifier = secrets.token_hex(8)
+                inserted = connection.execute(
                     "INSERT OR IGNORE INTO session VALUES (?, ?, ?, ?)",
-                    (secrets.token_hex(8), subject, project, datetime.now(UTC).isoformat()),
+                    (identifier, subject, project, datetime.now(UTC).isoformat()),
                 )
+                if inserted.rowcount and selection is not None:
+                    connection.execute(
+                        "INSERT INTO session_dataset VALUES (?, ?)", (identifier, selection)
+                    )
             row = connection.execute(
                 "SELECT id, subject, project_id, created_at FROM session"
                 " WHERE subject = ? AND project_id = ?",
@@ -153,6 +167,22 @@ class Registry:
         if row is None:
             return None
         return Session(row[0], row[1], row[2], datetime.fromisoformat(row[3]))
+
+    def mark_retiring(self, session: str) -> None:
+        """Resume revocation even if the grant changes back before cleanup finishes."""
+        with self._transaction() as connection:
+            connection.execute("INSERT OR IGNORE INTO retiring_session VALUES (?)", (session,))
+
+    def session_grants(self) -> list[tuple[str, str, str | None, bool, bool]]:
+        """Current dataset selection and membership, including sessions predating mounts."""
+        with self._transaction() as connection:
+            return connection.execute(
+                "SELECT s.subject, s.project_id, d.selection, m.subject IS NOT NULL,"
+                " r.session_id IS NOT NULL"
+                " FROM session s LEFT JOIN retiring_session r ON r.session_id = s.id"
+                " LEFT JOIN session_dataset d ON d.session_id = s.id"
+                " LEFT JOIN member m ON m.project_id = s.project_id AND m.subject = s.subject"
+            ).fetchall()
 
     def sessions_of(self, project: str) -> list[Session]:
         """Return the sessions of a project."""

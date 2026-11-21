@@ -56,6 +56,12 @@ def test_each_bucket_gets_one_policy_with_the_statements_of_every_account(
     requests: list[httpx.Request] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(
+                200, text="<ListAllMyBucketsResult><Buckets/></ListAllMyBucketsResult>"
+            )
+        if request.method == "GET":
+            return httpx.Response(404, text="<Error><Code>NoSuchBucketPolicy</Code></Error>")
         requests.append(request)
         return httpx.Response(200)
 
@@ -190,3 +196,75 @@ def test_the_chart_grants_the_data_and_job_accounts_on_every_project_bucket() ->
             for argument in container.get("args", [])
         ]
         assert "policy" not in " ".join(commands)
+
+
+def test_readers_retire_and_seals_survive_version_and_project_removal(tmp_path: Path) -> None:
+    stored: dict[str, dict[str, Any]] = {}
+    writes: list[str] = []
+    buckets = ("hw-project-demo", "hw-project-other")
+
+    def grant(version: str) -> dict[str, Any]:
+        return {
+            "account": "mount-reader",
+            "actions": ["s3:GetObject"],
+            "sealed_mount": True,
+            "prefix": f"datasets/cohort/{version}/",
+        }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bucket = request.url.path.strip("/")
+        if not bucket:
+            token = request.url.params.get("continuation-token")
+            page = buckets[1] if token else buckets[0]
+            continuation = "" if token else "<ContinuationToken>page-two</ContinuationToken>"
+            return httpx.Response(
+                200,
+                text=f'<ListAllMyBucketsResult xmlns="urn:synthetic:s3"><Buckets>'
+                f"<Bucket><Name>{page}</Name></Bucket></Buckets>{continuation}</ListAllMyBucketsResult>",
+            )
+        if request.method == "GET":
+            if bucket not in stored:
+                return httpx.Response(404, text="<Error><Code>NoSuchBucketPolicy</Code></Error>")
+            return httpx.Response(200, json=stored[bucket])
+        assert request.method == "PUT"
+        stored[bucket] = json.loads(request.content)
+        writes.append(bucket)
+        return httpx.Response(204)
+
+    a, b = "a" * 64, "b" * 64
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        write_policies(_settings(tmp_path, {bucket: [grant(a)] for bucket in buckets}), client)
+        write_policies(_settings(tmp_path, {buckets[1]: [grant(b)]}), client)
+        removed = stored[buckets[0]]["Statement"]
+        assert [rule["Effect"] for rule in removed] == ["Deny"]
+        assert removed[0]["Resource"] == [f"arn:aws:s3:::{buckets[0]}/datasets/cohort/{a}/*"]
+        current = stored[buckets[1]]["Statement"]
+        reads = [rule for rule in current if rule["Effect"] == "Allow"]
+        assert len(reads) == 2
+        assert reads[0]["Resource"] == [f"arn:aws:s3:::{buckets[1]}/datasets/cohort/{b}/*"]
+        assert reads[1]["Condition"]["StringLike"]["s3:prefix"] == [f"datasets/cohort/{b}/*"]
+        sealed = [rule for rule in current if rule["Effect"] == "Deny"]
+        assert {rule["Resource"][0] for rule in sealed} == {
+            f"arn:aws:s3:::{buckets[1]}/datasets/cohort/{version}/*" for version in (a, b)
+        }
+        write_policies(_settings(tmp_path, {}), client)
+        assert stored[buckets[1]]["Statement"] == sealed
+        writes.clear()
+        write_policies(_settings(tmp_path, {}), client)
+        assert writes == []
+
+
+def test_last_project_removal_keeps_the_policy_hook(tmp_path: Path) -> None:
+    values = tmp_path / "empty.json"
+    values.write_text(json.dumps({"projects": []}))
+    objects = _render(str(values))
+    settings = PolicySettings.model_validate_json(
+        _named(objects, "ConfigMap", "heartwood-bucket-policies")["data"]["bucket-policies.json"]
+    )
+    assert settings.buckets == {}
+    assert (
+        _named(objects, "Job", "heartwood-bucket-policies")["metadata"]["annotations"][
+            "helm.sh/hook"
+        ]
+        == "post-install,post-upgrade"
+    )

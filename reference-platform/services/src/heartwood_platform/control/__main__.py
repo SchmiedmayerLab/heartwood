@@ -346,6 +346,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             namespaces.gateway_namespace,
         ),
     )
+    launches.reconcile_dataset_grants()
     return create_app(
         launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
