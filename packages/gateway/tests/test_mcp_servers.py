@@ -129,7 +129,7 @@ class Catalog:
     @staticmethod
     def _authorize(project_id: str) -> None:
         token = get_access_token()
-        if token is None or token.claims.get("project") != project_id:
+        if token is None or token.claims.get("azp") != f"hw-proj-{project_id}":
             raise ToolError("project authorization denied")
 
     def _observation(self, project_id: str, operation_id: str) -> PlatformOperationObservation:

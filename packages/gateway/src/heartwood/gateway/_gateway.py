@@ -56,7 +56,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerControlPlaneError,
     current_worker_attempt,
 )
-from heartwood.gateway._access import OPERATOR_ACTOR
+from heartwood.gateway._access import OPERATOR_ACTOR, ServiceTokens
 from heartwood.gateway._action_presentation import action_presentation
 from heartwood.gateway._action_settings import (
     ACTION_MODE_LAUNCH_SCOPE_DESCRIPTION,
@@ -495,6 +495,7 @@ class SessionGateway:
         checkpoint_evidence_factory: Callable[[str], SessionCheckpointEvidence] | None = None,
         external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
         mcp_destinations: Sequence[McpDestination] | None = None,
+        service_tokens: ServiceTokens | None = None,
         platform_planning: PlatformPlanningBinding | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
@@ -638,6 +639,7 @@ class SessionGateway:
             config_store=self.config_store,
             credential_store=self.credential_store,
             destinations=() if mcp_destinations is None else mcp_destinations,
+            service_tokens=service_tokens,
             # A command-line gateway manages the servers of a deployment whose sessions run
             # in workers; it binds tools to sessions only with a worker of its own.
             worker_available=worker_plan_factory is not None

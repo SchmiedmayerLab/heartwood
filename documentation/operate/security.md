@@ -275,7 +275,21 @@ Other clients send `Authorization: Bearer` with an access token of the same issu
 A token that carries a `nonce`, `at_hash` or `c_hash` claim, or a `typ` claim of `ID`, is an identity token and is refused as a bearer token.
 Every accepted command records the verified subject as its actor.
 
-The gateway keeps the researcher's access and refresh tokens, the client secret, authorization codes and capabilities in process memory.
+### Service Tokens
+
+A platform service whose [destination](../reference/configuration.md#mcp-destinations) declares a `token_exchange` receives a token that the gateway obtains by OAuth token exchange.
+The gateway authenticates as its client and presents the researcher's access token as the subject token, with the scope and audience from the manifest; neither value comes from a request, the agent or project content.
+The service receives a token with its own audience, the gateway's client as authorized party and the researcher as subject, as the [platform contract](platform-contract.md#service-tokens) specifies.
+The subject token is the access token of the latest browser sign-in, which the gateway refreshes; while no browser sign-in is live, it is the latest-expiring access token that a client presented as a bearer token, until that token expires.
+The gateway sends an exchanged token only when its issuer, its single audience, its authorized party and its subject are the ones requested; otherwise it reports the provider as unusable.
+An exchanged token that expires within 30 seconds is reported as unusable.
+The gateway uses an exchanged token until 30 seconds before it expires and discards it when the sign-in it was exchanged for ends.
+Without a live sign-in the gateway requests no token, and a call to that service is refused with `HW-INGRESS-004` until the researcher signs in again.
+A refusal by the provider is reported as `HW-INGRESS-004` and an unreachable provider as `HW-INGRESS-005`, both without the provider's text.
+
+### Token Handling
+
+The gateway keeps the researcher's access and refresh tokens, exchanged service tokens, the client secret, authorization codes and capabilities in process memory.
 They are not written to project files, protected state, events, audit exports or logs, and they are not passed to agent tools or to the model.
 Without a [`[worker]`](../reference/configuration.md#deployment-manifest) table, agent tools run as the gateway's operating-system user and can read the client secret file and, where the operating system permits it, the gateway's memory.
 A deployment with `[identity]` should therefore also configure a worker.

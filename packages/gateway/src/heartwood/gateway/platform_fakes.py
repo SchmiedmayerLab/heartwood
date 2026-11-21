@@ -61,14 +61,17 @@ from heartwood.schemas import (
 )
 
 ISSUER = "https://identity.synthetic.invalid"
-DATA_AUDIENCE = "https://data.synthetic.invalid"
-JOBS_AUDIENCE = "https://jobs.synthetic.invalid"
-BUDGETS_AUDIENCE = "https://budgets.synthetic.invalid"
+DATA_AUDIENCE = "heartwood-data"
+JOBS_AUDIENCE = "heartwood-jobs"
+BUDGETS_AUDIENCE = "heartwood-control"
 PROJECT_ID = "research-project-a"
 OTHER_PROJECT_ID = "research-project-b"
 INFERENCE_API_KEY = "synthetic-inference-key"
 MCP_PROTOCOL_VERSION = "2025-11-25"
-_SCOPE = "platform"
+# The scope that names a service at the identity provider: svc-data for heartwood-data.
+_SERVICE_PREFIX = "heartwood-"
+# A project's client at the identity provider; services derive the project from it.
+_PROJECT_CLIENT_PREFIX = "hw-proj-"
 _EPOCH = datetime(2026, 7, 1, tzinfo=UTC)
 
 type InferenceFailure = Literal[
@@ -107,16 +110,22 @@ _INFERENCE_ERRORS: dict[InferenceFailure, tuple[int, str, str]] = {
 }
 
 
+def _scope(audience: str) -> str:
+    return f"svc-{audience.removeprefix(_SERVICE_PREFIX)}"
+
+
 class FakeTokenIssuer:
-    """Issue exchanged, audience-restricted, project-scoped tokens with one signing key.
+    """Issue exchanged tokens for one audience, project client and researcher with one key.
 
     Each service fake verifies the issuer, audience, signature and expiry before a tool
-    runs, and checks the project claim against the requested project in the tool.
+    runs, and derives the project from the authorized party, ``hw-proj-<project>``, to
+    check it against the requested project in the tool.
     """
 
-    def __init__(self) -> None:
-        """Generate a new signing key."""
+    def __init__(self, issuer: str = ISSUER) -> None:
+        """Generate a new signing key for tokens of one issuer."""
         self._keys = RSAKeyPair.generate()
+        self.issuer = issuer
 
     def exchange(
         self,
@@ -129,11 +138,11 @@ class FakeTokenIssuer:
         """Return a token for one service audience and project; negative lifetimes expire."""
         return self._keys.create_token(
             subject=subject,
-            issuer=ISSUER,
+            issuer=self.issuer,
             audience=audience,
-            scopes=[_SCOPE],
+            scopes=[_scope(audience)],
             expires_in_seconds=lifetime_seconds,
-            additional_claims={"project": project_id, "act": {"sub": "heartwood-gateway"}},
+            additional_claims={"azp": f"{_PROJECT_CLIENT_PREFIX}{project_id}"},
         )
 
     def verifier(self, audience: str) -> JWTVerifier:
@@ -141,9 +150,9 @@ class FakeTokenIssuer:
         return JWTVerifier(
             public_key=self._keys.public_key,
             algorithm="RS256",
-            issuer=ISSUER,
+            issuer=self.issuer,
             audience=audience,
-            required_scopes=[_SCOPE],
+            required_scopes=[_scope(audience)],
         )
 
 
@@ -224,7 +233,7 @@ class _Service:
     @staticmethod
     def _authorize(project_id: str) -> None:
         token = get_access_token()
-        if token is None or token.claims.get("project") != project_id:
+        if token is None or token.claims.get("azp") != f"{_PROJECT_CLIENT_PREFIX}{project_id}":
             raise ToolError("project authorization denied")
 
 

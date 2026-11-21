@@ -20,6 +20,18 @@
       "diagnostic": "HW-INGRESS-002: request path is outside the configured gateway base path"
     },
     {
+      "condition": "Missing or refused identity with identity-proxy ingress",
+      "code": "HW-INGRESS-004",
+      "surface": "gateway-response",
+      "diagnostic": "HW-INGRESS-004: Open the gateway's URL and sign in as the researcher it was started for."
+    },
+    {
+      "condition": "Identity provider unreachable or unusable",
+      "code": "HW-INGRESS-005",
+      "surface": "gateway-response",
+      "diagnostic": "HW-INGRESS-005: Retry when the identity provider is reachable from the gateway."
+    },
+    {
       "condition": "Sandbox gateway lacks a deletion capability",
       "code": "HW-WORKER-001",
       "surface": "session",

@@ -591,6 +591,9 @@ An access token is refused unless the configured issuer signed it, it is unexpir
 An access token signed with an algorithm other than RS256 or ES256, or without a key identifier, and an identity token are refused as well.
 Operators compare the manifest's [`[identity]` table](configuration.md#identity) with the provider's client: issuer, client identifier, secret, subject and the redirect URI `<public origin><base path>/oauth_callback`.
 
+A research service that takes an exchanged token reports this code while no sign-in is live, and when the provider refuses a token for that service.
+Sign in at the gateway again; operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
+
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
 
 The gateway could not reach the identity provider, or the provider answered with a document the gateway cannot use.

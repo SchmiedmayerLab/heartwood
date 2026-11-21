@@ -14,7 +14,7 @@ import secrets
 import selectors
 import stat
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from threading import Lock
 from typing import Protocol
@@ -55,6 +55,17 @@ class AccessUnavailableError(RuntimeError):
     def __init__(self, status_code: int = 503) -> None:
         super().__init__("the service that verifies gateway requests is unavailable")
         self.status_code = status_code
+
+
+class TokenExchangeRefusedError(RuntimeError):
+    """The identity provider refused a token for a platform service."""
+
+    def __init__(self) -> None:
+        super().__init__("the identity provider refused a token for the platform service")
+
+
+# Returns the token for one service scope and audience, or None while no sign-in is live.
+type ServiceTokens = Callable[[str, str], str | None]
 
 
 @dataclass(frozen=True, slots=True)

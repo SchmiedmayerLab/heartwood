@@ -83,6 +83,19 @@ class McpOperationProfile(BaseModel):
     cancel_tool: str | None = Field(default=None, pattern=_TOOL_NAME.pattern)
 
 
+class TokenExchange(BaseModel):
+    """The scope and audience of the token the gateway obtains for one platform service.
+
+    The gateway exchanges the signed-in researcher's access token for it. The values
+    come from the deployment manifest only.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: str = Field(min_length=1, max_length=255, pattern=r"^[\x21\x23-\x5B\x5D-\x7E]+$")
+    audience: str = Field(min_length=1, max_length=255, pattern=r"^[\x21-\x7E]+$")
+
+
 class McpDestination(BaseModel):
     """One deployment-approved origin and the tools researchers may select there."""
 
@@ -97,6 +110,8 @@ class McpDestination(BaseModel):
     # The operator's opt-in for a cluster or other private address at this exact origin.
     private_address: bool = False
     operations: McpOperationProfile | None = None
+    # The service takes a token exchanged for the researcher's sign-in, never an entered one.
+    token_exchange: TokenExchange | None = None
 
     @field_validator("origin")
     @classmethod
