@@ -617,6 +617,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "projectDomain",
         "publicOrigin",
         "trustedProxySources",
         "storage",
@@ -625,6 +626,11 @@
         "modelRoute"
       ],
       "properties": {
+        "projectDomain": {
+          "type": "string",
+          "maxLength": 186,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
         "publicOrigin": {
           "description": "HTTPS scheme, DNS host name and optional port of the Hub's proxy.",
           "type": "string",

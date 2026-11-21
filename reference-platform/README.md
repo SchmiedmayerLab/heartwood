@@ -193,7 +193,7 @@ Reading the budgets reserves nothing and admits no work.
 ### Project Clients
 
 At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
-It adds the redirect URI of the researcher's gateway, `<hub.publicOrigin>/user/<researcher>/<project>/oauth_callback`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
+It adds the redirect URI of the researcher's gateway, `https://<researcher>.<project>.<hub.projectDomain>/user/<researcher>/<project>/oauth_callback`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
 Its Keycloak role `manage-clients` covers every client of the realm.
 
 ### Permitted Data
@@ -431,8 +431,17 @@ Every account of the realm may sign in; the control service decides which projec
 
 The proxy serves researchers only over HTTPS, on port 443 of the Service `proxy-public`, with the certificate in the Secret `proxy-tls`.
 The chart signs that certificate with the platform CA for the names of the Services `proxy-public` and `proxy-api`, in the same four forms as Keycloak's, and for the host of `hub.publicOrigin`, which must be an `https` origin with a DNS host name.
+Configure wildcard DNS for `*.<project>.<hub.projectDomain>` for each registered project to resolve to the public proxy on port 443.
+The proxy certificate includes each of these wildcard names, and the Hub routes each named server on its researcher and project host.
+Use a dedicated project DNS zone with no shared cookie domain with the Hub or identity provider.
+The Hub uses host-prefixed authentication cookies.
 A change of these names or of the platform CA replaces the certificate at the next upgrade.
 The proxy reads its certificate when it starts, so restart it after such a change with `kubectl rollout restart deployment/proxy --namespace heartwood-platform`.
+The kind cluster configures CoreDNS for the synthetic zone `projects.heartwood.test`.
+When changing a project domain or moving from shared paths, withdraw browser access during the change.
+Keep the session volumes, stop the old gateway processes, and remove obsolete redirect URIs from the project clients.
+Restart the control service, Hub and proxy with the new configuration before reopening access.
+Relaunching a named server registers its new callback and requires a new gateway sign-in.
 The Service has no HTTP port, and no connection reaches the proxy's HTTP port, which would only redirect to HTTPS.
 The proxy serves its API on port 8001 over HTTPS with the same certificate, and the Hub calls it at `proxy-api` trusting the platform CA alone.
 Clients of the proxy, such as the cluster tests, verify it against the platform CA, and a researcher's browser opens it only when it trusts the platform CA.

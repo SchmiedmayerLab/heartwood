@@ -457,6 +457,59 @@ def _refusal(response: tuple[int, dict[str, str], bytes]) -> tuple[int, str]:
     return response[0], json.loads(response[2])["code"]
 
 
+@pytest.mark.parametrize(
+    ("subject", "project"), [(_SUBJECT, "other"), ("second-researcher", "demo")]
+)
+def test_peer_project_cannot_read_sessions(tmp_path: Path, subject: str, project: str) -> None:
+    first_provider = _Provider()
+    first, _ = _sign_in(_access(tmp_path, first_provider), first_provider)
+    provider = _Provider(client_id=f"hw-proj-{project}")
+    provider.subject = subject
+    host = f"{subject}.{project}.projects.example.test"
+    ingress = _ingress(origin=f"https://{host}")
+    peer = _access(
+        tmp_path, provider, subject=subject, client_id=provider.client_id, ingress=ingress
+    )
+    second, _ = _sign_in(peer, provider)
+    app = GatewayAsgiApp(_gateway(tmp_path / project), ingress=ingress, access=peer)
+
+    async def read(capability: str, origin: str) -> int:
+        headers = {"host": host, "origin": origin, "x-heartwood-capability": capability}
+        status, _, _ = await _call(app, "GET", "/sessions", headers=headers)
+        return status
+
+    assert asyncio.run(read(second, f"https://{host}")) == 200
+    assert asyncio.run(read(first, f"https://{host}")) == 401
+    assert asyncio.run(read(second, _ORIGIN)) == 403
+
+
+def test_logout_invalidates_only_the_presented_sign_in(tmp_path: Path) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    first, _ = _sign_in(access, provider)
+    second, _ = _sign_in(access, provider)
+    app = GatewayAsgiApp(_gateway(tmp_path / "research"), ingress=_ingress(), access=access)
+
+    async def scenario() -> None:
+        headers = {"x-heartwood-capability": first}
+        status, response, body = await _call(app, "POST", "/logout", headers=headers)
+        assert status == 204
+        assert not body
+        assert response["set-cookie"].count("Max-Age=0") == 2
+        status, stale, _ = await _call(
+            app, "POST", "/logout", headers={"cookie": "heartwood-login=1"}
+        )
+        assert status == 401
+        assert stale["set-cookie"] == response["set-cookie"]
+        assert (await _call(app, "GET", "/identity/login"))[0] == 302
+        assert (await _call(app, "GET", "/sessions", headers=headers))[0] == 401
+        assert (await _call(app, "GET", "/sessions", headers={"x-heartwood-capability": second}))[
+            0
+        ] == 200
+
+    asyncio.run(scenario())
+
+
 def test_browser_sign_in_records_the_verified_subject_and_keeps_tokens_in_memory(
     tmp_path: Path,
 ) -> None:
@@ -1286,6 +1339,74 @@ async def _socket(
         send,
     )
     return sent
+
+
+@pytest.mark.parametrize("transport", ["sse", "websocket"])
+def test_logout_ends_only_streams_bound_to_that_login(tmp_path: Path, transport: str) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    gateway = _gateway(tmp_path / "research")
+    app = GatewayAsgiApp(gateway, ingress=_ingress(), access=access)
+    tokens = [_sign_in(access, provider)[0] for _ in range(2)]
+
+    async def scenario() -> None:
+        updates = [asyncio.Queue[bool](), asyncio.Queue[bool]()]
+        inputs = [asyncio.Queue[dict[str, object]](), asyncio.Queue[dict[str, object]]()]
+
+        async def subscribe(index: int) -> None:
+            path = f"{_BASE}/sessions/session-1/events"
+            headers = {"host": "research.example.test", "origin": _ORIGIN}
+            if transport == "sse":
+                path += "/stream"
+                headers["x-heartwood-capability"] = tokens[index]
+                headers["x-forwarded-proto"] = "https"
+            else:
+                inputs[index].put_nowait(
+                    {
+                        "type": "websocket.receive",
+                        "text": json.dumps({"type": "authenticate", "capability": tokens[index]}),
+                    }
+                )
+
+            async def send(message: dict[str, object]) -> None:
+                if message["type"] == "websocket.send" or message.get("more_body") is True:
+                    updates[index].put_nowait(True)
+
+            await app(
+                {
+                    "type": "http" if transport == "sse" else "websocket",
+                    "method": "GET",
+                    "path": path,
+                    "raw_path": path.encode(),
+                    "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+                    "query_string": b"",
+                    "client": _PROXY,
+                },
+                inputs[index].get,
+                send,
+            )
+
+        tasks = [asyncio.create_task(subscribe(i)) for i in range(2)]
+        try:
+            async with asyncio.timeout(5):
+                for queue in updates:
+                    await queue.get()
+                status, _, _ = await _call(
+                    app, "POST", "/logout", headers={"x-heartwood-capability": tokens[0]}
+                )
+                assert status == 204
+                gateway._streams.notify(session_id="session-1")
+                await tasks[0]
+                assert updates[0].empty()
+                await updates[1].get()
+                assert not tasks[1].done()
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            gateway.stop()
+
+    asyncio.run(scenario())
 
 
 def test_event_streams_accept_the_sign_in_capability_and_a_bearer_token(tmp_path: Path) -> None:

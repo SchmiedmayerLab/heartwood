@@ -317,10 +317,9 @@ sessions:
 # in the sessions namespace. Researchers sign in to the Hub and to their gateways through
 # Keycloak.
 hub:
-  # HTTPS origin under which researchers open the Hub's proxy. Gateways redirect their
-  # sign-in to <publicOrigin>/user/<researcher>/<project>/oauth_callback. The default is the
-  # in-cluster address of the proxy Service. The proxy serves a certificate of the
-  # platform CA for the names of its Services and the host of this origin.
+  # Wildcard DNS records *.<project>.<projectDomain> point to proxy-public.
+  projectDomain: projects.heartwood.test
+  # HTTPS origin of the Hub. Its default is the in-cluster proxy Service.
   publicOrigin: "https://proxy-public.heartwood-platform.svc.cluster.local"
   # Networks from which gateways accept proxied requests: the pod network that holds the
   # proxy. Required: a gateway does not start without at least one range. Network
@@ -485,11 +484,16 @@ jupyterhub:
       # verify the target's host instead and leaves the forwarded Host header unchanged.
       # configurable-http-proxy has no option for this.
       extraEnv:
+        HEARTWOOD_NO_TARGET: ""
         NODE_OPTIONS: >-
           --import=data:text/javascript,import%7BAgent%7Dfrom%22node:https%22;const%20c=Agent.prototype.createConnection;Agent.prototype.createConnection=function(o,f)%7Breturn%20c.call(this,%7B...o,servername:o.host%7D,f)%7D
-      defaultTarget: https://hub:8081
-      errorTarget: https://hub:8081/hub/error
+      # Unmatched requests must never fall back to a Hub or project page.
+      # The subchart supplies the Hub for empty values. Kubernetes expands the
+      # empty environment variable after rendering so CHP uses its local 404 page.
+      defaultTarget: $(HEARTWOOD_NO_TARGET)
+      errorTarget: $(HEARTWOOD_NO_TARGET)
       extraCommandLineFlags:
+        - --host-routing
         - --api-ssl-key=/etc/chp/tls/tls.key
         - --api-ssl-cert=/etc/chp/tls/tls.crt
         - --client-ssl-key=/etc/chp/tls/tls.key

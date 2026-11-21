@@ -32,6 +32,11 @@ ORIGIN = "https://proxy-public.heartwood-platform.svc.cluster.local"
 SESSION_LABEL = "heartwood.platform/session"
 
 
+def project_url(path: str) -> str:
+    _, _, researcher_id, project, *_ = path.split("/")
+    return f"https://{researcher_id}.{project}.projects.heartwood.test{path}"
+
+
 @dataclass
 class Browser:
     """One researcher's browser, with its own cookies."""
@@ -43,6 +48,8 @@ class Browser:
 
     def get(self, url: str, *extra: str) -> tuple[int, str, str]:
         """Request a page without following redirects; return status, Location and body."""
+        if url.startswith("/user/"):
+            url = project_url(url)
         output = curl(
             self.cluster,
             self.pod,
@@ -171,7 +178,10 @@ class Browser:
         assert status in {302, 303, 307}, (status, location)
         status, location, _ = self.get(location)
         assert status in {302, 303, 307}, (status, location)
+        expected = project_url(base) + "/oauth_callback"
+        assert parse_qs(urlsplit(location).query).get("redirect_uri") == [expected]
         callback = self.keycloak(location)
+        assert callback.partition("?")[0] == expected
         return self.get(callback, "--header", "Sec-Fetch-Site: cross-site")
 
     def launch(self, base: str) -> str:
@@ -202,6 +212,10 @@ class Browser:
             lines.append("Content-Type: application/json")
         with private_file(self.cluster, self.pod, "\n".join(lines)) as headers:
             arguments = [
+                "--cookie",
+                self.jar,
+                "--cookie-jar",
+                self.jar,
                 "--request",
                 method,
                 "--header",
@@ -215,7 +229,7 @@ class Browser:
                 self.cluster,
                 self.pod,
                 *arguments,
-                f"{ORIGIN}{base}{path}",
+                project_url(base + path),
                 text_input=json.dumps(body) if body is not None else "",
                 max_time=max_time,
             )

@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from hub import Browser, Server, error_codes, events_of, gateway_pods, pending_group
+from hub import Browser, Server, error_codes, events_of, gateway_pods, pending_group, project_url
 from identity import (
     FIRST,
     PLATFORM,
@@ -500,9 +500,7 @@ def _tokens(cluster: Cluster, server: Server, username: str, service: str) -> st
     """Sign a researcher in at the project client of a session; exchange for one service."""
     client_id = f"hw-proj-{server.project}"
     client_secret = secret(cluster, SESSIONS, f"hw-gw-{server.session}", "keycloak-client-secret")
-    redirect = (
-        f"https://proxy-public.heartwood-platform.svc.cluster.local{server.base}/oauth_callback"
-    )
+    redirect = project_url(server.base + "/oauth_callback")
     signed_in = sign_in(
         cluster,
         server.browser.pod,
@@ -709,6 +707,27 @@ def test_the_audit_export_verifies_and_names_the_keyed_actor(
     for raw in (FIRST, "researcher-one"):
         assert raw not in content
         assert base64.b64encode(raw.encode()).decode() not in content
+
+
+def test_project_origins_and_logout(platform: Platform) -> None:
+    demo, other, second = platform.demo, platform.other, platform.second
+    origin = project_url(demo.base).split("/user/")[0]
+    assert demo.browser.get(origin + "/hub/home")[0] == 404
+    for peer in (other, second):
+        status, _ = demo.browser.api(peer.base, "GET", "/sessions", demo.capability)
+        assert status == 401
+        status, _, _ = peer.browser.get(
+            project_url(peer.base) + "/sessions", "--header", f"Origin: {origin}"
+        )
+        assert status == 403
+        status, _, _ = demo.browser.get(origin + peer.base + "/sessions")
+        assert status == 404
+    status, _ = demo.api("POST", "/logout")
+    assert status == 204
+    assert demo.api("GET", "/sessions")[0] == 401
+    assert other.api("GET", "/sessions")[0] == 200
+    demo.capability = demo.browser.launch(demo.base)
+    assert demo.api("GET", "/sessions")[0] == 200
 
 
 def test_deleting_the_server_settles_the_sessions_inference_reservation(

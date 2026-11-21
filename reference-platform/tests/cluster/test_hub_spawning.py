@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from hub import ORIGIN, Browser, gateway_pods, wait_for_gateway
+from hub import Browser, gateway_pods, wait_for_gateway
 from identity import FIRST, PLATFORM, SECOND, SESSIONS, probe, researcher
 from kube import Cluster
 
@@ -533,7 +533,7 @@ def test_a_restart_recovers_the_session(server: Server) -> None:
     assert status == 200, sessions
     listed = json.dumps(sessions)
     assert server.recorded["session_id"] in listed, (server.recorded, sessions)
-    status, _, _ = server.first.get(f"{ORIGIN}{_base()}/")
+    status, _, _ = server.first.get(f"{_base()}/")
     assert status == 200
 
 
@@ -557,3 +557,13 @@ def test_deleting_the_named_server_removes_the_session(server: Server, cluster: 
         )
         result = cluster.kubectl("get", f"--namespace={SESSIONS}", kind, name)
         assert result.returncode != 0, (kind, result.stdout)
+
+
+def test_hub_logout_requires_a_new_hub_sign_in(server: Server) -> None:
+    status, _, _ = server.first.get("/hub/logout")
+    assert status in {200, 302}
+    status, location, _ = server.first.get("/hub/home")
+    assert status == 302
+    assert "/hub/login" in location or "/hub/oauth_login" in location
+    server.first.sign_in_to_hub()
+    assert server.first.get("/hub/home")[0] == 200

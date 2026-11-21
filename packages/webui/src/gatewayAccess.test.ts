@@ -11,6 +11,7 @@ import {
   authenticatedFetch,
   gatewayCapability,
   initializeGatewayAccess,
+  signOutOfProject,
 } from "./gatewayAccess";
 
 const capability = "c".repeat(43);
@@ -54,6 +55,35 @@ describe("gateway browser capability", () => {
     await initializeGatewayAccess();
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(document.cookie).not.toContain(capability);
+  });
+
+  it("keeps the capability on a failed sign-out and removes it after revocation", async () => {
+    configureGateway();
+    window.sessionStorage.setItem(key, capability);
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(signOutOfProject()).rejects.toThrow("sign-out failed");
+    expect(gatewayCapability("/proxy/8767")).toBe(capability);
+    await signOutOfProject();
+    expect(fetch).toHaveBeenCalledWith(
+      "/proxy/8767/logout",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(gatewayCapability("/proxy/8767")).toBeNull();
+  });
+
+  it("clears stale tab access when the project login has already ended", async () => {
+    configureGateway();
+    window.sessionStorage.setItem(key, capability);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 401 })),
+    );
+    await signOutOfProject();
+    expect(gatewayCapability("/proxy/8767")).toBeNull();
   });
 
   it("adds a header only for the admitted origin and project path", async () => {

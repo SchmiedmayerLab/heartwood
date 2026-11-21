@@ -59,6 +59,7 @@ Where a deployment provides [outside operations](actions-audit.md#outside-operat
 - Open **Research services** to add, test, enable, disable, or disconnect [research MCP servers](../operate/platform-contract.md#research-mcp-servers); each server shows its destination, token state, reviewed tools and the tools enabled for new sessions, and a test of a platform job service shows the operations and optional capabilities it declares.
 - Open **Activity & audit** for route decisions, tool results, and errors, and use **Export audit** to download the scrubbed [audit export](actions-audit.md#audit-export).
 - Use the appearance button in the session header to switch between light and dark mode.
+- In a reference-platform project, **Sign out of project** ends the current browser sign-in for that gateway. The Hub, identity provider, and other projects have their own sessions.
 - On a hosted deployment that signs you in, the session header shows **Signed in as** with the name from your sign-in; it is a display value, and records name a derived identifier instead.
 
 Status labels are the same as in the other interfaces: ready, working, waiting for review, paused, complete, rejected, and recovery required.

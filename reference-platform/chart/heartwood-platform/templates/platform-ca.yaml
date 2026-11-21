@@ -144,7 +144,14 @@ certificate is kept while the CA and the names are kept.
 {{- $qualified := printf "%s.%s" $service $.Release.Namespace -}}
 {{- $proxyNames = concat $proxyNames (list $service $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified)) -}}
 {{- end -}}
-{{- $proxyNames = append $proxyNames (urlParse .Values.hub.publicOrigin).hostname | uniq -}}
+{{- $hubHost := (urlParse .Values.hub.publicOrigin).hostname -}}
+{{- $proxyNames = append $proxyNames $hubHost | uniq -}}
+{{- if or (eq $hubHost .Values.hub.projectDomain) (hasSuffix (printf ".%s" $hubHost) .Values.hub.projectDomain) (hasSuffix (printf ".%s" .Values.hub.projectDomain) $hubHost) -}}
+{{- fail "hub.projectDomain and the Hub host must be separate DNS domains" -}}
+{{- end -}}
+{{- range .Values.projects -}}
+{{- $proxyNames = append $proxyNames (printf "*.%s.%s" .id $.Values.hub.projectDomain) -}}
+{{- end -}}
 {{- $proxyNamesText := join "," $proxyNames -}}
 {{- $proxyCertificate := "" -}}
 {{- $proxyKey := "" -}}

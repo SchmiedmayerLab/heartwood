@@ -58,6 +58,17 @@ export const authenticatedFetch = (
   });
 };
 
+export const signOutOfProject = async (): Promise<void> => {
+  const base = gatewayBasePath();
+  const response = await authenticatedFetch(base, joinPath(base, "/logout"), {
+    method: "POST",
+  });
+  if (!response.ok && response.status !== 401) {
+    throw new Error("Project sign-out failed. Try again.");
+  }
+  window.sessionStorage.removeItem(capabilityKey(base));
+};
+
 export const initializeGatewayAccess = async (): Promise<void> => {
   const token = new URLSearchParams(window.location.hash.slice(1)).get(
     "launch",
