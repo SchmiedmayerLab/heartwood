@@ -7,8 +7,8 @@
 """Researcher sign-in and token exchange against the installed Keycloak.
 
 Requests are sent with curl from a probe pod in heartwood-sessions, the namespace of the
-Heartwood gateways. Passwords, client secrets and tokens travel on standard input and
-never on a command line.
+Heartwood gateways. Passwords, client secrets and tokens reach curl through files in the
+probe pod, written over standard input and checked, and never on a command line.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import html
 import json
 import re
 import secrets
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -86,11 +87,13 @@ def write_private(cluster: Cluster, pod: str, text: str) -> str:
     """Write ``text`` to a new file that only the probe reads, and return its path.
 
     Data sent to ``kubectl exec`` on standard input can arrive incomplete, so the
-    write reports the size it wrote and is repeated until the size matches.
+    write reports the size it wrote and is repeated until the size matches. Each
+    incomplete write is reported as a warning, so a passing run shows whether a
+    repetition was needed.
     """
     path = f"/scratch/{secrets.token_hex(8)}.data"
     expected = len(text.encode())
-    for _ in range(5):
+    for attempt in range(1, 6):
         written = cluster.kubectl(
             "exec",
             "--stdin",
@@ -104,6 +107,11 @@ def write_private(cluster: Cluster, pod: str, text: str) -> str:
         )
         if written.returncode == 0 and written.stdout.strip() == str(expected):
             return path
+        warnings.warn(
+            f"write {attempt} to the probe was incomplete: exit {written.returncode}, "
+            f"{written.stdout.strip() or 'no'} of {expected} bytes",
+            stacklevel=2,
+        )
     raise AssertionError(f"the probe did not receive {expected} bytes")
 
 
@@ -154,7 +162,7 @@ def request(
     if body is not None:
         headers.append("Content-Type: application/json")
     # The headers hold the token, so they reach curl through a file that only the
-    # probe reads, and the body through standard input.
+    # probe reads, and the body through another one.
     path = write_private(cluster, pod, "\n".join(headers))
     arguments = ["--request", method, "--header", f"@{path}", "--write-out", "\n%{http_code}"]
     if body is not None:

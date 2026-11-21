@@ -87,7 +87,7 @@ def _token(cluster: Cluster, account: str = "hub", audience: str = "heartwood-co
 
 
 def _call(cluster: Cluster, method: str, url: str, token: str | None = None) -> tuple[int, Any]:
-    """Send a request from the probe pod. The token travels on standard input."""
+    """Send a request from the probe pod. The token reaches curl through a checked file."""
     header = f"Authorization: Bearer {token}" if token is not None else "Accept: */*"
     output = curl(
         cluster,
