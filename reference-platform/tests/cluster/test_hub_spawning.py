@@ -169,6 +169,78 @@ def test_the_researcher_opens_the_gateway_through_the_hubs_proxy(server: Server)
     assert status == 200, sessions
 
 
+# Run in the Hub's container: each request to the Hub and to the gateway, plain and over
+# TLS, and what answered. A TLS client trusts the platform CA alone.
+_HOPS = """
+import http.client, json, socket, ssl, sys
+tls = "/usr/local/etc/heartwood/hub/tls"
+gateway, path = sys.argv[1], sys.argv[2]
+
+def answer(connection, target):
+    try:
+        connection.request("GET", target)
+        return connection.getresponse().status
+    except (OSError, http.client.HTTPException) as error:
+        return type(error).__name__
+    finally:
+        connection.close()
+
+def context(client):
+    created = ssl.create_default_context(cafile=tls + "/hub-ca/hub-ca.crt")
+    if client:
+        created.load_cert_chain(tls + "/hub-internal/hub-internal.crt",
+                                tls + "/hub-internal/hub-internal.key")
+    return created
+
+def secure(host, port, client):
+    return http.client.HTTPSConnection(host, port, context=context(client), timeout=10)
+
+def peer(host, port):
+    with socket.create_connection((host, port), timeout=10) as raw:
+        with context(False).wrap_socket(raw, server_hostname=host) as wrapped:
+            names = [value for kind, value in wrapped.getpeercert()["subjectAltName"]]
+            return sorted(names)
+
+print(json.dumps({
+    "hub plain": answer(http.client.HTTPConnection("localhost", 8081, timeout=10), "/hub/health"),
+    "hub without client certificate": answer(secure("localhost", 8081, False), "/hub/health"),
+    "hub": answer(secure("localhost", 8081, True), "/hub/health"),
+    "gateway plain": answer(http.client.HTTPConnection(gateway, 8888, timeout=10), path),
+    "gateway": answer(secure(gateway, 8888, False), path),
+    "gateway names": peer(gateway, 8888),
+}))
+"""
+
+# Run in the proxy's container: a plain HTTP request to the Hub.
+_PROXY_PLAIN = (
+    "require('http').get('http://hub:8081/hub/health', r => console.log(r.statusCode))"
+    ".on('error', e => console.log(e.code || e.message))"
+)
+
+
+def test_the_hub_and_the_gateway_answer_only_over_tls(server: Server, cluster: Cluster) -> None:
+    gateway = f"hw-gw-{server.session}.hw-gateways.{SESSIONS}.svc.cluster.local"
+    result = cluster.kubectl(
+        "exec", f"--namespace={PLATFORM}", "deployment/hub", "--container=hub", "--",
+        "python3", "-I", "-c", _HOPS, gateway, f"{_base()}/",
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+    answers = json.loads(result.stdout)
+    # A plain request and a TLS client without a certificate get no HTTP answer.
+    for hop in ("hub plain", "hub without client certificate", "gateway plain"):
+        assert not isinstance(answers[hop], int), (hop, answers[hop])
+    assert answers["hub"] == 200
+    assert isinstance(answers["gateway"], int)
+    assert answers["gateway"] < 500
+    # The gateway's certificate carries its names under the gateways' Service alone.
+    assert answers["gateway names"] == sorted([gateway, gateway.removesuffix(".cluster.local")])
+    proxied = cluster.kubectl(
+        "exec", f"--namespace={PLATFORM}", "deployment/proxy", "--", "node", "-e", _PROXY_PLAIN
+    )
+    assert proxied.returncode == 0, proxied.stderr
+    assert not proxied.stdout.strip().isdigit(), proxied.stdout
+
+
 def test_the_gateway_plans_with_an_exchanged_token_over_tls(server: Server) -> None:
     status, projection = server.first.api(
         _base(), "POST", "/project/planning/refresh", server.capability
@@ -373,6 +445,9 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
         ),
         ("mounts only its session's Secret", changed(volumes=other_secret)),
         ("hw-gw-<session>", changed(serviceAccountName="default")),
+        # Another session's name, which that session's certificate carries.
+        ("host name hw-gw-<session>", changed(hostname="hw-gw-0000000000000000")),
+        ("host name hw-gw-<session>", changed(subdomain="other")),
         # The restricted Pod Security Standard of the namespace refuses it first.
         ("PodSecurity", changed(hostNetwork=True)),
         ("no exec probe", changed(containers=probe_exec)),

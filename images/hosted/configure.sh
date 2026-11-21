@@ -19,7 +19,7 @@ home=/var/lib/heartwood-home
 rm -rf "${work}/deployment" "${work}/native"
 mkdir -p "${work}/deployment" "${work}/native" "${home}/research" "${home}/state"
 for name in deployment.toml platform-ca.crt actor-key kubeconfig worker-policy.json \
-  launch-context.json model-discovery-key; do
+  launch-context.json model-discovery-key gateway-tls.crt gateway-tls.key; do
   cp "${source}/${name}" "${work}/deployment/${name}"
 done
 cp "${source}/keycloak-client-secret" "${work}/deployment/client-secret"

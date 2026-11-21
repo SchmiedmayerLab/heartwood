@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 from heartwood.schemas import PlatformLaunchContext
 from heartwood_platform.control.budgets import InsufficientBudgetError, Ledger
+from heartwood_platform.control.gateway_certificates import GatewayCertificates
 from heartwood_platform.control.hosted import HostedGateway
 from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import project_client
@@ -157,6 +158,7 @@ class LaunchService:
         session_reservation: Decimal,
         inference: SessionInference | None = None,
         project_data: ProjectData | None = None,
+        certificates: GatewayCertificates | None = None,
     ) -> None:
         """Launch sessions of one platform; ``hosted`` renders their gateways' files.
 
@@ -168,7 +170,8 @@ class LaunchService:
         reservation with what ``inference`` measured when it is deleted. Without an
         inference route a session incurs nothing.
 
-        ``project_data`` fills their project data volumes.
+        ``project_data`` fills their project data volumes, and ``certificates`` signs a new
+        serving certificate of the gateway at each launch.
         """
         self._registry = registry
         self._clients = clients
@@ -182,6 +185,7 @@ class LaunchService:
         self._session_reservation = session_reservation
         self._inference = inference
         self._project_data = project_data
+        self._certificates = certificates
         # A launch waits for the session's gateway. A deletion that ran meanwhile
         # would leave what the launch writes afterwards, so both hold one lock for
         # each researcher and project.
@@ -310,6 +314,7 @@ class LaunchService:
                 project_data=volume,
             )
         )
+        tls = {} if self._certificates is None else self._certificates.issue(session.id)
         # The gateway pod mounts this Secret. Only it carries credentials; the reply
         # to the spawner carries none.
         self._sessions.write_gateway_secret(
@@ -317,6 +322,7 @@ class LaunchService:
             {
                 **hosted,
                 **model_files,
+                **tls,
                 "launch.json": launch.model_dump_json(),
                 "keycloak-client-secret": self._clients.client_secret(project),
                 **{

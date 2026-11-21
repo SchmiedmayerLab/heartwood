@@ -255,6 +255,7 @@ Top-level `--interface`, `--port`, `--plain`, `--prompt`, and `--review-mode` se
 | `--host HOST` | Bind host; default `127.0.0.1` |
 | `--port PORT` | Bind port; default `8767` |
 | `--web-root DIR` | Browser asset directory; default the packaged assets |
+| `--tls-certificate PATH`, `--tls-key PATH` | Serve the port only over TLS with this PEM certificate chain and its key; both or neither, and only with an `https` `--public-origin` |
 | `--deployment PATH` | Absolute operator manifest binding the project to external state, policy, and optional managed workers |
 | `--review-mode MODE` | Review mode selected at start; policy limits still apply |
 | `--capability-fd N` | Read the operator capability from inherited descriptor `N` instead of printing a launch link |

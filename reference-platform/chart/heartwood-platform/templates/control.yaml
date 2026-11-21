@@ -57,7 +57,8 @@ SPDX-License-Identifier: MIT
 {{- /* The data service and the job service read launch contexts for their operation observations, and so may the accounts in control.contextCallers. */ -}}
 {{- $services := list (printf "system:serviceaccount:%s:heartwood-data" .Release.Namespace) (printf "system:serviceaccount:%s:heartwood-jobs" .Release.Namespace) -}}
 {{- $contextCallers := concat $services .Values.control.contextCallers | uniq -}}
-{{- dict "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" $contextCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- $gatewayTls := dict "issuer_directory" "/var/run/heartwood-control/gateway-issuer" "service" (include "heartwood.gatewayService" .) -}}
+{{- dict "gateway_tls" $gatewayTls "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" $contextCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same
@@ -164,6 +165,33 @@ spec:
       enableServiceLinks: false
       securityContext:
         {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      # Only this container reads the key of the platform CA. It writes an issuing CA for
+      # the gateways' serving certificates into a memory volume, which the control
+      # service reads.
+      initContainers:
+        - name: gateway-issuer
+          image: {{ .Values.images.platformServices }}
+          args:
+            - heartwood_platform.control.gateway_certificates
+            - /etc/platform-ca
+            - {{ include "heartwood.gatewayService" . }}
+            - {{ .Values.sessions.namespace }}
+            - /var/run/heartwood-control/gateway-issuer
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: platform-ca-key
+              mountPath: /etc/platform-ca
+              readOnly: true
+            - name: gateway-issuer
+              mountPath: /var/run/heartwood-control/gateway-issuer
       containers:
         - name: control
           image: {{ .Values.images.platformServices }}
@@ -219,6 +247,9 @@ spec:
             - name: data-token
               mountPath: /var/run/secrets/heartwood/data
               readOnly: true
+            - name: gateway-issuer
+              mountPath: /var/run/heartwood-control/gateway-issuer
+              readOnly: true
       volumes:
         - name: configuration
           configMap:
@@ -262,6 +293,14 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        - name: platform-ca-key
+          secret:
+            secretName: platform-ca
+            defaultMode: 0440
+        - name: gateway-issuer
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
         # The control service's token for the data service, which plans project data volumes.
         - name: data-token
           projected:

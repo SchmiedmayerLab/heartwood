@@ -191,17 +191,29 @@ def _selected(workflow: str, changed: str) -> bool:
 
 def test_cluster_stage_runs_after_the_candidate_build_it_downloads() -> None:
     cluster = _workflow("kubernetes-qualification.yml")
-    steps = {step["name"]: step for step in cluster["jobs"]["cluster"]["steps"]}
+    jobs = cluster["jobs"]
+    steps = {
+        name: {step["name"]: step for step in jobs[name]["steps"]} for name in ("images", "cluster")
+    }
 
     # Without the candidate build's artifacts in the same run the stage cannot start.
     assert set(cluster["on"]) == {"workflow_call"}
     assert cluster["permissions"] == {"contents": "read"}
-    for name in ("worker-dependency-candidate", "worker-gateway-candidate"):
+    for job, name in (
+        ("images", "worker-dependency-candidate"),
+        ("cluster", "worker-gateway-candidate"),
+        ("cluster", "kubernetes-qualification-images"),
+    ):
         assert any(
             step.get("with", {}).get("name") == name + "-${{ github.sha }}"
-            for step in steps.values()
+            for step in steps[job].values()
         )
-    assert '--commit "${GITHUB_SHA}"' in steps["Verify the evidence for this commit"]["run"]
+    verify = steps["cluster"]["Verify the evidence for this commit"]
+    assert '--commit "${GITHUB_SHA}"' in verify["run"]
+    # The check of the stage keeps its name and requires every cluster job.
+    assert jobs["qualification"]["name"] == "Kubernetes qualification"
+    assert jobs["qualification"]["needs"] == ["scope", "images", "cluster"]
+    assert jobs["qualification"]["if"] == "${{ !cancelled() }}"
     for caller in ("pull-request-validation.yml", "native-qualification.yml"):
         job = _workflow(caller)["jobs"]["kubernetes-qualification"]
         assert job["needs"] == "native-qualification"
@@ -220,6 +232,71 @@ def test_cluster_stage_runs_after_the_candidate_build_it_downloads() -> None:
         assert _selected("kubernetes-qualification.yml", changed)
         assert _selected("worker-candidate.yml", changed)
     assert not _selected("kubernetes-qualification.yml", "documentation/index.md")
+
+
+def test_each_cluster_test_module_runs_in_exactly_one_stage() -> None:
+    stages = {
+        entry["stage"]: entry["tests"].split()
+        for entry in _workflow("kubernetes-qualification.yml")["jobs"]["cluster"]["strategy"][
+            "matrix"
+        ]["include"]
+    }
+    modules = {path.name for path in (_ROOT / "reference-platform/tests/cluster").glob("test_*.py")}
+    prefix = "../tests/cluster/"
+    platform = stages["platform"]
+    ignored = {item.removeprefix("--ignore=" + prefix) for item in platform[1:]}
+    hosted = {item.removeprefix(prefix) for item in stages["hosted"]}
+
+    assert set(stages) == {"platform", "hosted", "worker"}
+    # The platform stage runs every module that another stage does not.
+    assert platform[0] == "../tests/cluster"
+    assert all(item.startswith("--ignore=" + prefix) for item in platform[1:])
+    assert ignored == hosted
+    assert hosted <= modules
+    assert len(hosted) == len(stages["hosted"])
+    assert stages["worker"] == []
+    # The chart tests run the stage's modules, and only the worker stage qualifies workers.
+    steps = {
+        step["name"]: step
+        for step in _workflow("kubernetes-qualification.yml")["jobs"]["cluster"]["steps"]
+    }
+    chart = steps["Test the installed chart"]
+    assert chart["if"] == "matrix.stage != 'worker'"
+    assert chart["env"] == {"TESTS": "${{ matrix.tests }}"}
+    assert '"${tests[@]}"' in chart["run"]
+    for name in (
+        "Qualify managed workers on the Kubernetes driver",
+        "Verify the evidence for this commit",
+    ):
+        assert steps[name]["if"] == "matrix.stage == 'worker'"
+
+
+@pytest.mark.parametrize(
+    ("required", "results", "passes"),
+    [
+        ("false", {"scope": "success", "images": "skipped", "cluster": "skipped"}, True),
+        ("true", {"scope": "success", "images": "success", "cluster": "success"}, True),
+        ("true", {"scope": "success", "images": "success", "cluster": "failure"}, False),
+        ("true", {"scope": "success", "images": "failure", "cluster": "skipped"}, False),
+        ("", {"scope": "failure", "images": "skipped", "cluster": "skipped"}, False),
+    ],
+)
+def test_the_stage_check_passes_only_when_the_stage_passed_or_was_not_required(
+    required: str, results: dict[str, str], passes: bool
+) -> None:
+    (step,) = _workflow("kubernetes-qualification.yml")["jobs"]["qualification"]["steps"]
+    completed = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        env={
+            "REQUIRED": required,
+            "RESULTS": json.dumps({name: {"result": value} for name, value in results.items()}),
+            "PATH": os.environ["PATH"],
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (completed.returncode == 0) is passes
 
 
 def test_the_launch_token_is_sent_again_when_it_reaches_the_pod_incomplete(
