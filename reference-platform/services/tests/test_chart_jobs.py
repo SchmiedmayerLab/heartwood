@@ -258,3 +258,15 @@ def test_workers_reach_the_object_store(objects: list[dict[str, Any]]) -> None:
         "namespaceSelector": {"matchLabels": {"heartwood.platform/jobs": "true"}},
         "podSelector": {"matchLabels": {"heartwood.platform/role": "funnel-worker"}},
     } in sources
+
+
+def test_gpus_are_bounded_by_the_quota_of_each_project(objects: list[dict[str, Any]]) -> None:
+    for project in _PROJECTS:
+        quota = _named(objects, "ResourceQuota", "jobs", f"hw-jobs-{project}")["spec"]["hard"]
+        # Neither kind project holds the GPU entitlement.
+        assert quota["requests.nvidia.com/gpu"] == "0"
+        assert quota["count/jobs.batch"] == "40"
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-funnel-worker-jobs")["spec"]
+    assert "worker-created Jobs run one pod once" in {
+        item["message"] for item in policy["validations"]
+    }

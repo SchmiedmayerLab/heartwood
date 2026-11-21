@@ -64,6 +64,8 @@ metadata:
 spec:
   hard:
     {{- toYaml $.Values.jobs.quota | nindent 4 }}
+    # GPUs only for a project with the entitlement, up to its limits.
+    requests.nvidia.com/gpu: {{ ternary (mul $.Values.jobs.limits.maxGpuCount $.Values.jobs.limits.maxActiveTasks) 0 ($project.gpu | default false) | quote }}
 ---
 # Every pod of the namespace denies ingress and egress unless a policy below allows it.
 # Executor pods get no allowance.

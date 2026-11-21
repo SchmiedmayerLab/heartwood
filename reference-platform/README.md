@@ -279,7 +279,8 @@ Task tags may not start with an underscore, which Funnel reads as instructions, 
 
 An operation belongs to the researcher who sent it: another member of the project can neither observe nor cancel it.
 A repeated operation identifier with the same arguments returns the existing task, and other arguments or another researcher are a conflict.
-A request outside the project's entitlements or limits, such as more GPUs than one task may use or a task beyond the number of tasks that may wait or run at once, with an image that the platform does not run, or with an input that the project does not hold, is recorded and reported as denied, and no task is created.
+A request outside the project's entitlements or limits is recorded and reported as denied, and no task is created; the limits include the GPUs of one task and the number of tasks that may wait or run at once.
+A request with an image that the platform does not run, or with an input that the project does not hold, is denied in the same way.
 An operation's observations carry the launch context that it was received in.
 The platform does not select GPU types, so a request that names one is denied.
 The service records each submission in its SQLite database before it reserves the budget and calls the executor.
@@ -339,7 +340,9 @@ A worker's token is bound to its pod, whose name is its task identifier with a s
 - mount only the claim `<task>-workspace` of that task, and no other volume;
 - have one container, no init or ephemeral containers, no pull secrets, no environment from Secrets or ConfigMaps, and no node, scheduling, runtime class, proc mount or host name of its own.
 
-A worker cannot change a Job, and the quota bounds the number of Jobs in the namespace.
+A worker cannot change a Job, and each Job runs one pod once.
+The quota bounds the number of Jobs in the namespace and allows GPUs only to a project with the GPU entitlement.
+A worker can read the logs of every pod in its namespace, including the executor logs of other tasks of the same project.
 A session namespace that the control service creates may not carry the jobs label.
 The job service holds the Secret `heartwood-jobs-executors` with its password at each project's server, and `heartwood-jobs-store` with its account `hw-jobs-<project>` at the object store.
 The hook Job `heartwood-jobs-store` creates these accounts and sets each project bucket's policy: the account reads the bucket's objects and writes below `results/`.
