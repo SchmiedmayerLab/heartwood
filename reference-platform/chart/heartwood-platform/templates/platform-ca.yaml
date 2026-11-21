@@ -86,3 +86,40 @@ data:
   tls.crt: {{ $servingCertificate | b64enc }}
   tls.key: {{ $servingKey | b64enc }}
 {{- end }}
+{{- /*
+The serving certificate of the Hub's proxy, for the names of its public and API Services
+and the host of hub.publicOrigin. The names are recorded on the Secret, and an existing
+certificate is kept while the CA and the names are kept.
+*/ -}}
+{{- $proxyNames := list -}}
+{{- range $service := list "proxy-public" "proxy-api" -}}
+{{- $qualified := printf "%s.%s" $service $.Release.Namespace -}}
+{{- $proxyNames = concat $proxyNames (list $service $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified)) -}}
+{{- end -}}
+{{- $proxyNames = append $proxyNames (urlParse .Values.hub.publicOrigin).hostname | uniq -}}
+{{- $proxyNamesText := join "," $proxyNames -}}
+{{- $proxyCertificate := "" -}}
+{{- $proxyKey := "" -}}
+{{- $proxyExisting := lookup "v1" "Secret" .Release.Namespace "proxy-tls" -}}
+{{- if and $existing $proxyExisting (eq (dig "metadata" "annotations" "heartwood.platform/names" "" $proxyExisting) $proxyNamesText) -}}
+{{- $proxyCertificate = index $proxyExisting.data "tls.crt" | b64dec -}}
+{{- $proxyKey = index $proxyExisting.data "tls.key" | b64dec -}}
+{{- else -}}
+{{- $proxyServing := genSignedCert "proxy-public" nil $proxyNames 825 $authority -}}
+{{- $proxyCertificate = $proxyServing.Cert -}}
+{{- $proxyKey = $proxyServing.Key -}}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: proxy-tls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+  annotations:
+    heartwood.platform/names: {{ $proxyNamesText | quote }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $proxyCertificate | b64enc }}
+  tls.key: {{ $proxyKey | b64enc }}
