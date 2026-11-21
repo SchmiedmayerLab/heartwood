@@ -290,7 +290,7 @@ def test_a_researcher_outside_the_project_is_refused(researcher: Researcher) -> 
         "keycloak-client-secret",
     )
     redirect = (
-        "http://proxy-public.heartwood-platform.svc.cluster.local"
+        "https://proxy-public.heartwood-platform.svc.cluster.local"
         f"/user/{researcher_id(FIRST)}/other/oauth_callback"
     )
     signed_in = sign_in(

@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from identity import PLATFORM, SESSIONS, curl, secret, write_private
 from kube import Cluster
 
-ORIGIN = "http://proxy-public.heartwood-platform.svc.cluster.local"
+ORIGIN = "https://proxy-public.heartwood-platform.svc.cluster.local"
 SESSION_LABEL = "heartwood.platform/session"
 
 
