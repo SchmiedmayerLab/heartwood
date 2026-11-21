@@ -621,13 +621,66 @@ def test_the_synthetic_model_calls_the_terminal_and_then_finishes(synthetic: Tes
     assert second["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "finish"
     # A new user message starts again.
     third = _complete(synthetic, [user, assistant, result, {"role": "user", "content": "Again."}])
-    assert third["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "terminal"
+    (again,) = third["choices"][0]["message"]["tool_calls"]
+    assert again["function"]["name"] == "terminal"
+    assert again["id"] != call["id"]
     plain = synthetic.post(
         "/v1/chat/completions",
         json={"model": "synthetic-coder", "messages": [user]},
         headers=_KEY,
     ).json()
     assert plain["choices"][0]["message"]["content"] == synthetic_model.TEXT
+
+
+def test_a_script_makes_the_synthetic_model_call_offered_tools_in_order(
+    synthetic: TestClient,
+) -> None:
+    steps = [
+        ["list_datasets", {}],
+        ["finish", {"message": "Waiting."}],
+        ["terminal", {"command": "ls"}],
+    ]
+    user = {
+        "role": "user",
+        "content": [{"type": "text", "text": f"Run. {synthetic_model.SCRIPT} {json.dumps(steps)}"}],
+    }
+    # The gateway writes a server identifier's hyphens as underscores.
+    tools = [
+        *_TOOLS,
+        {"type": "function", "function": {"name": "heartwood_data__list_datasets_0a1b2c3d"}},
+    ]
+    messages: list[dict[str, Any]] = [user]
+    called = []
+    for _ in steps:
+        answer = _complete(synthetic, messages, tools=tools)
+        (call,) = answer["choices"][0]["message"]["tool_calls"]
+        called.append((call["function"]["name"], json.loads(call["function"]["arguments"])))
+        messages += [
+            {"role": "assistant", "content": "", "tool_calls": [call]},
+            {"role": "tool", "tool_call_id": call["id"], "content": "done"},
+            # A later user message, such as a released result, continues the script.
+            {"role": "user", "content": "Result."},
+        ]
+    assert called == [
+        ("heartwood_data__list_datasets_0a1b2c3d", {}),
+        ("finish", {"message": "Waiting."}),
+        ("terminal", {"command": "ls"}),
+    ]
+    # A used-up script, and a tool that is not offered, are answered with the text.
+    ended = _complete(synthetic, messages, tools=tools)
+    assert ended["choices"][0]["message"]["content"] == synthetic_model.TEXT
+    # Each call of the conversation has its own identifier.
+    assert len({message["tool_calls"][0]["id"] for message in messages[1::3]}) == len(steps)
+    # A later message with a script starts that script.
+    again = {"role": "user", "content": f'{synthetic_model.SCRIPT} [["terminal", {{}}]]'}
+    restarted = _complete(synthetic, [*messages, again], tools=tools)
+    assert restarted["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "terminal"
+    unoffered = _complete(synthetic, [user])
+    assert unoffered["choices"][0]["message"]["content"] == synthetic_model.TEXT
+    # Two MCP tools of the same name leave the step without a tool.
+    twice = [*tools, {"type": "function", "function": {"name": "other__list_datasets_0a1b2c3e"}}]
+    ambiguous = _complete(synthetic, [user], tools=twice)
+    assert ambiguous["choices"][0]["message"]["content"] == synthetic_model.TEXT
 
 
 def test_the_synthetic_model_streams_and_interrupts_on_request(synthetic: TestClient) -> None:
