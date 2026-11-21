@@ -79,8 +79,10 @@ def sandbox_digests(openshell_objects: str) -> tuple[str, str]:
 
 
 def _toml(value: object) -> str:
-    # JSON strings, numbers, booleans and arrays of them are valid TOML values.
-    return json.dumps(value)
+    # JSON strings, numbers, booleans and arrays of them are valid TOML values. Characters
+    # outside ASCII stay literal, because TOML refuses the surrogate pairs of JSON escapes;
+    # JSON escapes the other control characters, and TOML needs DEL escaped too.
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _table(name: str, values: dict[str, object]) -> str:
@@ -149,6 +151,7 @@ class HostedGateway:
                         "issuer": self._issuer,
                         "client_id": client_id,
                         "client_secret_file": f"{_DEPLOYMENT}/client-secret",
+                        "actor_key_file": f"{_DEPLOYMENT}/actor-key",
                         "subject": subject,
                         "ca_file": f"{_DEPLOYMENT}/platform-ca.crt",
                     },

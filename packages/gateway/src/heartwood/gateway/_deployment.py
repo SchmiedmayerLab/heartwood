@@ -329,9 +329,13 @@ def _identity(table: object, project: ProjectContext) -> IdentityDeployment:
             for item in error.errors(include_input=False, include_url=False)
         )
         raise DeploymentError("deployment-manifest", f"invalid identity table: {details}") from None
-    validate_operator_file(identity.client_secret_file, project)
-    if stat.S_IMODE(identity.client_secret_file.stat().st_mode) & 0o077:
-        raise ProjectStateError("identity client secret requires owner-only access")
+    for path, name in (
+        (identity.client_secret_file, "client secret"),
+        (identity.actor_key_file, "actor key"),
+    ):
+        validate_operator_file(path, project)
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise ProjectStateError(f"identity {name} requires owner-only access")
     if identity.ca_file is not None:
         validate_operator_file(identity.ca_file, project)
     return identity

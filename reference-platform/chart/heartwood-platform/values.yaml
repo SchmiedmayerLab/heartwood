@@ -206,7 +206,7 @@ sessions:
 # Keycloak.
 hub:
   # Origin under which researchers open the Hub's proxy. Gateways redirect their sign-in
-  # to <publicOrigin>/user/<subject>/<project>/oauth_callback. The default is the
+  # to <publicOrigin>/user/<researcher>/<project>/oauth_callback. The default is the
   # in-cluster address of the proxy Service.
   publicOrigin: "http://proxy-public.heartwood-platform.svc.cluster.local"
   # Networks from which gateways accept proxied requests: the pod network that holds the
@@ -274,6 +274,10 @@ jupyterhub:
       - name: heartwood-client
         secret:
           secretName: heartwood-hub-keycloak
+      # The key under which the Hub names researchers by identifier.
+      - name: researcher-ids
+        secret:
+          secretName: heartwood-researcher-ids
       - name: platform-ca
         configMap:
           name: platform-ca
@@ -297,6 +301,9 @@ jupyterhub:
         readOnly: true
       - name: heartwood-client
         mountPath: /usr/local/etc/heartwood/hub/client
+        readOnly: true
+      - name: researcher-ids
+        mountPath: /usr/local/etc/heartwood/hub/researcher-ids
         readOnly: true
       - name: platform-ca
         mountPath: /usr/local/etc/heartwood/platform-ca

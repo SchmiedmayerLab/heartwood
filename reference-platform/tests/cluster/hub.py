@@ -107,12 +107,12 @@ class Browser:
         status, location, body = self.get(callback)
         assert status == 302, body[:300]
 
-    def spawn(self, subject: str, project: str) -> tuple[int, str]:
+    def spawn(self, researcher: str, project: str) -> tuple[int, str]:
         """Start the named server of a project with the spawn form; return the answer.
 
         The status is the one of the form's submission, or 0 when no form was shown.
         """
-        status, location, page = self.get(f"/hub/spawn/{subject}/{project}")
+        status, location, page = self.get(f"/hub/spawn/{researcher}/{project}")
         if status != 200:
             # The Hub showed no form and started nothing, for example while it still stops
             # the server: the answer is 0 with the location or page.
@@ -129,7 +129,7 @@ class Browser:
             "@-",
             "--write-out",
             "\n%{http_code} %{redirect_url}",
-            f"{ORIGIN}/hub/spawn/{subject}/{project}",
+            f"{ORIGIN}/hub/spawn/{researcher}/{project}",
             text_input=urlencode({"_xsrf": xsrf, "profile": project}),
         )
         body, _, last = output.rpartition("\n")

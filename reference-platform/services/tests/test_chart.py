@@ -205,6 +205,83 @@ def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[st
     assert "ca.crt" in _named(objects, "ConfigMap", "platform-ca")["data"]
 
 
+def test_control_service_reads_the_generated_actor_key(objects: list[dict[str, Any]]) -> None:
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    path = Path(configuration["sessions"]["actor_key_file"])
+    secret = _named(objects, "Secret", "heartwood-actor-key")
+    spec = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    (volume,) = [
+        item
+        for item in spec["volumes"]
+        if item.get("secret", {}).get("secretName") == "heartwood-actor-key"
+    ]
+    (mount,) = [
+        item for item in spec["containers"][0]["volumeMounts"] if item["name"] == volume["name"]
+    ]
+
+    assert len(base64.b64decode(secret["data"][path.name])) >= 32
+    assert Path(mount["mountPath"]) == path.parent
+    assert mount["readOnly"] is True
+    # Only the control service mounts the key; gateways receive it in their own Secret.
+    assert [
+        document["metadata"]["name"]
+        for document in objects
+        if "heartwood-actor-key" in json.dumps(document.get("spec", {}))
+    ] == ["heartwood-control"]
+
+
+@pytest.mark.parametrize("keycloak", [None, "https://id.example.test"])
+def test_the_hub_and_the_control_service_derive_identifiers_from_one_issuer(
+    keycloak: str | None,
+) -> None:
+    extra = [] if keycloak is None else ["--set", f"keycloak.url={keycloak}"]
+    rendered = subprocess.run([*_TEMPLATE, *extra], capture_output=True, text=True, check=True)
+    objects = [item for item in yaml.safe_load_all(rendered.stdout) if item]
+    hub = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
+    control = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+
+    assert hub["issuer"] == control["keycloak"]["issuer"]
+    assert keycloak is None or hub["issuer"] == f"{keycloak}/realms/heartwood"
+
+
+def test_researchers_are_named_by_identifier_under_a_kept_key(
+    objects: list[dict[str, Any]],
+) -> None:
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    secret = _named(objects, "Secret", "heartwood-researcher-ids")
+
+    assert configuration["redirect_uri_template"].endswith(
+        "/user/{researcher}/{project}/oauth_callback"
+    )
+    assert len(base64.b64decode(secret["data"]["key"])) >= 32
+    assert secret["metadata"]["annotations"]["helm.sh/resource-policy"] == "keep"
+    for document in ("heartwood-actor-key", "heartwood-researcher-ids"):
+        annotations = _named(objects, "Secret", document)["metadata"]["annotations"]
+        assert annotations["helm.sh/resource-policy"] == "keep"
+    # The control service and the Hub mount the key; the gateways never receive it.
+    assert sorted(
+        document["metadata"]["name"]
+        for document in objects
+        if "heartwood-researcher-ids" in json.dumps(document.get("spec", {}))
+    ) == ["heartwood-control", "hub"]
+    spec = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    (volume,) = [
+        item
+        for item in spec["volumes"]
+        if item.get("secret", {}).get("secretName") == "heartwood-researcher-ids"
+    ]
+    (mount,) = [
+        item for item in spec["containers"][0]["volumeMounts"] if item["name"] == volume["name"]
+    ]
+    assert Path(configuration["researcher_id_key_file"]).parent == Path(mount["mountPath"])
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -649,3 +726,28 @@ def test_staging_names_are_left_to_the_gateway_accounts_of_the_sessions_namespac
     assert rule["expression"] == (
         "request.userInfo.username.startsWith('system:serviceaccount:heartwood-sessions:hw-gw-')"
     )
+
+
+@pytest.mark.parametrize(
+    ("member", "accepted"),
+    [
+        ("auth0|64ab12cd34ef56ab78cd90ef", True),
+        ("synthetic@example.test", True),
+        ("109876543210987654321", True),
+        (" padded", False),
+        ("padded\u3000", False),
+        ("zero\u200bwidth", False),
+        ("a\tb", False),
+        ("line\nbreak", False),
+        ("s" * 256, False),
+    ],
+)
+def test_project_members_are_subjects_in_any_provider_form(member: str, accepted: bool) -> None:
+    project = {"id": "demo", "billingAttributionRef": "g", "policyRef": "p", "members": [member]}
+    result = subprocess.run(
+        [*_TEMPLATE, "--set-json", f"projects={json.dumps([project])}"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert (result.returncode == 0) is accepted, result.stderr

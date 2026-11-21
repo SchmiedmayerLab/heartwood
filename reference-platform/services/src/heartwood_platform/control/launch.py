@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hmac
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -63,7 +64,8 @@ class Launch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     session: str
-    subject: str
+    # The researcher identifier, which names the researcher in paths and URLs.
+    researcher: str
     project: str
     client_id: str
     redirect_uri: str
@@ -106,15 +108,21 @@ class LaunchService:
         sessions: SessionNamespaces,
         platform_id: str,
         redirect_uri_template: str,
+        researcher_id: Callable[[str], str],
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         hosted: HostedGateway | None = None,
     ) -> None:
-        """Launch sessions of one platform; ``hosted`` renders their gateways' files."""
+        """Launch sessions of one platform; ``hosted`` renders their gateways' files.
+
+        ``researcher_id`` returns the researcher identifier of a subject, which names
+        the researcher in the redirect URI and in the caller's paths.
+        """
         self._registry = registry
         self._clients = clients
         self._sessions = sessions
         self._platform_id = platform_id
         self._redirect_uri_template = redirect_uri_template
+        self._researcher_id = researcher_id
         self._clock = clock
         self._hosted = hosted
         # A launch waits for the session's gateway. A deletion that ran meanwhile
@@ -130,12 +138,32 @@ class LaunchService:
         with lock:
             yield
 
+    def subject_of(self, researcher: str) -> str:
+        """Return the subject of a researcher identifier: a member or a session holder.
+
+        Raises ``NotAMemberError`` for an identifier that names nobody the registry knows,
+        or more than one subject.
+        """
+        presented = researcher.encode()
+        # Every candidate is compared, and an identifier that two subjects share names
+        # neither of them.
+        matches = [
+            subject
+            for subject in self._registry.subjects()
+            if hmac.compare_digest(self._researcher_id(subject).encode(), presented)
+        ]
+        if len(matches) != 1:
+            raise NotAMemberError(researcher)
+        return matches[0]
+
     def projects(self, subject: str) -> list[str]:
         """Return the identifiers of the projects that a subject may launch."""
         return [project.id for project in self._registry.projects_of(subject)]
 
     def _redirect_uri(self, session: Session) -> str:
-        return self._redirect_uri_template.format(subject=session.subject, project=session.project)
+        return self._redirect_uri_template.format(
+            researcher=self._researcher_id(session.subject), project=session.project
+        )
 
     def _context(self, project: Project, session: Session) -> PlatformLaunchContext:
         # The billing binding comes from the registry and never from the caller.
@@ -168,7 +196,7 @@ class LaunchService:
         self._clients.add_redirect_uri(project, redirect_uri)
         launch = Launch(
             session=session.id,
-            subject=subject,
+            researcher=self._researcher_id(subject),
             project=project,
             client_id=project_client(project),
             redirect_uri=redirect_uri,

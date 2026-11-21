@@ -97,6 +97,8 @@ class RestRequest:
     path: str
     body: str = ""
     actor_id: str = "human"
+    # A display value of the request's sign-in, for the interface only.
+    display_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +258,11 @@ class RestGateway:
                 return _error(409, "Experiment records require integrity recovery")
         if (request.method, parts) in _PLANNING_ROUTES:
             return self._handle_planning(_PLANNING_ROUTES[request.method, parts], request.body)
+        if parts == ("settings", "identity") and request.method == "GET":
+            return RestResponse(
+                status_code=200,
+                body=_json_object(self.gateway.sign_in_display(request.display_name)),
+            )
         if parts == ("settings", "specialists") and request.method == "GET":
             try:
                 specialist_settings = self.gateway.specialist_settings()
@@ -265,16 +272,16 @@ class RestGateway:
         if parts == ("settings", "skills", "inspect") and request.method == "POST":
             return self._handle_skill_inspection(body=request.body)
         if parts == ("settings", "skills", "install") and request.method == "POST":
-            return self._handle_skill_install(body=request.body)
+            return self._handle_skill_install(body=request.body, actor_id=request.actor_id)
         if parts == ("settings", "skills", "refresh") and request.method == "POST":
             return self._handle_skill_refresh(body=request.body)
         if parts == ("settings", "skills", "local", "inspect") and request.method == "POST":
             return self._handle_local_skill_inspection(body=request.body)
         if parts == ("settings", "skills", "local", "install") and request.method == "POST":
-            return self._handle_local_skill_install(body=request.body)
+            return self._handle_local_skill_install(body=request.body, actor_id=request.actor_id)
         if len(parts) == 3 and parts[:2] == ("settings", "skills") and request.method == "DELETE":
             try:
-                skill_settings = self.gateway.remove_skill(parts[2])
+                skill_settings = self.gateway.remove_skill(parts[2], actor_id=request.actor_id)
             except SkillSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(skill_settings))
@@ -721,7 +728,7 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(summary))
 
-    def _handle_skill_install(self, *, body: str) -> RestResponse:
+    def _handle_skill_install(self, *, body: str, actor_id: str) -> RestResponse:
         payload = _request_body(SkillInstallRequest, body)
         if isinstance(payload, RestResponse):
             return payload
@@ -731,6 +738,7 @@ class RestGateway:
                 source_id=payload.source_id,
                 expected_tree_sha256=payload.expected_tree_sha256,
                 approved=payload.approved,
+                actor_id=actor_id,
             )
         except SkillSettingsError as error:
             return _error(422, error)
@@ -756,7 +764,7 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(summary))
 
-    def _handle_local_skill_install(self, *, body: str) -> RestResponse:
+    def _handle_local_skill_install(self, *, body: str, actor_id: str) -> RestResponse:
         payload = _request_body(SkillLocalInstallRequest, body)
         if isinstance(payload, RestResponse):
             return payload
@@ -765,6 +773,7 @@ class RestGateway:
                 Path(payload.source),
                 expected_tree_sha256=payload.expected_tree_sha256,
                 approved=payload.approved,
+                actor_id=actor_id,
             )
         except SkillSettingsError as error:
             return _error(422, error)

@@ -438,6 +438,10 @@ class SessionService:
             command_hash = _command_hash(command)
             record = self.store.command_record(command.command_id)
             if record is not None:
+                if record.get("command_hash") != command_hash:
+                    _refuse_approval_retry_of_another_actor(
+                        persisted, command, record.get("command_hash")
+                    )
                 return _command_result_from_receipt(persisted, command, command_hash, record)
             unresolved = self.store.unresolved_command_ids()
             undispatched = self._undispatched_authorizations(persisted) if unresolved else {}
@@ -2588,6 +2592,36 @@ def _utc_now() -> str:
 
 def _kind_value(kind: CommandKind | str) -> str:
     return kind.value if isinstance(kind, CommandKind) else kind
+
+
+def _refuse_approval_retry_of_another_actor(
+    events: tuple[SessionEvent, ...], command: SessionCommand, recorded_hash: object
+) -> None:
+    """Name the cause when a retained approval is retried by a different actor alone.
+
+    The retry differs from the recorded approval, so it never dispatches. The cause is
+    named only when the actor is the one difference; other changes remain a conflict.
+    This happens, for example, when a gateway now records a different actor for the
+    same researcher; the researcher withdraws the approval with a denial instead.
+    """
+    outside: list[ExternalActionRecord | ExternalResultRecord] = [
+        *external_action_records(events).values(),
+        *external_result_records(events).values(),
+    ]
+    for record in outside:
+        decision = record.decision
+        if (
+            record.phase == "authorized"
+            and decision is not None
+            and decision.command_id == command.command_id
+            and decision.actor_id != command.actor_id
+            and _command_hash(command.model_copy(update={"actor_id": decision.actor_id}))
+            == recorded_hash
+        ):
+            raise SessionRecoveryError(
+                f"approval {command.command_id} was recorded for another actor and will "
+                "not be dispatched for this one; deny it to withdraw it"
+            )
 
 
 def _command_hash(command: SessionCommand) -> str:

@@ -97,6 +97,7 @@ __all__ = [
     "SessionListResponse",
     "SessionRenameRequest",
     "SessionSummaryResponse",
+    "SignInDisplayResponse",
     "SkillInspectRequest",
     "SkillInstallRequest",
     "SkillLocalInspectRequest",
@@ -1187,6 +1188,17 @@ class SkillSettingsResponse(_ApiResponse):
     skills: list[SkillSummaryResponse]
 
 
+class SignInDisplayResponse(_ApiResponse):
+    """A display value for the signed-in researcher, shown in the interface only.
+
+    ``display_name`` comes from the identity token's ``name`` claim, or else its
+    ``preferred_username`` claim. It identifies nobody, the gateway keeps it in memory
+    only, and records never carry it.
+    """
+
+    display_name: Annotated[str, Field(min_length=1, max_length=128)] | None
+
+
 class SpecialistRoleResponse(_ApiResponse):
     """One bounded research specialist exposed by the shared gateway."""
 
@@ -1228,6 +1240,7 @@ type ApiResponse = (
     | ProjectReadinessResponse
     | SessionListResponse
     | SessionSummaryResponse
+    | SignInDisplayResponse
     | McpServerResponse
     | McpServersResponse
     | McpServerTestResponse

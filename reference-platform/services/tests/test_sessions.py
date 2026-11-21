@@ -33,6 +33,7 @@ _OBJECTS = (
 )
 _IMAGE = "registry.example.test/openshell-gateway@sha256:" + "1" * 64
 _CA = "-----BEGIN CERTIFICATE-----\nplatform\n-----END CERTIFICATE-----\n"
+_ACTOR_KEY = "synthetic-actor-key-0123456789abcdef"
 _RBAC = "/apis/rbac.authorization.k8s.io/v1"
 
 
@@ -55,6 +56,7 @@ class Platform:
             container_defaults={"cpu": "500m", "memory": "512Mi"},
             container_default_requests={"cpu": "100m", "memory": "128Mi"},
             platform_ca=_CA,
+            actor_key=_ACTOR_KEY,
             ready_timeout_seconds=10,
         )
         self.sessions = Sessions(
@@ -282,6 +284,8 @@ def test_gateway_secret_is_replaced(platform: Platform) -> None:
     secret = platform.api.kind("Secret", "heartwood-sessions")["hw-gw-abc123"]
     assert secret["type"] == "Opaque"
     assert base64.b64decode(secret["data"]["launch.json"]) == b"second"
+    assert base64.b64decode(secret["data"]["actor-key"]) == _ACTOR_KEY.encode()
+    assert base64.b64decode(secret["data"]["platform-ca.crt"]) == _CA.encode()
 
 
 def test_foreign_namespace_of_the_same_name_is_not_used(platform: Platform) -> None:

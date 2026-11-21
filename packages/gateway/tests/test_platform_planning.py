@@ -1119,6 +1119,9 @@ def _hosted_deployment(
     secret = operator / "client-secret"
     secret.write_text("synthetic-client-secret\n", encoding="utf-8")
     secret.chmod(0o600)
+    actor_key = operator / "actor-key"
+    actor_key.write_text("synthetic-actor-key-0123456789abcdef\n", encoding="utf-8")
+    actor_key.chmod(0o600)
     launch = operator / "launch-context.json"
     launch.write_text(_LAUNCH.model_dump_json(), encoding="utf-8")
     launch.chmod(0o600)
@@ -1139,6 +1142,7 @@ def _hosted_deployment(
                     "issuer": "https://id.synthetic.invalid/realms/research",
                     "client_id": "hw-proj-synthetic",
                     "client_secret_file": str(secret),
+                    "actor_key_file": str(actor_key),
                     "subject": "synthetic-researcher",
                 },
                 "planning": {

@@ -91,6 +91,9 @@ class GatewayAccess(Protocol):
     def exchange_launch_token(self, token: str) -> str | None:
         """Exchange a one-time launch token for the capability the browser then sends."""
 
+    def display_name(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
+        """Return a name to show for an authorized request's sign-in, kept in memory only."""
+
     def launch_url(self, ingress: IngressPolicy) -> str | None:
         """Return a one-time browser link when the access method issues one."""
 
@@ -194,6 +197,10 @@ class LaunchCapability:
                 return None
             self._launch_token = None
             return self._secret.decode("ascii")
+
+    def display_name(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:  # noqa: ARG002
+        """Return no name: the launch capability carries none."""
+        return None
 
     def principal(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
         """Return the launching principal when the request carries the capability header."""

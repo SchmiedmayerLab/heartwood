@@ -168,6 +168,7 @@ The `[identity]` table binds a gateway that runs with `--ingress-mode identity-p
 issuer = "https://id.example.org/realms/research"
 client_id = "hw-proj-demo"
 client_secret_file = "/etc/heartwood/identity/client-secret"
+actor_key_file = "/etc/heartwood/identity/actor-key"
 subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 ```
 
@@ -176,18 +177,20 @@ subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 | `issuer` | Exact `iss` value of the provider's tokens and the origin the browser is sent to for sign-in |
 | `client_id` | The gateway's client at the provider; accepted tokens name it in `aud` |
 | `client_secret_file` | Absolute file that holds the client secret: printable ASCII without spaces, at most 4096 bytes, one trailing newline allowed |
-| `subject` | The only `sub` value the gateway accepts: a letter or digit followed by at most 127 letters, digits, `_`, `.`, `:` or `-`; `gateway`, `human` and `deployment-operator` are reserved |
+| `actor_key_file` | Absolute file that holds the deployment's actor key: a UTF-8 file of at most 4096 bytes whose content without one trailing newline is the key, at least 32 bytes long; the gateway does not start without it |
+| `subject` | The only `sub` value the gateway accepts, exactly as the provider issues it: 1 to 255 characters without control or format characters and without leading or trailing whitespace |
 | `provider_url` | Optional base URL where the gateway itself reaches the provider's discovery document, token endpoint and keys; default `issuer` |
 | `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for requests to the provider |
 
-`issuer` and `provider_url` are `http` or `https` URLs without credentials, query or fragment.
+Commands record an actor derived from `issuer` and `subject` under the actor key, as [Researcher Identity](../operate/security.md#researcher-identity) describes, so a change of either value or of the key changes the actor of later records.
+`issuer` and `provider_url` are `http` or `https` URLs without credentials, query, fragment, whitespace or control characters.
 Both use `https`, or `http` to a loopback address.
 A provider whose certificate comes from a private authority, such as a platform CA, is trusted through `ca_file`.
 The gateway reads `<provider_url>/.well-known/openid-configuration`, and the document's `issuer` must equal the configured `issuer`.
 The document's endpoints must lie on the origin of `issuer` or of `provider_url`.
 The gateway sends the browser to the authorization endpoint on the `issuer` origin and requests tokens and keys on the `provider_url` origin.
-`client_secret_file` and `ca_file` follow the rules for operator files: outside the research directory and the state root, no symbolic link in the path, owned by root or the gateway user, and not writable by group or others.
-`client_secret_file` must also be unreadable by group and others.
+`client_secret_file`, `actor_key_file` and `ca_file` follow the rules for operator files: outside the research directory and the state root, no symbolic link in the path, owned by root or the gateway user, and not writable by group or others.
+`client_secret_file` and `actor_key_file` must also be unreadable by group and others.
 [Researcher Identity](../operate/security.md#researcher-identity) describes sign-in and token handling.
 
 ### Managed Worker

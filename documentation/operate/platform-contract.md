@@ -38,7 +38,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 
 | Area | Heartwood | Platform |
 |---|---|---|
-| Researcher identity | Records the launching principal, or with `identity-proxy` ingress the verified subject, as the actor of every accepted command and ignores actors claimed in requests | Authenticates the person or operates the identity provider, authorizes project access, ends the session |
+| Researcher identity | Records the launching principal, or with `identity-proxy` ingress an actor derived from the verified issuer and subject, as the actor of every accepted command and ignores actors claimed in requests | Authenticates the person or operates the identity provider, authorizes project access, ends the session |
 | Gateway access | Requires the launch capability on every request and validates the declared ingress route | Routes only authenticated users to the gateway, strips client-supplied forwarding and identity headers, terminates TLS, delivers the capability |
 | Research session | Owns canonical session records, action review, outside authorization and interface projections | Keeps the gateway, research files, protected state and network route available |
 | Policy | Evaluates model routes, review modes and credential references against the deployment ceiling | Defines the ceiling and enforces filesystem, process and network restrictions |
@@ -134,7 +134,7 @@ The proxy then adds `X-Heartwood-Capability` with the same secret to each authen
 [Gateway Ingress](security.md#gateway-ingress) and [Launch Capability](security.md#launch-capability) state the exact validation rules, and the [command reference](../reference/cli.md#gateway-serve) lists every serve option.
 
 A platform whose proxy forwards requests without authenticating them starts the gateway with `identity-proxy` ingress.
-The gateway then signs the researcher in at the institution's OpenID Connect provider and accepts only the subject bound in the manifest, as [Researcher Identity](security.md#researcher-identity) describes.
+The gateway then signs the researcher in at the institution's OpenID Connect provider and accepts only the issuer and subject bound in the manifest, in whatever form the provider issues the subject, as [Researcher Identity](security.md#researcher-identity) describes.
 
 ### Deployment Policy
 
@@ -604,7 +604,7 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 |---|---|---|
 | Capability not offered | No advertised support | The choice is hidden in every interface; a stored or requested choice shows [HW-SETUP-004](../reference/troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
-| Missing or refused identity with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
+| Missing identity, or the identity of another subject or issuer, with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
 | Identity provider unreachable or unusable | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Sandbox gateway lacks a required capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |

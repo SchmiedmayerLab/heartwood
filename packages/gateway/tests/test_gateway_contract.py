@@ -689,7 +689,9 @@ def test_gateway_exposes_one_skill_lifecycle_for_every_interface(
         source_id: str | None,
         expected_tree_sha256: str,
         approved: bool,
+        actor_id: str,
     ) -> object:
+        assert actor_id == "human"
         installs.append((name, source_id, expected_tree_sha256, approved))
         return summary
 
@@ -3521,9 +3523,11 @@ def test_rest_manages_skill_settings(
         source_id: str | None,
         expected_tree_sha256: str,
         approved: bool,
+        actor_id: str,
     ) -> dict[str, object]:
         assert source_id == "official"
         assert expected_tree_sha256 == "a" * 64
+        assert actor_id == "human"
         return {"skills": [{**candidate, "source": "installed"}]} if approved else {}
 
     monkeypatch.setattr(
@@ -3543,8 +3547,10 @@ def test_rest_manages_skill_settings(
         *,
         expected_tree_sha256: str,
         approved: bool,
+        actor_id: str,
     ) -> dict[str, object]:
         assert expected_tree_sha256 == "a" * 64
+        assert actor_id == "human"
         return {"skills": [{**candidate, "source": "installed"}]} if approved else {}
 
     monkeypatch.setattr(
@@ -3552,7 +3558,9 @@ def test_rest_manages_skill_settings(
         "install_local_skill",
         install_local_skill,
     )
-    monkeypatch.setattr(gateway, "remove_skill", lambda _name: {"skills": []})
+    monkeypatch.setattr(
+        gateway, "remove_skill", lambda _name, *, actor_id: {"skills": [], "actor": actor_id}
+    )
 
     listed = rest.handle(RestRequest(method="GET", path="/settings/skills"))
     inspected = rest.handle(
@@ -3612,7 +3620,7 @@ def test_rest_manages_skill_settings(
     assert refreshed.body == {"skills": []}
     assert local.body["source"] == "local-candidate"
     assert local_installed.status_code == 200
-    assert removed.body == {"skills": []}
+    assert removed.body == {"skills": [], "actor": "human"}
 
 
 def test_gateway_confines_local_skill_sources_to_the_project(tmp_path: Path) -> None:
