@@ -2037,7 +2037,7 @@ def test_manifest_refuses_a_token_exchange_without_the_identity_table(tmp_path: 
 
 # Subjects in the forms that OpenID Connect providers issue; all are synthetic.
 _SUBJECT_FORMS = {
-    "keycloak-uuid": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "keycloak-uuid": str(uuid4()),
     "auth0": "auth0|64ab12cd34ef56ab78cd90ef",
     "numeric": "109876543210987654321",
     "opaque": "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ",
