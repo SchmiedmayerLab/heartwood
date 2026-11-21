@@ -35,6 +35,7 @@ from heartwood.gateway.platform_conformance import (
     run_platform_conformance,
 )
 from heartwood.gateway.platform_fakes import (
+    BUDGETS_AUDIENCE,
     DATA_AUDIENCE,
     INFERENCE_API_KEY,
     JOBS_AUDIENCE,
@@ -132,6 +133,7 @@ def test_kit_runs_the_same_checks_against_the_fakes(fakes: RunningFakes) -> None
         ("inference", "inference", "passed", 1),
         ("platform-tools", "synthetic-data", "passed", 3),
         ("platform-tools", "synthetic-jobs", "passed", 3),
+        ("platform-tools", "synthetic-budgets", "passed", 2),
     ]
     assert all(r.diagnostic is None for r in results)
     assert "Negotiated MCP revision listed in the service profile" in results[1].checks
@@ -195,20 +197,22 @@ def test_inference_down_leaves_platform_tools_listing(fakes: RunningFakes) -> No
         ("unavailable", "HW-AGENT-012"),
         ("passed", None),
         ("passed", None),
+        ("passed", None),
     ]
 
 
 def test_platform_tools_down_leave_inference_working(fakes: RunningFakes) -> None:
     fakes.data.available = False
     fakes.jobs.available = False
+    fakes.budgets.available = False
     inference, services = fakes.endpoints()
 
     results = run_platform_conformance(inference, services)
 
-    assert [r.status for r in results] == ["passed", "unavailable", "unavailable"]
+    assert [r.status for r in results] == ["passed", "unavailable", "unavailable", "unavailable"]
 
 
-@pytest.mark.parametrize("service", ["data", "jobs"])
+@pytest.mark.parametrize("service", ["data", "jobs", "budgets"])
 @pytest.mark.parametrize(
     "token",
     [
@@ -224,6 +228,8 @@ def test_services_refuse_expired_wrong_audience_and_wrong_project_tokens(
     profile, audience, tool, arguments = (
         (fakes.data_profile, DATA_AUDIENCE, "list_objects", {})
         if service == "data"
+        else (fakes.budgets_profile, BUDGETS_AUDIENCE, "get_budgets", {})
+        if service == "budgets"
         else (
             fakes.jobs_profile,
             JOBS_AUDIENCE,
@@ -414,6 +420,7 @@ def test_script_runs_the_same_checks_against_the_fakes(
         "inference",
         "synthetic-data",
         "synthetic-jobs",
+        "synthetic-budgets",
     ]
 
 
@@ -453,3 +460,77 @@ def test_script_refuses_incomplete_or_unprotected_options(
 
     assert _main(monkeypatch, *arguments) == 2
     assert message in capsys.readouterr().err
+
+
+_PLAN = json.loads(
+    (
+        Path(__file__).parents[3]
+        / "fixtures/synthetic/platform-contract/research-plan.r1.prediction.json"
+    ).read_text("utf-8")
+)
+
+
+def _budgets(fakes: RunningFakes, tool: str, **arguments: object) -> dict[str, Any]:
+    token = fakes.issuer.exchange(audience=BUDGETS_AUDIENCE)
+    return _call(fakes.budgets_profile, token, tool, project_id=PROJECT_ID, **arguments)
+
+
+def test_budget_service_reports_allocations_from_its_own_records(fakes: RunningFakes) -> None:
+    before = _budgets(fakes, "get_budgets")["budgets"]
+    fakes.budgets.record_spending("budget-compute", "12.5")
+    after = _budgets(fakes, "get_budgets")["budgets"]
+
+    for observation in (*before, *after):
+        validate_platform_message("budget-observation.schema.json", observation)
+    assert [(item["budget_id"], item["available"]) for item in before] == [
+        ("budget-compute", "40"),
+        ("budget-inference", "13"),
+    ]
+    assert {item["project_context_id"] for item in before} == {"launch-synthetic-1"}
+    assert after[0]["available"] == "27.5"
+    assert after[0]["platform_record_ref"] != before[0]["platform_record_ref"]
+
+
+def test_budget_service_prices_plans_and_elements_from_its_price_sheet(
+    fakes: RunningFakes,
+) -> None:
+    plan = _budgets(fakes, "estimate_workload", scope="plan", prediction=_PLAN)
+    batch = _budgets(
+        fakes, "estimate_workload", scope="elements", prediction=_PLAN, element_ids=["batch"]
+    )
+
+    for estimate in (plan, batch):
+        validate_platform_message("platform-estimate.schema.json", estimate)
+    assert (plan["total"]["expected"], plan["total"]["coverage"]) == ("24.7", "complete")
+    assert {
+        item["element_ids"][0]: item["cost"]["expected"] for item in plan["element_estimates"]
+    } == {"exploration": "3.6", "batch": "19.8", "inference": "1.3"}
+    assert batch["covered_element_ids"] == ["batch"]
+    assert batch["total"]["expected"] == "19.8"
+    assert plan["estimate_id"] != batch["estimate_id"]
+
+
+def test_budget_service_refuses_other_bindings_and_reports_unpriced_work(
+    fakes: RunningFakes,
+) -> None:
+    other = {
+        **_PLAN,
+        "project_context_id": "launch-synthetic-2",
+        "evidence": [
+            {**item, "project_context_id": "launch-synthetic-2"} for item in _PLAN["evidence"]
+        ],
+    }
+    unpriced = json.loads(json.dumps(_PLAN))
+    unpriced["elements"][0]["runtime_profile_ref"] = "synthetic-unlisted"
+
+    with pytest.raises(PermissionError, match="another project context"):
+        _budgets(fakes, "estimate_workload", scope="plan", prediction=other)
+    with pytest.raises(PermissionError, match="invalid estimate scope"):
+        _budgets(fakes, "estimate_workload", scope="elements", prediction=_PLAN)
+    estimate = _budgets(fakes, "estimate_workload", scope="plan", prediction=unpriced)
+
+    assert estimate["total"]["coverage"] == "partial"
+    assert estimate["total"]["expected"] == "21.1"
+    assert estimate["total"]["limitations"] == [
+        "Runtime profile synthetic-unlisted has no price for this project."
+    ]

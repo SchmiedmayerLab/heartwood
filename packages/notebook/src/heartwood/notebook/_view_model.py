@@ -56,12 +56,14 @@ from heartwood.schemas import (
     SkillSummaryResponse,
     SpecialistSettingsResponse,
     StartupPlanResponse,
+    WorkloadPrediction,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
     WorkspaceFileResponse,
     WorkspaceTreeResponse,
 )
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport, ExperimentRun
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.schemas.workflows import (
@@ -240,6 +242,22 @@ class NotebookSession:
     def usage_summary(self) -> ProjectUsageSummary:
         """Return content-free project usage counts after verifying every session's history."""
         return self.gateway.usage_summary()
+
+    def planning(self) -> PlanningProjection:
+        """Return the gateway's plans, platform estimates, budgets and planning outcomes."""
+        return self.gateway.planning()
+
+    def refresh_planning(self) -> PlanningProjection:
+        """Discover the platform's planning capabilities and read its current budgets."""
+        return self.gateway.refresh_planning()
+
+    def record_plan_prediction(self, prediction: WorkloadPrediction) -> PlanningProjection:
+        """Record one immutable workload prediction revision."""
+        return self.gateway.record_plan_prediction(prediction)
+
+    def request_plan_estimate(self, request: PlanningEstimateRequest) -> PlanningProjection:
+        """Ask the platform for an estimate; it reserves and authorizes nothing."""
+        return self.gateway.request_plan_estimate(request)
 
     def workflow(self, request: WorkflowRequest) -> NotebookViewModel:
         """Submit a typed request, retaining the revision and evidence the researcher saw."""

@@ -47,6 +47,10 @@ _GATEWAY_METHODS = {
     ("GET", "/research/workflows"): "research_workflows",
     ("GET", "/research/experiments"): "experiment_records",
     ("GET", "/research/experiments/export"): "export_experiments",
+    ("GET", "/project/planning"): "planning",
+    ("POST", "/project/planning/refresh"): "refresh_planning",
+    ("POST", "/project/planning/predictions"): "record_plan_prediction",
+    ("POST", "/project/planning/estimates"): "request_plan_estimate",
     ("GET", "/settings/specialists"): "specialist_settings",
     ("POST", "/settings/skills/inspect"): "inspect_skill",
     ("POST", "/settings/skills/install"): "install_skill",
@@ -87,7 +91,15 @@ _GATEWAY_METHODS = {
     ("GET", "/sessions/{session_id}/projection"): "session_projection",
     ("GET", "/sessions/{session_id}/events"): "session_snapshot",
 }
+_PREDICTION = json.loads(
+    (
+        Path(__file__).parents[3]
+        / "fixtures/synthetic/platform-contract/research-plan.r1.prediction.json"
+    ).read_text("utf-8")
+)
 _REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
+    "WorkloadPrediction": _PREDICTION,
+    "PlanningEstimateRequest": {"prediction": _PREDICTION["prediction"], "scope": "plan"},
     "SessionCreateRequest": {},
     "SessionRenameRequest": {"title": "Synthetic study"},
     "ActionReviewRequest": {"mode": "review-all"},
@@ -252,7 +264,7 @@ def test_openapi_resolves_references_and_declares_path_parameters() -> None:
                 if parameter["in"] == "path" and parameter["required"]
             }
             assert declared == set(re.findall(r"{([^}]+)}", path))
-    assert len(operation_ids) == len(set(operation_ids)) == 61
+    assert len(operation_ids) == len(set(operation_ids)) == 65
     for schema in document["components"]["schemas"].values():
         Draft202012Validator.check_schema(schema)
     for reference in _references(document):

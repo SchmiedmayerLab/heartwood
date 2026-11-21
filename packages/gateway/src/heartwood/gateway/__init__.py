@@ -188,6 +188,18 @@ from heartwood.gateway._model_transfer import (
     import_model_bundle,
     inspect_model_bundle,
 )
+from heartwood.gateway._planning_presentation import planning_lines
+from heartwood.gateway._platform_planning import (
+    McpPlanningClient,
+    PlanningDiscovery,
+    PlanningNotOfferedError,
+    PlanningRecordError,
+    PlanningServiceClient,
+    PlanningServiceError,
+    PlanningStateError,
+    PlatformPlanning,
+    PlatformPlanningBinding,
+)
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import (
@@ -323,6 +335,7 @@ __all__ = [
     "LocalModelRuntime",
     "LocalModelSelection",
     "ManagedRuntimeActivity",
+    "McpPlanningClient",
     "ModelArtifact",
     "ModelArtifactCatalog",
     "ModelArtifactError",
@@ -355,6 +368,14 @@ __all__ = [
     "NativeLockUnavailableError",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
+    "PlanningDiscovery",
+    "PlanningNotOfferedError",
+    "PlanningRecordError",
+    "PlanningServiceClient",
+    "PlanningServiceError",
+    "PlanningStateError",
+    "PlatformPlanning",
+    "PlatformPlanningBinding",
     "ProjectConfig",
     "ProjectConfigError",
     "ProjectConfigStore",
@@ -473,6 +494,7 @@ __all__ = [
     "persist_deployment_profile",
     "plan_local_context_window",
     "plan_startup",
+    "planning_lines",
     "project_session",
     "retained_approval",
     "retained_approval_notice",

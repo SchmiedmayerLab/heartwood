@@ -42,6 +42,23 @@ export default [
   },
   {
     files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/fixtures/synthetic/**"],
+              message:
+                "The image build type-checks this package without the repository fixtures. Read them at run time.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/**/*.{ts,tsx}"],
     ignores: [
       "src/client.ts",
       "src/projectionSchema.ts",

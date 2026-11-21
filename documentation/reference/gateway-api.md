@@ -56,6 +56,7 @@ Readiness and capabilities decide whether a route can do useful work in a deploy
 |---|---|---|
 | Launch | `POST /launch` | One-time token exchange |
 | Project | `GET /project/capabilities`, `/project/readiness`, `/project/startup`, `/project/usage-summary`; `POST /project/initialize` | Interfaces, readiness diagnostics, setup phase, content-free usage counts, explicit initialization |
+| Planning | `GET /project/planning`; `POST /project/planning/refresh`, `/project/planning/predictions`, `/project/planning/estimates` | The [planning projection](../operate/platform-contract.md#planning-against-platform-budgets), budget refresh, prediction revisions, platform estimates; the POST routes return `404` where no planning service is connected |
 | Sessions | `GET`, `POST /sessions`; `POST /sessions/default`; `GET`, `PATCH /sessions/{session_id}` | Discovery, creation, default selection, title changes |
 | Commands | `POST /sessions/{session_id}/commands` | Command events and the current projection |
 | Events | `GET /sessions/{session_id}/events`, `/events/stream`, `/projection`; WebSocket `/sessions/{session_id}/events` | Durable replay and live interface state |

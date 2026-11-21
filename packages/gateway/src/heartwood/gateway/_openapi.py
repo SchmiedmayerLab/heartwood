@@ -24,6 +24,7 @@ from heartwood.gateway._access import CAPABILITY_HEADER, LaunchRequest, LaunchRe
 from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.gateway._session_projection import SessionProjection
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.schemas.workflows import WorkflowCatalog
@@ -166,6 +167,32 @@ _REST_OPERATIONS = (
     _Operation("GET", "/research/experiments", "Read experiment records", ExperimentCollection),
     _Operation(
         "GET", "/research/experiments/export", "Export experiment records", ExperimentExport
+    ),
+    _Operation(
+        "GET", "/project/planning", "Inspect research plans and budgets", PlanningProjection
+    ),
+    _Operation(
+        "POST",
+        "/project/planning/refresh",
+        "Read the platform's planning capabilities and budgets",
+        PlanningProjection,
+        errors=(404, 409),
+    ),
+    _Operation(
+        "POST",
+        "/project/planning/predictions",
+        "Record a workload prediction revision",
+        PlanningProjection,
+        api.WorkloadPrediction,
+        errors=(404, 409, 422),
+    ),
+    _Operation(
+        "POST",
+        "/project/planning/estimates",
+        "Request a platform estimate",
+        PlanningProjection,
+        PlanningEstimateRequest,
+        errors=(404, 409, 422),
     ),
     _Operation(
         "GET",

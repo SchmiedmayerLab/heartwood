@@ -15,8 +15,10 @@ from heartwood.notebook._view_model import (
 )
 from heartwood.notebook._widgets import (
     WidgetSpec,
+    build_planning_spec,
     build_policy_spec,
     build_widget_spec,
+    render_planning,
     render_policy,
     render_widgets,
 )
@@ -26,9 +28,11 @@ __all__ = [
     "NotebookViewModel",
     "WidgetSpec",
     "__version__",
+    "build_planning_spec",
     "build_policy_spec",
     "build_view_model",
     "build_widget_spec",
+    "render_planning",
     "render_policy",
     "render_widgets",
 ]

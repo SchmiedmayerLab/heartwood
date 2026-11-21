@@ -24,6 +24,7 @@ from pydantic import (
 from heartwood.schemas._connections import DataDestination, RetentionAuthority
 from heartwood.schemas._records import ActionReviewMode, CapabilityTier
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.workflows import WorkflowCatalog, WorkflowRequest
 
@@ -1203,6 +1204,8 @@ type ApiResponse = (
 type PublicApiContract = (
     ApiResponse
     | ExperimentCollection
+    | PlanningProjection
+    | PlanningEstimateRequest
     | PythonEnvironmentSnapshot
     | ExperimentExport
     | WorkflowCatalog

@@ -1107,6 +1107,18 @@ class FakeClient implements HeartwoodClient {
     });
   }
 
+  getPlanning(): ReturnType<HeartwoodClient["getPlanning"]> {
+    return Promise.resolve({ offered: false });
+  }
+
+  refreshPlanning(): ReturnType<HeartwoodClient["refreshPlanning"]> {
+    return Promise.reject(new Error("Platform planning is not offered"));
+  }
+
+  requestPlanEstimate(): ReturnType<HeartwoodClient["requestPlanEstimate"]> {
+    return Promise.reject(new Error("Platform planning is not offered"));
+  }
+
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary> {
     return Promise.resolve({
       ...bundledSkill(),

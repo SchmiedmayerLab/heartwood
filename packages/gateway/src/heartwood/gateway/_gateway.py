@@ -129,6 +129,12 @@ from heartwood.gateway._model_snapshots import (
     load_model_snapshot_catalog,
 )
 from heartwood.gateway._openhands_models import prepare_openhands_import
+from heartwood.gateway._platform_planning import (
+    PlanningNotOfferedError,
+    PlatformPlanning,
+    PlatformPlanningBinding,
+    not_offered_projection,
+)
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_activity import ProjectActivity
 from heartwood.gateway._project_config import (
@@ -209,6 +215,7 @@ from heartwood.schemas import (
     SpecialistSettingsResponse,
     StartupPlanResponse,
     SubscriptionDeviceLoginResponse,
+    WorkloadPrediction,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
     WorkspaceFileResponse,
@@ -222,6 +229,7 @@ from heartwood.schemas.experiments import (
     ExperimentExportBinding,
 )
 from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.review import (
     ResearchReviewRun,
@@ -486,6 +494,7 @@ class SessionGateway:
         checkpoint_evidence_factory: Callable[[str], SessionCheckpointEvidence] | None = None,
         external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
         mcp_destinations: Sequence[McpDestination] | None = None,
+        platform_planning: PlatformPlanningBinding | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
@@ -543,6 +552,15 @@ class SessionGateway:
                 "Research MCP servers and another outside service cannot share a gateway"
             )
         self._external_actions_factory = external_actions_factory
+        if platform_planning is not None and self.project.protected_state is None:
+            raise ValueError("Platform planning requires protected state")
+        self._planning = (
+            PlatformPlanning(
+                platform_planning, journal_path=self.project.state_root / "planning.jsonl"
+            )
+            if platform_planning is not None
+            else None
+        )
         self._worker_plan_factory = worker_plan_factory
         self._worker_reconciler = worker_reconciler
         self._worker_sessions: dict[int, ManagedWorkerSession] = {}
@@ -1516,6 +1534,48 @@ class SessionGateway:
         store = self._experiment_store()
         content = store.export() if store is not None else b""
         return ExperimentExport(sha256=hashlib.sha256(content).hexdigest(), jsonl=content.decode())
+
+    @gateway_operation
+    def planning(self) -> PlanningProjection:
+        """Return plans, platform estimates, budget observations and planning outcomes.
+
+        Planning holds no gateway state lock, so a slow platform delays no other operation.
+        """
+        if self._planning is None:
+            return not_offered_projection()
+        return self._planner().projection()
+
+    @gateway_operation
+    def refresh_planning(self) -> PlanningProjection:
+        """Discover the platform's planning capabilities and read its current budgets."""
+        planner = self._planner()
+        planner.refresh()
+        return planner.projection()
+
+    @gateway_operation
+    def record_plan_prediction(self, prediction: WorkloadPrediction) -> PlanningProjection:
+        """Record one immutable workload prediction revision for the launch context."""
+        planner = self._planner()
+        planner.record_prediction(prediction)
+        return planner.projection()
+
+    @gateway_operation
+    def request_plan_estimate(self, request: PlanningEstimateRequest) -> PlanningProjection:
+        """Ask the platform to estimate a recorded prediction; nothing is reserved or run."""
+        planner = self._planner()
+        planner.request_estimate(request)
+        return planner.projection()
+
+    @property
+    def platform_planning(self) -> PlatformPlanning | None:
+        """Return the planning state an embedding links reviewed proposals and records to."""
+        return self._planning
+
+    def _planner(self) -> PlatformPlanning:
+        if self._planning is None:
+            raise PlanningNotOfferedError("Platform planning is not offered by this deployment")
+        self._project_activity.initialize()
+        return self._planning
 
     def _experiment_store(self) -> ExperimentStore | None:
         from heartwood.core_adapter.workflow_provenance import workflow_experiment_events

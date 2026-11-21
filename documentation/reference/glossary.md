@@ -135,6 +135,9 @@ SPDX-License-Identifier: MIT
 **Launch capability**
 : The process-lifetime secret required for protected Heartwood gateway API requests, event streams, and WebSockets, obtained through a one-time launch exchange or supplied by an authenticated platform proxy.
 
+**Launch context**
+: A platform-issued record that binds a Heartwood gateway to a platform project and its billing or grant attribution, separate from the local research directory.
+
 **Local launch**
 : Running `heartwood`, `heartwood gateway serve` without `--deployment`, or a notebook in a project folder: state lives in `.heartwood/` and agent tools run with the user's own permissions.
 
@@ -188,6 +191,9 @@ SPDX-License-Identifier: MIT
 
 **Outside operation**
 : A gateway-issued request from a session to a deployment service outside the sandbox, authorized by the researcher against its exact content; no review mode allows it automatically.
+
+**Planning service**
+: A platform service that reports budget observations and produces cost estimates for workload predictions; the platform keeps the accounts and decides admission.
 
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
@@ -281,6 +287,9 @@ SPDX-License-Identifier: MIT
 
 **Worker attempt**
 : One gateway-issued launch of a managed worker, journaled with its identity, image, and policy before the sandbox is created and moved through `prepared`, `active`, `fenced`, and `revoked`.
+
+**Workload prediction**
+: One revision of a research plan's elements, such as exploration, batch, and inference work, with their quantities, runtime profiles, assumptions, and uncertainty, which a platform prices into an estimate.
 
 **Workflow Description Language (WDL)**
 : A workflow language used by Terra to describe analysis tasks and their inputs, outputs and dependencies.

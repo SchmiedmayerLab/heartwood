@@ -13,6 +13,7 @@ import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient } from "./client";
 import { ConversationWorkspace } from "./components/ConversationWorkspace";
+import { PlanningOverview } from "./components/ProjectPlanning";
 import { emptyProjection } from "./test/fixtures";
 
 interface FailureState {
@@ -44,6 +45,7 @@ describe("platform contract failure states in the browser", () => {
       new Set([
         "gateway-response",
         "model-discovery",
+        "planning",
         "session",
         "setup-refusal",
       ]),
@@ -124,6 +126,32 @@ describe("platform contract failure states in the browser", () => {
       await expect(
         new GatewayClient("/proxy/8767").configureModelSource("openai"),
       ).rejects.toThrow(diagnostic);
+    },
+  );
+
+  it.each(states.filter((state) => state.surface === "planning"))(
+    "shows $code from the planning projection",
+    ({ code, diagnostic }) => {
+      render(
+        <PlanningOverview
+          projection={{
+            offered: true,
+            outcomes: [
+              {
+                code,
+                title: diagnostic.slice(code.length + 2),
+                next_action: "Synthetic next action.",
+                subject: "service",
+                diagnostic,
+              },
+            ],
+          }}
+          busy={false}
+          onEstimate={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("alert")).toHaveTextContent(diagnostic);
     },
   );
 

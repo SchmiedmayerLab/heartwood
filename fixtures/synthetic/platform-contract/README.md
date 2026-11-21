@@ -15,6 +15,11 @@ These files demonstrate draft message relationships; they never authorize or sub
 | `batch.overview.json` | Researcher approval remains visible, but the platform denies submission after other work consumes the budget. |
 | `inference.overview.json` | Price and available budget remain unknown, with explicit explanations; the platform denies authorization. |
 
+`research-plan.r1.prediction.json` and `research-plan.r2.prediction.json` are two revisions of one plan for the deterministic budget fake.
+Each covers a bounded interactive exploration, a batch with an explicit task count, runtime and retry allowance, and inference with an explicit model and token counts.
+The second revision moves the batch to a GPU runtime profile and leaves the other elements unchanged.
+`planning-projection.json` is the gateway's planning projection after both revisions were estimated and other work spent from the compute budget; the browser tests render it, and a gateway test checks that it matches what the gateway produces.
+
 Read the prediction, estimates, reviewed operation set, researcher decision, platform authorization, and budget/backend observations in that order.
 The proposal includes its reviewed estimate snapshot.
 The component estimate is already included in the plan total, so it is not another charge.

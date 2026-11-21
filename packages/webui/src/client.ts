@@ -54,6 +54,8 @@ import type {
   ModelTransferInspectRequest,
   ModelTransferPlan,
   ModelValidation,
+  PlanningEstimateRequest,
+  PlanningProjection,
   ProjectReadiness,
   PythonEnvironmentSnapshot,
   SessionCreateRequest,
@@ -169,6 +171,11 @@ export interface HeartwoodClient {
   getVerificationEnvironment(): Promise<PythonEnvironmentSnapshot>;
   getExperimentRecords(): Promise<ExperimentCollection>;
   getExperimentExport(): Promise<ExperimentExport>;
+  getPlanning(): Promise<PlanningProjection>;
+  refreshPlanning(): Promise<PlanningProjection>;
+  requestPlanEstimate(
+    request: PlanningEstimateRequest,
+  ): Promise<PlanningProjection>;
   refreshSkills(sourceId?: string): Promise<SkillSettings>;
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary>;
   installSkill(
@@ -731,6 +738,38 @@ export class GatewayClient implements HeartwoodClient {
       await authenticatedFetch(
         this.basePath,
         this.url("/research/experiments/export"),
+      ),
+    );
+  }
+
+  async getPlanning(): Promise<PlanningProjection> {
+    return parseJsonResponse<PlanningProjection>(
+      await authenticatedFetch(this.basePath, this.url("/project/planning")),
+    );
+  }
+
+  async refreshPlanning(): Promise<PlanningProjection> {
+    return parseJsonResponse<PlanningProjection>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/project/planning/refresh"),
+        { method: "POST" },
+      ),
+    );
+  }
+
+  async requestPlanEstimate(
+    request: PlanningEstimateRequest,
+  ): Promise<PlanningProjection> {
+    return parseJsonResponse<PlanningProjection>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/project/planning/estimates"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
       ),
     );
   }

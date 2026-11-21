@@ -187,10 +187,12 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
 
     assert set(re.findall(r"HW-[A-Z]+-\d{3}", table)) == {state["code"] for state in _STATES}
     # Each surface below has a test that shows its states in every interface.
-    # Model discovery states are tested in test_platform_model_connections.py.
+    # Model discovery states are tested in test_platform_model_connections.py,
+    # and planning states in test_platform_planning.py.
     assert {state["surface"] for state in _STATES} == {
         "gateway-response",
         "model-discovery",
+        "planning",
         "session",
         "setup-refusal",
     }
@@ -350,6 +352,7 @@ def test_inference_keeps_working_while_platform_tools_are_down(
     # through the inference fake while the kit observes both services as unavailable.
     fakes.data.available = False
     fakes.jobs.available = False
+    fakes.budgets.available = False
     service = _service(tmp_path, fakes)
     try:
         events = _chat(service)
@@ -357,7 +360,7 @@ def test_inference_keeps_working_while_platform_tools_are_down(
         service.close()
     tools = run_platform_conformance(None, fakes.endpoints()[1])
 
-    assert [result.status for result in tools] == ["unavailable", "unavailable"]
+    assert [result.status for result in tools] == ["unavailable", "unavailable", "unavailable"]
     assert not any(event.kind == EventKind.ERROR_RECORDED for event in events)
     assert [
         event.payload.get("content")

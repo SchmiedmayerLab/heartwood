@@ -87,6 +87,42 @@
       "surface": "model-discovery",
       "discovery_failure": "withdrawn",
       "diagnostic": "HW-AGENT-011: model is not in the model list for this identity: synthetic-alias"
+    },
+    {
+      "condition": "Planning service unavailable or answered outside the contract",
+      "code": "HW-PLAN-001",
+      "surface": "planning",
+      "diagnostic": "HW-PLAN-001: Platform planning information is unavailable"
+    },
+    {
+      "condition": "Planning request refused",
+      "code": "HW-PLAN-002",
+      "surface": "planning",
+      "diagnostic": "HW-PLAN-002: The platform refused the planning request"
+    },
+    {
+      "condition": "Expired estimate",
+      "code": "HW-PLAN-003",
+      "surface": "planning",
+      "diagnostic": "HW-PLAN-003: The platform estimate has expired"
+    },
+    {
+      "condition": "Budget changed after the estimate",
+      "code": "HW-PLAN-004",
+      "surface": "planning",
+      "diagnostic": "HW-PLAN-004: A platform budget changed after the estimate"
+    },
+    {
+      "condition": "Partial or unknown estimate coverage",
+      "code": "HW-PLAN-005",
+      "surface": "planning",
+      "diagnostic": "HW-PLAN-005: The platform estimate is incomplete"
+    },
+    {
+      "condition": "Denied operation or authorization",
+      "code": "HW-PLAN-006",
+      "surface": "planning",
+      "diagnostic": "HW-PLAN-006: The platform denied an operation"
     }
   ]
 }

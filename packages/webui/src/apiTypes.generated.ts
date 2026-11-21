@@ -15,6 +15,8 @@
 export type HeartwoodApiContract =
   | ApiResponse
   | ExperimentCollection
+  | PlanningProjection
+  | PlanningEstimateRequest
   | PythonEnvironmentSnapshot
   | ExperimentExport
   | WorkflowCatalog
@@ -108,6 +110,8 @@ export type ExperimentPath = string;
 export type Digest = string;
 export type ExperimentStatus =
   "started" | "interrupted" | "resumed" | "succeeded" | "failed" | "cancelled";
+export type PlanningServiceStatus =
+  "unchecked" | "available" | "not-offered" | "unavailable" | "refused";
 export type MetadataText = string;
 export type WorkflowIdentifier = string;
 export type WorkflowText = string;
@@ -1025,6 +1029,418 @@ export interface ExperimentEvidence {
   event_id: string;
   event_sha256: Digest;
   kind: Reference;
+}
+/**
+ * Plans, estimates, budgets and outcomes, the same for every interface.
+ */
+export interface PlanningProjection {
+  /**
+   * The latest observation of each platform budget.
+   */
+  budgets?: BudgetObservation[];
+  launch?: PlatformLaunchContext | null;
+  /**
+   * Whether this deployment connects a planning service.
+   */
+  offered: boolean;
+  outcomes?: PlanningOutcome[];
+  plans?: PlanProjection[];
+  schema_version?: "heartwood.planning-projection.v1";
+  services?: PlanningServices | null;
+}
+/**
+ * Platform-reported snapshot, not a local ledger or a guarantee of future availability.
+ */
+export interface BudgetObservation {
+  allocated?: string | null;
+  available?: string | null;
+  budget_id: string;
+  constraints?: string[];
+  denomination: CostDenomination;
+  limitations?: string[];
+  observed_at: string;
+  platform_record_ref: string;
+  project_context_id: string;
+  reserved?: string | null;
+  schema_version?: "heartwood.budget-observation.v1";
+  spent?: string | null;
+}
+/**
+ * Currency or platform allocation unit; never a resource measurement unit.
+ */
+export interface CostDenomination {
+  kind: "currency" | "allocation-unit";
+  unit: string;
+}
+/**
+ * A platform-issued context binding, separate from Heartwood's local project.
+ *
+ * The process working directory remains the local project boundary. The platform's
+ * project and billing references do not replace it and cannot be selected by an agent.
+ * Parsing this record does not authenticate its issuer or activate a billing binding.
+ */
+export interface PlatformLaunchContext {
+  /**
+   * Platform authority that issued this context.
+   */
+  authority_ref: string;
+  /**
+   * Opaque platform-owned billing/grant binding; never account details or a secret.
+   */
+  billing_attribution_ref?: string | null;
+  expires_at?: string | null;
+  issued_at: string;
+  platform_id: string;
+  /**
+   * Exact applicable platform policy reference.
+   */
+  policy_ref: string;
+  /**
+   * Opaque launch-context identity used by estimates and operation requests.
+   */
+  project_context_id: string;
+  /**
+   * Platform authorization/resource project identity.
+   */
+  project_id: string;
+  schema_version?: "heartwood.platform-launch-context.v1";
+}
+/**
+ * A planning condition with its stable diagnostic and the record it concerns.
+ */
+export interface PlanningOutcome {
+  code: string;
+  diagnostic: string;
+  next_action: string;
+  /**
+   * The service, estimate, budget or operation concerned.
+   */
+  subject: string;
+  title: string;
+}
+/**
+ * All recorded revisions of one plan.
+ */
+export interface PlanProjection {
+  comparison: EstimateComparison[];
+  plan_id: string;
+  revisions: PlanRevision[];
+}
+/**
+ * One complete-plan estimate for comparing revisions and runtime configurations.
+ */
+export interface EstimateComparison {
+  /**
+   * Uses the denomination of the plan's first estimate.
+   */
+  comparable: boolean;
+  estimate_id: string;
+  prediction: PlanningReference;
+  runtime_profile_refs: string[];
+  state: "current" | "expired";
+  total: EstimatedCost;
+}
+/**
+ * An immutable revision of a plan, prediction, or other project-local record.
+ */
+export interface PlanningReference {
+  record_id: string;
+  revision: number;
+}
+/**
+ * Platform-produced cost range; unknown is not zero and partial is not complete.
+ */
+export interface EstimatedCost {
+  coverage: "complete" | "partial" | "unknown";
+  denomination: CostDenomination;
+  expected?: string | null;
+  limitations?: string[];
+  lower?: string | null;
+  upper?: string | null;
+}
+/**
+ * One prediction revision with its linked platform records and review states.
+ */
+export interface PlanRevision {
+  elements: ElementReview[];
+  estimates: EstimateState[];
+  overview: PlanningOverview;
+}
+/**
+ * Review state of one plan element; researcher approval is not platform authorization.
+ */
+export interface ElementReview {
+  /**
+   * Prediction revision whose reviewed proposal was approved.
+   */
+  approved_in?: PlanningReference | null;
+  element_id: string;
+  kind: "exploration" | "batch" | "inference";
+  platform:
+    | "authorized"
+    | "denied"
+    | "pending"
+    | "unknown"
+    | "revoked"
+    | "not-requested";
+  review:
+    "approved" | "denied" | "unchanged-since-approval" | "requires-review";
+  runtime_profile_ref: string;
+}
+/**
+ * Freshness of one platform estimate as of the projection time.
+ */
+export interface EstimateState {
+  /**
+   * A budget observed after the estimate differs from the one before it.
+   */
+  budget_changed: boolean;
+  estimate_id: string;
+  state: "current" | "expired";
+}
+/**
+ * One project/plan revision's linked view; neither an accounting nor approval engine.
+ */
+export interface PlanningOverview {
+  authorizations?: PlatformAuthorization[];
+  budgets?: BudgetObservation[];
+  estimates?: PlatformEstimate[];
+  operation_sets?: ReviewedOperationSet[];
+  operations?: PlatformOperationObservation[];
+  prediction: WorkloadPrediction;
+  researcher_decisions?: ResearcherDecision[];
+  schema_version?: "heartwood.planning-overview.v1";
+}
+/**
+ * Observed platform decision/reservation; a parsed claim grants no actual authority.
+ */
+export interface PlatformAuthorization {
+  authorization_id: string;
+  budget_id?: string | null;
+  document_sha256: string;
+  observed_at: string;
+  platform_record_ref: string;
+  project_context_id: string;
+  proposal: PlanningReference;
+  reason: string;
+  reservation_ref?: string | null;
+  schema_version?: "heartwood.platform-authorization.v1";
+  status: "authorized" | "denied" | "pending" | "unknown" | "revoked";
+  valid_until?: string | null;
+}
+/**
+ * Completed estimate result, identical for immediate and asynchronous requests.
+ */
+export interface PlatformEstimate {
+  /**
+   * @minItems 1
+   */
+  covered_element_ids: string[];
+  created_at: string;
+  element_estimates?: ElementEstimate[];
+  estimate_id: string;
+  exclusions?: string[];
+  focus_evidence?: FocusEvidenceReference[];
+  plan: PlanningReference;
+  prediction: PlanningReference;
+  pricing_assumptions?: string[];
+  project_context_id: string;
+  schema_version?: "heartwood.platform-estimate.v1";
+  scope: "plan" | "elements";
+  total: EstimatedCost;
+  valid_until: string;
+}
+/**
+ * Element cost coverage; included components are breakdowns, not additional totals.
+ */
+export interface ElementEstimate {
+  cost: EstimatedCost;
+  /**
+   * @minItems 1
+   */
+  element_ids: string[];
+  included_in_total: boolean;
+}
+/**
+ * Unmodified FOCUS pricing/cost evidence, retaining its version and draft revision.
+ */
+export interface FocusEvidenceReference {
+  content_sha256?: string | null;
+  dataset: string;
+  draft_revision?: string | null;
+  reference: string;
+  specification_version: string;
+}
+/**
+ * Parsed proposal plus the hash/reference of its exact immutable JSON bytes.
+ *
+ * Parsing this envelope does not verify referenced bytes. Use reviewed_operation_set
+ * with the actual reviewed document to establish its content binding.
+ */
+export interface ReviewedOperationSet {
+  document_ref: string;
+  document_sha256: string;
+  proposal: OperationSetProposal;
+}
+/**
+ * The exact JSON document reviewed by a researcher, not a reusable spending envelope.
+ */
+export interface OperationSetProposal {
+  created_at: string;
+  estimates?: PlatformEstimate[];
+  /**
+   * @minItems 1
+   */
+  operations: ProposedOperation[];
+  plan: PlanningReference;
+  prediction: PlanningReference;
+  project_context_id: string;
+  proposal: PlanningReference;
+  schema_version?: "heartwood.operation-set-proposal.v1";
+}
+/**
+ * One exact operation with its review-visible effects and native request binding.
+ */
+export interface ProposedOperation {
+  data_scope: string;
+  description: string;
+  destination: string;
+  /**
+   * @minItems 1
+   */
+  element_ids: string[];
+  estimate_ids?: string[];
+  operation_id: string;
+  request: BackendRequestReference;
+  resource_limits?: OperationResourceLimit[];
+}
+/**
+ * Exact native request bytes; this record does not clone backend request schemas.
+ */
+export interface BackendRequestReference {
+  protocol: string;
+  request_ref: string;
+  request_sha256: string;
+  service_id: string;
+}
+/**
+ * A declared hard operation limit; enforcement belongs to the platform.
+ */
+export interface OperationResourceLimit {
+  /**
+   * Finite nonnegative decimal string; no exponent, rounding, or binary float.
+   */
+  maximum: string;
+  metric: string;
+  unit: string;
+}
+/**
+ * Backend execution observation, separate from MCP task/request status and cancellation.
+ */
+export interface PlatformOperationObservation {
+  backend_operation_ref: string;
+  limitations?: string[];
+  observed_at: string;
+  operation_id: string;
+  platform_record_ref: string;
+  project_context_id: string;
+  schema_version?: "heartwood.platform-operation-observation.v1";
+  service_id: string;
+  status:
+    | "submitted"
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "denied"
+    | "unknown";
+}
+/**
+ * Agent/researcher workload prediction, not a platform price or execution request.
+ */
+export interface WorkloadPrediction {
+  assumptions?: string[];
+  created_at: string;
+  /**
+   * @minItems 1
+   */
+  elements: WorkloadElement[];
+  evidence?: WorkloadEvidence[];
+  plan: PlanningReference;
+  prediction: PlanningReference;
+  project_context_id: string;
+  schema_version?: "heartwood.workload-prediction.v1";
+  supersedes?: PlanningReference | null;
+  uncertainty: string;
+}
+/**
+ * One separately estimable exploration, batch, or inference element.
+ */
+export interface WorkloadElement {
+  assumptions?: string[];
+  description: string;
+  element_id: string;
+  evidence_ids?: string[];
+  kind: "exploration" | "batch" | "inference";
+  quantities: WorkloadQuantity[];
+  runtime_profile_ref: string;
+}
+/**
+ * A predicted quantity and uncertainty; units identify the actual measurement scale.
+ */
+export interface WorkloadQuantity {
+  expected?: string | null;
+  lower?: string | null;
+  metric: string;
+  uncertainty: string;
+  unit: string;
+  upper?: string | null;
+}
+/**
+ * Project-local evidence or researcher correction; absent measurements remain unknown.
+ */
+export interface WorkloadEvidence {
+  content_sha256?: string | null;
+  description: string;
+  evidence_id: string;
+  kind: "prior-run" | "researcher-input" | "sample-run" | "correction";
+  observed_at: string;
+  project_context_id: string;
+  reference: string;
+}
+/**
+ * Session-audited decision over exact proposal bytes; not platform authorization.
+ */
+export interface ResearcherDecision {
+  actor_ref: string;
+  audit_ref: string;
+  decided_at: string;
+  decision: "approved" | "denied" | "withdrawn";
+  decision_id: string;
+  document_sha256: string;
+  project_context_id: string;
+  proposal: PlanningReference;
+  schema_version?: "heartwood.researcher-decision.v1";
+}
+/**
+ * What the platform's planning service offered when Heartwood last asked.
+ */
+export interface PlanningServices {
+  budgets: PlanningServiceStatus;
+  checked_at?: string | null;
+  estimates: PlanningServiceStatus;
+}
+/**
+ * Ask the platform to estimate a recorded prediction, whole or for selected elements.
+ */
+export interface PlanningEstimateRequest {
+  /**
+   * Elements to estimate; required for, and only for, elements scope.
+   */
+  element_ids?: string[];
+  prediction: PlanningReference;
+  scope?: "plan" | "elements";
 }
 /**
  * Interpreter identity and declared installed versions without paths or secrets.
