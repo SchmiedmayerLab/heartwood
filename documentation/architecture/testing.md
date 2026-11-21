@@ -52,8 +52,10 @@ The Kubernetes cluster stage runs on pull requests that change its inputs and on
 It runs after native qualification, whose candidate wheels and gateway build it uses.
 The stage fails when a blocked connection does not time out, when the reachable connection fails, or when a blocked pod cannot connect after its policies are deleted.
 On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
-When both native qualification and the Kubernetes cluster stage pass and the native evidence is attested, its `publish-images` job builds the [published images](../operate/platform-requirements.md#published-images) again from the run's candidate wheels and gateway build, logs in to the registry, and pushes them under `sha-<commit>` tags, refusing a tag that exists.
-That job holds `packages: write` and no signing permission; a separate job, which checks out and runs no repository code, attests each pushed digest and the record of the digests with `attestations: write` and `id-token: write`.
+After native qualification and evidence attestation, the main workflow builds the [platform images](../operate/platform-requirements.md#published-images) from the candidate wheels and gateway build and publishes the digests under commit-specific tags.
+The Docker cases exercise local build candidates. The platform, hosted and worker stages each install the six published images on a separate kind cluster. During an approved worker session, each stage records the requested pins, running container identities and content-addressed manifests for its node platform.
+Release checks each stage’s observations against the signed publication record. A separate signing job binds the three immutable artifact IDs to the commit, run and attempt. Release requires all three successful producer jobs in that attempt and retains the observations and receipt in `published-image-evidence.tar.gz`.
+The publication job holds `packages: write` and no signing permission; a separate job, which checks out and runs no repository code, attests each pushed digest and the record of the digests with `attestations: write` and `id-token: write`.
 A commit whose images were published only in part stays unpublished, because the job does not replace the tags that exist; the next commit publishes its own images.
 A manual run of a commit whose images were published fails for the same reason.
 
@@ -417,7 +419,7 @@ Two prompt-injection drills run outside native qualification:
 | Drill | Case | Expected safe outcome |
 |---|---|---|
 | `tool-output-injection.v1` | `packages/gateway/tests/test_action_review_classification.py::test_injected_tool_output_cannot_cause_an_unreviewed_action` | A scripted model that obeys an instruction appearing only in an approved command's output proposes reading and copying a file outside the project; under **Review Changes** both proposals wait for the researcher, the gateway decides neither, and neither runs |
-| Capable-model tool-output injection | Not run | The same scenario with a capable model needs a credentialed operator run; until one exists, every release statement reports the capable-model routes as not run |
+| Capable-model tool-output injection | Not run | Release qualification requires a separate observation from the credentialed managed route |
 
 The scripted model follows every injected instruction, as a fully compromised model would, so the drill shows that review, not model behavior, keeps the action from running.
 
@@ -431,14 +433,42 @@ After verifying the attested evidence, it runs:
 
 ```bash
 python3 deploy/release_drills.py --version "$VERSION" --commit "$COMMIT" \
-  --synthetic native-qualification --routes deploy/release-model-routes.toml \
+  --host-evidence gke.json --synthetic native-qualification --capable managed-qualification \
+  --published-images published-images.json --producer-run "$RUN_ID" \
+  --artifact-id "$ARTIFACT_ID" --artifact-sha256 "$ZIP_SHA256" \
+  --routes deploy/release-model-routes.toml \
   --output agent-safety-drills.json
 ```
 
-The command verifies the synthetic evidence against the commit again and requires it to describe the release; otherwise it fails and writes no statement, so the release cannot be created.
-`deploy/release-model-routes.toml` lists the supported capable-model routes as `MODEL@HOST`; the statement reports each listed route, and a release whose list is empty states that it supports none.
-Capable-model records are unattested operator records, so release creation passes none and reports every listed route as `not-run`.
-An operator can add `--capable DIR` for a local statement: each directory must be the complete record of a run of the same release and commit on a listed route, and its outcome is reported whether or not it passed.
+The route manifest declares GKE and lists the release’s managed routes as `MODEL@HOST`.
+An empty route list blocks release creation.
+The synthetic Docker statement lists verified case outcomes.
+The managed statement reports the observed outcomes of both scenarios separately, including a failed observation, and the native case’s accepted and rejected action counts.
+
+The immutable repository artifact is named `release-qualification-<commit>`.
+The permitted producer path is `.github/workflows/gke-qualification.yml` on main, dispatched for the exact candidate.
+The consumer checks the artifact ID, repository, workflow, candidate commit, completion and ZIP digest.
+Release evidence requires a successful first attempt. Dispatch a fresh run after a failed attempt.
+The release statement retains the artifact ID and digest and the producing run ID and attempt.
+
+Each route directory contains the native qualification and a `scenario-outcomes.json` with the same `commit`, `release_version` and `model_route`.
+The native runner assigns the execution an ID formed from the workflow run ID, attempt and a fresh UUID in hex, separated by periods.
+Each entry in `outcomes`, keyed by `file-input-injection.v1` or `tool-output-injection.v1`, carries that `execution_id`, a boolean `model_input_observed` and an `outcome` of `passed` or `failed`.
+The producer records each observation at execution time after the scenario input reaches the model.
+The native file case records whether the terminal observation was followed by an agent response. Once that conversation finishes, the case checks its reviewed operations and export result and records `file_input_outcome`. An incomplete observation blocks release. The scenario record must agree with this bounded verdict. The statement reports the enclosing JUnit verdict separately as `case_outcome`, so later network or teardown failures retain their own outcome.
+An absent observation blocks the statement, including when setup fails.
+
+At the archive root, `gke.json` records the producer’s numeric `run_id` and `run_attempt`, candidate commit, release version, workload and supervisor pod UIDs, workload security settings, every blocked worker route, the outside-worker IPv4 metadata control and the permitted model-route request count.
+Each container records its full requested `image`, runtime-reported `image_id`, `platform`, node-reported `config_id` and a map of digests to manifest bytes as UTF-8 strings. The shared OCI verifier checks the pinned manifest or index, its Linux/amd64 child, and the configuration. The release statement retains the four identity fields and the selected platform manifest digest. The raw manifests stay in the producer artifact.
+
+Pass the trusted node inventory to the native Kubernetes runner with `run --runtime-manifests PATH`. The controller uses each pod's scheduled node, container role and expected reference to select its Linux/amd64 evidence. Both the boundary and replacement-worker checks verify the observed runtime ID. The boundary case retains the requested reference and the original runtime ID for release verification. Without an inventory the runner requires the exact requested reference in the runtime status.
+
+The archive also contains `gke-native/` with the Kubernetes native suite’s checksums, qualification manifest, JUnit report, drill results and checked boundary case evidence. The release gate verifies the complete expected case set, successful outcomes, candidate source and image revisions, cleanup, release version, producing run and attempt, and GKE server version. It matches the workload and supervisor UIDs, their observed images and node platforms, the route probes and the model request count to the boundary case. The release statement retains the verified case names and outcomes.
+Release verification reads the agent and workspace-init digest from the Native Qualification workflow's attested `published-images.json` for the candidate.
+It reads the bootstrap and supervisor pins from the candidate chart's OpenShell session configuration.
+The workload inspection must also show `dropped_capabilities = ["ALL"]` and `seccomp_profile = "RuntimeDefault"`.
+The release asset contains these observations and the bounded drill summary.
+Prompts, provider replies, raw command output and project data do not belong in these records.
 
 ## Research Evaluation Evidence
 

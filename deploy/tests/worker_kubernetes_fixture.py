@@ -482,6 +482,7 @@ class KubernetesFixture:
             "kubeconfig": self.private / "kubeconfig",
             "namespace": self.namespace,
             "image_repository": repository,
+            "runtime_images": json.loads(os.environ.get("HW_RUNTIME_MANIFESTS", "null")),
             "supervisor_image_digest": self.images["supervisor"].partition("@")[2],
             "sandbox_image_digest": self.images["sandbox"].partition("@")[2],
             "workspace": WORKSPACE,

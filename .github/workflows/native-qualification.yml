@@ -24,8 +24,13 @@ jobs:
   kubernetes-qualification:
     name: Kubernetes Qualification
     # The cluster stage uses the wheels and the gateway of the candidate build.
-    needs: native-qualification
+    needs: [native-qualification, verify-published-images]
+    if: >-
+      !cancelled() && needs.native-qualification.result == 'success' &&
+      (needs.verify-published-images.result == 'success' || github.ref != 'refs/heads/main')
     uses: ./.github/workflows/kubernetes-qualification.yml
+    with:
+      published-images: ${{ github.ref == 'refs/heads/main' }}
   evidence-attestation:
     name: Attest Native Qualification Evidence
     needs: native-qualification
@@ -55,13 +60,9 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: test-results/native-qualification/SHA256SUMS
-  # The images of a commit are published only after both qualifications passed and the
-  # native evidence is attested. The job rebuilds them from the run's verified wheels and
-  # gateway build, which needs no registry credential, so the login follows the build.
-  # It holds no signing permission.
   publish-images:
     name: Publish Platform Images
-    needs: [native-qualification, kubernetes-qualification, evidence-attestation]
+    needs: [native-qualification, evidence-attestation]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -147,3 +148,80 @@ jobs:
         with:
           subject-name: ${{ fromJSON(needs.publish-images.outputs.subjects)[matrix.subject].name }}
           subject-digest: ${{ fromJSON(needs.publish-images.outputs.subjects)[matrix.subject].digest }}
+
+  verify-published-images:
+    name: Verify the published platform images
+    needs: image-attestation
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Download the published digest record
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: published-images-${{ github.sha }}
+          path: test-results
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify image provenance and anonymous pull access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          record=test-results/published-images.json
+          jq --exit-status --arg commit "${GITHUB_SHA}" '.commit == $commit' "${record}"
+          python3 reference-platform/tools/publish_images.py values "${record}" \
+            --repository "${GITHUB_REPOSITORY}" --output test-results/published-values.yaml
+          # Cluster nodes and researchers pull these images without registry credentials.
+          anonymous="$(mktemp -d)"
+          jq --raw-output '.images[] | .repository + "@" + .digest' "${record}" |
+            while read -r image; do docker --config "${anonymous}" manifest inspect "${image}" >/dev/null; done
+      - name: Retain the verified chart inputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: verified-platform-images-${{ github.sha }}
+          path: |
+            test-results/published-images.json
+            test-results/published-values.yaml
+          if-no-files-found: error
+          retention-days: 90
+
+  stage-receipt:
+    name: Attest published image stage receipts
+    needs: kubernetes-qualification
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Bind the successful stages to their immutable artifact IDs
+        env:
+          IDS: ${{ needs.kubernetes-qualification.outputs.observations }}
+        run: |
+          [[ "${IDS}" =~ ^[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*$ ]] || exit 1
+          jq -n --arg ids "${IDS}" --arg commit "${GITHUB_SHA}" --arg run "${GITHUB_RUN_ID}" \
+            --arg attempt "${GITHUB_RUN_ATTEMPT}" '$ids | split(":") as $a |
+            {commit:$commit,run:$run,attempt:$attempt,stages:{platform:$a[0],hosted:$a[1],worker:$a[2]}}' > stage-receipt.json
+      - name: Attest the receipt
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: stage-receipt.json
+      - name: Retain the receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: stage-receipt-${{ github.run_attempt }}-${{ github.sha }}
+          path: stage-receipt.json
+          if-no-files-found: error
+          retention-days: 90

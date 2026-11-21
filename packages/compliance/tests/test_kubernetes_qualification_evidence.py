@@ -216,7 +216,12 @@ def test_cluster_stage_runs_after_the_candidate_build_it_downloads() -> None:
     assert jobs["qualification"]["if"] == "${{ !cancelled() }}"
     for caller in ("pull-request-validation.yml", "native-qualification.yml"):
         job = _workflow(caller)["jobs"]["kubernetes-qualification"]
-        assert job["needs"] == "native-qualification"
+        if caller == "native-qualification.yml":
+            assert job["needs"] == ["native-qualification", "verify-published-images"]
+            assert job["with"]["published-images"] == "${{ github.ref == 'refs/heads/main' }}"
+        else:
+            assert job["needs"] == "native-qualification"
+            assert "published-images" not in job.get("with", {})
         assert job["uses"] == "./.github/workflows/kubernetes-qualification.yml"
     # Every change that selects the cluster stage also selects the candidate build.
     for changed in (
@@ -262,7 +267,11 @@ def test_each_cluster_test_module_runs_in_exactly_one_stage() -> None:
     }
     chart = steps["Test the installed chart"]
     assert chart["if"] == "matrix.stage != 'worker'"
-    assert chart["env"] == {"TESTS": "${{ matrix.tests }}"}
+    assert chart["env"]["TESTS"] == "${{ matrix.tests }}"
+    assert (
+        "inputs.published-images && matrix.stage == 'hosted'"
+        in chart["env"]["PUBLISHED_IMAGE_RECORD"]
+    )
     assert '"${tests[@]}"' in chart["run"]
     for name in (
         "Qualify managed workers on the Kubernetes driver",

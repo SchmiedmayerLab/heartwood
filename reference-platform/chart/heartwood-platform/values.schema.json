@@ -708,6 +708,10 @@
                 }
               ]
             },
+            "runtimeImages": {
+              "type": "object",
+              "description": "Node-specific OCI manifests and runtime configuration IDs for worker admission."
+            },
             "policy": {
               "type": "object"
             },

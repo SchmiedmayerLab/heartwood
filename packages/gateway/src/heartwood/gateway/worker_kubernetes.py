@@ -23,6 +23,7 @@ from typing import Any
 
 from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptIntent
 from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
+from heartwood.gateway.worker_image_identity import check_runtime
 from heartwood.gateway.worker_volumes import (
     _native_limits,
     attachable_labels,
@@ -887,10 +888,39 @@ class KubernetesWorkerAdmission:
         }
         for container in containers:
             digest = images[container["name"]]
-            if not _pinned(container.get("image"), digest) or not _pinned(
-                running.get(container["name"]), digest
+            reference = container.get("image")
+            image_id = running.get(container["name"])
+            if (
+                not isinstance(reference, str)
+                or not _pinned(reference, digest)
+                or (
+                    container["name"] in {_AGENT, _WORKSPACE_INIT}
+                    and reference != self.settings.image
+                )
+                or not isinstance(image_id, str)
             ):
                 raise WorkerAttemptError("native worker image does not match admission")
+            if self.settings.runtime_images is None:
+                if image_id != reference:
+                    raise WorkerAttemptError("native worker image does not match admission")
+                continue
+            try:
+                node = self.settings.runtime_images[pod["spec"]["nodeName"]]
+                evidence = node.images[reference]
+                role = {_RUNTIME_INIT: "sandbox", _SUPERVISOR: "supervisor"}.get(
+                    container["name"], "worker"
+                )
+                if evidence.role != role:
+                    raise WorkerAttemptError("native worker image does not match admission")
+                check_runtime(
+                    reference,
+                    image_id,
+                    node.platform.split("/")[1],
+                    evidence.manifests,
+                    evidence.config_id,
+                )
+            except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+                raise WorkerAttemptError("native worker image does not match admission") from None
 
     def _inspect_volumes(
         self, spec: object, containers: tuple[dict[str, Any], ...], sandbox_id: str

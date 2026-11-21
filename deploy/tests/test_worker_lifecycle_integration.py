@@ -100,12 +100,12 @@ def _worker(application: SessionGateway) -> tuple[str, str]:
     return str(attempt.intent.attempt_id), "hw-" + attempt.intent.attempt_id.hex[:16]
 
 
-def _running_image(_fixture: NativeFixture, worker: str, sandbox_id: str) -> str:
-    """Return the image identifier of the worker's container."""
+def _running_image(_fixture: NativeFixture, worker: str, sandbox_id: str) -> dict[str, str]:
+    """Return the Docker image ID for the deployment comparison and retained observation."""
     observed = json.loads(
         command(["docker", "inspect", f"openshell-default--{worker}-{sandbox_id}"])
     )[0]
-    return str(observed["Image"])
+    return {"image": str(observed["Image"]), "image_id": str(observed["Image"])}
 
 
 def _read(fixture: NativeFixture, worker: str, path: str) -> str:
@@ -313,9 +313,14 @@ def test_native_new_worker_image_and_rotated_credential_after_restart(
     _assert_revoked(service)
 
     # The operator qualifies a new worker image and restarts the gateway with it.
-    replacement_image = os.environ["HW_REPLACEMENT_WORKER_IMAGE"]
+    repository, _, replacement_image = os.environ["HW_REPLACEMENT_WORKER_IMAGE"].rpartition("@")
     assert replacement_image != settings.image_digest
-    replacement_settings = settings.model_copy(update={"image_digest": replacement_image})
+    replacement_settings = settings.model_copy(
+        update={
+            "image_digest": replacement_image,
+            **({"image_repository": repository} if repository else {}),
+        }
+    )
     restarted = _application(fixture, deployment=replacement_settings, project=project)
     service = restarted._service("composition")
     _submit(restarted, CommandKind.CHAT, {"prompt": "image-second: record another value."})
@@ -325,7 +330,8 @@ def test_native_new_worker_image_and_rotated_credential_after_restart(
     assert attempt.runtime is not None
     replacement, worker = _worker(restarted)
     assert replacement != earlier
-    assert _running_image(fixture, worker, attempt.runtime.sandbox_id) == replacement_image
+    observed = _running_image(fixture, worker, attempt.runtime.sandbox_id)
+    assert observed["image"] == os.environ["HW_REPLACEMENT_WORKER_IMAGE"]
     _approve(restarted, _pending(restarted))
     _settle(restarted)
     assert _read(fixture, worker, "/workspace/step.txt") == "second"
@@ -382,6 +388,7 @@ def test_native_new_worker_image_and_rotated_credential_after_restart(
             {
                 "drill_id": "native-image-change-and-rotation.v1",
                 "replacement_image": replacement_image,
+                "replacement_observation": observed,
                 "replacement_attempt_admitted_after_restart": True,
                 "rotation_failed_attached_worker_closed": sorted(
                     str(code) for code in codes if code is not None

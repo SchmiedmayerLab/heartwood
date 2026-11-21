@@ -1070,3 +1070,19 @@ def test_the_local_model_needs_the_runtime_image_and_its_weights() -> None:
     )
     assert result.returncode != 0
     assert "inference.localModel.model.url is required" in result.stderr
+
+
+def test_chart_passes_worker_runtime_inventory_to_control(tmp_path: Path) -> None:
+    inventory = {"node-1": {"platform": "linux/amd64", "images": {}}}
+    values = tmp_path / "inventory.json"
+    values.write_text(json.dumps({"hub": {"worker": {"runtimeImages": inventory}}}))
+    rendered = subprocess.check_output(
+        [*_TEMPLATE, "--values", str(_CHART / "values-kind.yaml"), "--values", str(values)]
+    )
+    config = _named(
+        [doc for doc in yaml.safe_load_all(rendered) if doc], "ConfigMap", "heartwood-control"
+    )
+    assert (
+        json.loads(config["data"]["configuration.json"])["hosted"]["worker"]["runtime_images"]
+        == inventory
+    )

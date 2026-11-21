@@ -43,6 +43,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerControlPlane,
 )
 from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
+from heartwood.gateway.worker_image_identity import check_runtime
 from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes, cluster_sha256
 from heartwood.session import CommandKind
@@ -73,16 +74,52 @@ def _absent(attempt_id: str) -> None:
     assert fixture.objects(attempt_id=attempt_id.replace("-", "")) == []
 
 
-def _running_image(fixture: KubernetesFixture, worker: str, sandbox_id: str) -> str:
-    """Return the digest the worker's agent container runs, as the manifest names it."""
+def _observed_image(pod: dict[str, Any], name: str, expected: str, role: str) -> dict[str, str]:
+    """Verify one container on its scheduled node and retain the runtime's actual ID."""
+    (requested,) = [
+        item["image"]
+        for group in ("containers", "initContainers")
+        for item in pod["spec"].get(group, [])
+        if item["name"] == name
+    ]
+    (running,) = [
+        item["imageID"]
+        for group in ("containerStatuses", "initContainerStatuses")
+        for item in pod["status"].get(group, [])
+        if item["name"] == name
+    ]
+    assert requested == expected, (requested, expected)
+    if "HW_RUNTIME_MANIFESTS" in os.environ:
+        node = json.loads(os.environ["HW_RUNTIME_MANIFESTS"])[pod["spec"]["nodeName"]]
+        assert node["platform"] == "linux/amd64", node["platform"]
+        evidence = node["images"][expected]
+        assert evidence["role"] == role, (evidence["role"], role)
+        check_runtime(expected, running, "amd64", evidence["manifests"], evidence["config_id"])
+    else:
+        assert running == expected, (running, expected)
+    return {"image": requested, "image_id": running}
+
+
+def _pod_images(
+    pod: dict[str, Any], expected: dict[str, tuple[str, str]]
+) -> dict[str, dict[str, str]]:
+    names = {
+        item["name"]
+        for group in ("containers", "initContainers")
+        for item in pod["spec"].get(group, [])
+    }
+    assert names == expected.keys(), names
+    return {
+        name: _observed_image(pod, name, reference, role)
+        for name, (reference, role) in expected.items()
+    }
+
+
+def _running_image(fixture: KubernetesFixture, worker: str, sandbox_id: str) -> dict[str, str]:
+    """Return the verified requested and running identities of the replacement agent."""
     pod = json.loads(fixture.outside("get", "pod", f"{WORKSPACE}--{worker}", "--output=json"))
     assert pod["metadata"]["labels"]["openshell.ai/boundary-pair"] == sandbox_id.lower()
-    (container,) = [item for item in pod["spec"]["containers"] if item["name"] == "agent"]
-    (status,) = [item for item in pod["status"]["containerStatuses"] if item["name"] == "agent"]
-    repository, _, digest = container["image"].partition("@")
-    assert repository == fixture.worker.partition("@")[0]
-    assert status["imageID"] == container["image"]
-    return digest
+    return _observed_image(pod, "agent", os.environ["HW_REPLACEMENT_WORKER_IMAGE"], "worker")
 
 
 def _read(fixture: KubernetesFixture, worker: str, path: str) -> str:
@@ -538,55 +575,40 @@ def test_kubernetes_workflow_boundary_and_revocation(
             connections[name] = _STAGING_SHAPE if _STAGING_SHAPE in error else "forbidden"
         assert connections["exec-workload"] == _STAGING_SHAPE
 
-        # Every container of both pods names its image by digest in the cluster's registry,
-        # and the runtime reports that it runs the same reference.
+        # Keep the identities observed at the boundary after checking each role's pin.
         pods = {
             item["metadata"]["name"]: item
             for item in json.loads(fixture.outside("get", "pods", "--output=json"))["items"]
         }
         images = {
-            name: {
-                container["name"]: {
-                    "image": container["image"],
-                    "image_id": next(
-                        status["imageID"]
-                        for group in ("containerStatuses", "initContainerStatuses")
-                        for status in pods[name]["status"].get(group, [])
-                        if status["name"] == container["name"]
-                    ),
-                }
-                for group in ("containers", "initContainers")
-                for container in pods[name]["spec"].get(group, [])
-            }
-            for name in (workload, supervisor)
-        }
-        assert images == {
-            workload: {
-                "agent": {"image": fixture.worker, "image_id": fixture.worker},
-                "openshell-sandbox-bootstrap": {
-                    "image": fixture.sandbox_image,
-                    "image_id": fixture.sandbox_image,
+            workload: _pod_images(
+                pods[workload],
+                {
+                    "agent": (fixture.worker, "worker"),
+                    "workspace-init": (fixture.worker, "worker"),
+                    "openshell-sandbox-bootstrap": (fixture.sandbox_image, "sandbox"),
                 },
-                "workspace-init": {"image": fixture.worker, "image_id": fixture.worker},
-            },
-            supervisor: {
-                "supervisor": {
-                    "image": fixture.supervisor_image,
-                    "image_id": fixture.supervisor_image,
-                }
-            },
-        }, images
-        registry = fixture.worker.partition("/")[0]
-        assert fixture.supervisor_image.startswith(registry + "/")
-        assert fixture.sandbox_image.startswith(registry + "/")
+            ),
+            supervisor: _pod_images(
+                pods[supervisor], {"supervisor": (fixture.supervisor_image, "supervisor")}
+            ),
+        }
         namespace = json.loads(fixture.outside("get", "namespace", fixture.namespace, "-o=json"))
         identities = {
             "namespace_uid": namespace["metadata"]["uid"],
             "cluster_sha256": attempt.intent.control_plane.container_runtime_sha256,
             "sandbox_id": attempt.runtime.sandbox_id,
             "sandbox_resource": workload,
-            "workload_pod": {"name": workload, "uid": pods[workload]["metadata"]["uid"]},
-            "supervisor_pod": {"name": supervisor, "uid": pods[supervisor]["metadata"]["uid"]},
+            "workload_pod": {
+                "name": workload,
+                "uid": pods[workload]["metadata"]["uid"],
+                "node": pods[workload]["spec"]["nodeName"],
+            },
+            "supervisor_pod": {
+                "name": supervisor,
+                "uid": pods[supervisor]["metadata"]["uid"],
+                "node": pods[supervisor]["spec"]["nodeName"],
+            },
             "claims": record["claims"],
         }
         # The driver's Service and NetworkPolicy of the sandbox, which revocation removes too.

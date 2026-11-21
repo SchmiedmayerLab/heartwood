@@ -11,6 +11,15 @@ name: Kubernetes Qualification
 # after it.
 on:
   workflow_call:
+    outputs:
+      observations:
+        description: Immutable observation artifact IDs by stage.
+        value: ${{ jobs.cluster.outputs.platform }}:${{ jobs.cluster.outputs.hosted }}:${{ jobs.cluster.outputs.worker }}
+    inputs:
+      published-images:
+        description: Install the six published images for this commit by digest.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,33 +62,48 @@ jobs:
 
   # The images are built once and passed to each cluster job as an artifact.
   images:
-    name: Build the cluster images
+    name: Prepare the cluster images
     needs: scope
     if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: Download the published digest record
+        if: inputs.published-images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: verified-platform-images-${{ github.sha }}
+          path: test-results
+      - name: Require the published record for this commit
+        if: inputs.published-images
+        run: jq --exit-status --arg commit "${GITHUB_SHA}" '.commit == $commit' test-results/published-images.json
       - name: Checkout repository
+        if: ${{ !inputs.published-images }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Download candidate wheels
+        if: ${{ !inputs.published-images }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-dependency-candidate-${{ github.sha }}
           path: test-results/worker-candidate
       - name: Build and check candidate images
+        if: ${{ !inputs.published-images }}
         run: bash images/worker/build-candidate-images.sh test-results/worker-candidate "${GITHUB_SHA}"
       - name: Build the platform services image
+        if: ${{ !inputs.published-images }}
         run: >-
           docker build --file reference-platform/services/Dockerfile
           --tag heartwood-platform-services:candidate .
       - name: Build the Funnel image
+        if: ${{ !inputs.published-images }}
         run: >-
           python3 reference-platform/tools/prepare_funnel.py "${RUNNER_TEMP}/funnel"
           --image heartwood-funnel:candidate
       - name: Save the images
+        if: ${{ !inputs.published-images }}
         run: |
           mkdir -p "${RUNNER_TEMP}/cluster-images"
           docker save --output "${RUNNER_TEMP}/cluster-images/images.tar" \
@@ -87,6 +111,7 @@ jobs:
             heartwood-hosted-gateway:qualification heartwood-platform-services:candidate \
             heartwood-funnel:candidate
       - name: Retain the images for the cluster jobs
+        if: ${{ !inputs.published-images }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kubernetes-qualification-images-${{ github.sha }}
@@ -102,6 +127,10 @@ jobs:
   cluster:
     name: Kubernetes qualification of the ${{ matrix.stage }} stage
     needs: [scope, images]
+    outputs:
+      platform: ${{ steps.receipt.outputs.platform }}
+      hosted: ${{ steps.receipt.outputs.hosted }}
+      worker: ${{ steps.receipt.outputs.worker }}
     if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -125,6 +154,7 @@ jobs:
           - stage: worker
             tests: ""
     env:
+      QUALIFICATION_STAGE: ${{ matrix.stage }}
       KIND_VERSION: v0.33.0
       KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
       KUBECTL_VERSION: v1.37.0
@@ -155,7 +185,7 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
       # Only the chart tests run uv.
       - name: Install uv
-        if: matrix.stage != 'worker'
+        if: inputs.published-images || matrix.stage != 'worker'
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.13.7"
@@ -166,11 +196,13 @@ jobs:
           name: worker-gateway-candidate-${{ github.sha }}
           path: test-results/gateway-candidate
       - name: Download the images
+        if: ${{ !inputs.published-images }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: kubernetes-qualification-images-${{ github.sha }}
           path: ${{ runner.temp }}/cluster-images
       - name: Load the images
+        if: ${{ !inputs.published-images }}
         run: |
           docker load --input "${RUNNER_TEMP}/cluster-images/images.tar"
           rm -rf "${RUNNER_TEMP}/cluster-images"
@@ -181,30 +213,60 @@ jobs:
           bash reference-platform/cluster/network-policy-controls.sh heartwood
           test-results/kubernetes-qualification
       - name: Push the platform services image to the cluster registry
+        if: ${{ !inputs.published-images }}
         run: |
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-platform-services:candidate)"
           echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Push the Funnel image to the cluster registry
+        if: ${{ !inputs.published-images }}
         run: |
           image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-funnel:candidate)"
           echo "FUNNEL_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Push the hosted gateway image to the cluster registry
+        if: ${{ !inputs.published-images }}
         run: |
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-hosted-gateway:qualification)"
           echo "HOSTED_GATEWAY_IMAGE=${image}" >> "${GITHUB_ENV}"
       # llama-server of the local model runs from the runtime image.
       - name: Push the runtime image to the cluster registry
+        if: ${{ !inputs.published-images }}
         run: |
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-runtime:qualification)"
           echo "MODEL_RUNTIME_IMAGE=${image}" >> "${GITHUB_ENV}"
+      - name: Download the published digest record
+        if: inputs.published-images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: verified-platform-images-${{ github.sha }}
+          path: test-results/kubernetes-qualification
+      - name: Select the verified platform images
+        if: inputs.published-images
+        run: |
+          record=test-results/kubernetes-qualification/published-images.json
+          jq --exit-status --arg commit "${GITHUB_SHA}" '.commit == $commit' "${record}"
+          ref() { jq --raw-output --arg name "$1" '.images[$name] | .repository + "@" + .digest' "${record}"; }
+          {
+            echo "MODEL_RUNTIME_IMAGE=$(ref runtime)"
+            echo "PUBLISHED_WORKER_IMAGE=$(ref worker)"
+            echo "PUBLISHED_GATEWAY_IMAGE=$(ref sandbox-gateway)"
+          } >> "${GITHUB_ENV}"
       - name: Build the gateway and controller images and push them with the worker and OpenShell images
         run: |
-          python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
-            --worker-image heartwood-worker:qualification \
-            --runtime-image heartwood-runtime:qualification \
+          runtime=heartwood-runtime:qualification
+          gateway=()
+          if [[ -n "${PUBLISHED_GATEWAY_IMAGE:-}" ]]; then
+            runtime="${MODEL_RUNTIME_IMAGE}"
+            gateway=(--published-gateway "${PUBLISHED_GATEWAY_IMAGE}")
+            docker pull "${PUBLISHED_GATEWAY_IMAGE}"
+            docker pull "${PUBLISHED_WORKER_IMAGE}"
+            docker pull "${MODEL_RUNTIME_IMAGE}"
+          fi
+          python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood "${gateway[@]}" \
+            --worker-image "${PUBLISHED_WORKER_IMAGE:-heartwood-worker:qualification}" \
+            --runtime-image "${runtime}" \
             --gateway-artifacts test-results/gateway-candidate \
             --output test-results/kubernetes-qualification/worker
           images=test-results/kubernetes-qualification/worker/images.json
@@ -219,7 +281,22 @@ jobs:
       # Sessions run the built gateway, their pods pull the OpenShell release images from
       # the cluster's registry, and staging pods run the worker image or its replacement.
       # The worker's interpreter is the program that may send the model route's key.
+      - name: Install the chart from the verified published digests
+        if: inputs.published-images
+        run: |
+          record=test-results/kubernetes-qualification/published-images.json
+          jq --exit-status --argjson observed "${WORKER_INTERPRETER}" \
+            '[.worker_interpreter] == $observed' "${record}"
+          output=test-results/kubernetes-qualification/worker
+          python3 reference-platform/tools/oci_identity.py --context kind-heartwood \
+            --images "${output}/images.json" --output "${output}/runtime-manifests.json"
+          jq '{hub:{worker:{runtimeImages:.}}}' "${output}/runtime-manifests.json" > "${output}/admission-values.json"
+          bash reference-platform/cluster/install-chart.sh heartwood \
+            --values test-results/kubernetes-qualification/published-values.yaml --values "${output}/admission-values.json" \
+            --set "images.openshellRepository=${OPENSHELL_REPOSITORY}" \
+            --set-json "sessions.stagingImages=${STAGING_IMAGES}"
       - name: Install the platform chart
+        if: ${{ !inputs.published-images }}
         run: >-
           bash reference-platform/cluster/install-chart.sh heartwood
           --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
@@ -236,6 +313,9 @@ jobs:
         working-directory: reference-platform/services
         env:
           TESTS: ${{ matrix.tests }}
+          PUBLISHED_IMAGE_RECORD: >-
+            ${{ inputs.published-images && matrix.stage == 'hosted' &&
+            format('{0}/test-results/kubernetes-qualification/published-images.json', github.workspace) || '' }}
         run: |
           read -ra tests <<<"${TESTS}"
           uv sync --locked
@@ -244,14 +324,47 @@ jobs:
             --junitxml ../../test-results/kubernetes-qualification/platform-chart.xml
       - name: Qualify managed workers on the Kubernetes driver
         if: matrix.stage == 'worker'
-        run: >-
-          python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood
-          --output test-results/kubernetes-qualification/worker
+        env:
+          PUBLISHED: ${{ inputs.published-images }}
+        run: |
+          output=test-results/kubernetes-qualification/worker
+          args=()
+          if [[ "${PUBLISHED}" == true ]]; then
+            args=(--runtime-manifests "${output}/runtime-manifests.json")
+          fi
+          python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood --output "${output}" "${args[@]}"
       - name: Verify the evidence for this commit
         if: matrix.stage == 'worker'
         run: >-
           python3 deploy/qualification_evidence.py
           test-results/kubernetes-qualification/worker --commit "${GITHUB_SHA}"
+      - name: Observe the published images on this stage's cluster
+        if: inputs.published-images && matrix.stage != 'hosted'
+        working-directory: reference-platform/services
+        env:
+          PUBLISHED_IMAGE_RECORD: ${{ github.workspace }}/test-results/kubernetes-qualification/published-images.json
+        run: |
+          uv sync --locked
+          uv run pytest -c pyproject.toml --cluster-context kind-heartwood --staging-image "${WORKER_IMAGE}" \
+            ../tests/cluster/test_hosted_worker.py::test_the_gateway_discovers_the_route_models_with_its_discovery_key \
+            ../tests/cluster/test_hosted_worker.py::test_an_approved_tool_call_runs_in_the_worker_through_the_model_route
+      - name: Retain observed published image identities
+        if: inputs.published-images
+        id: observed
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: observed-platform-images-${{ matrix.stage }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: test-results/kubernetes-qualification/observed-images.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record the uploaded observation ID
+        id: receipt
+        if: inputs.published-images
+        env:
+          ARTIFACT_ID: ${{ steps.observed.outputs.artifact-id }}
+        run: |
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
+          echo "${QUALIFICATION_STAGE}=${ARTIFACT_ID}" >> "${GITHUB_OUTPUT}"
       - name: Export cluster logs
         if: failure()
         run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood

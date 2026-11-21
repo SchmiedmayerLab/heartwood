@@ -25,6 +25,7 @@ import hmac
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -85,6 +86,8 @@ _SOURCES = (
     "images/worker/candidate/symlink-workspace.Dockerfile",
     "images/worker/candidate/replacement-worker.Dockerfile",
     "reference-platform/cluster/push-image.sh",
+    "reference-platform/tools/oci_identity.py",
+    "packages/gateway/src/heartwood/gateway/worker_image_identity.py",
 )
 # The exit status of the launch script when its input reached it incomplete.
 _INCOMPLETE = 75
@@ -167,7 +170,14 @@ def images(arguments: argparse.Namespace) -> None:
         image_sources[name] = image_source(
             inspected, native.embedded_build_records(inspected["Id"])
         )
-    identifiers["gateway"] = native.gateway_image(artifacts, manifest, record, output)
+    published = {}
+    if arguments.published_gateway:
+        published = {"worker": arguments.worker_image, "gateway": arguments.published_gateway}
+        identifiers["gateway"] = _output(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", arguments.published_gateway]
+        ).strip()
+    else:
+        identifiers["gateway"] = native.gateway_image(artifacts, manifest, record, output)
     native.run(
         [
             "docker",
@@ -265,6 +275,9 @@ def images(arguments: argparse.Namespace) -> None:
         # The replacement shares the worker's repository, as a new image of one deployment.
         ("replacement_worker", "heartwood-worker"),
     ):
+        if name in published:
+            references[name] = published[name]
+            continue
         # The registry names a repository after the image, so each image gets its own tag.
         tag = f"{repository}:qualification-{identifiers[name].removeprefix('sha256:')[:12]}"
         native.run(["docker", "tag", identifiers[name], tag])
@@ -659,15 +672,17 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
                 for name, value in {
                     "HW_QUALIFICATION_OUTPUT": "/qualification/output",
                     "HW_SESSION_NAMESPACE": namespace,
+                    **(
+                        {"HW_RUNTIME_MANIFESTS": json.dumps(built["runtime_manifests"])}
+                        if "runtime_manifests" in built
+                        else {}
+                    ),
                     "HW_WORKER_IMAGE": built["image_references"]["worker"],
                     "HW_GATEWAY_IMAGE": built["image_references"]["gateway"],
                     "HW_SUPERVISOR_IMAGE": built["image_references"]["supervisor"],
                     "HW_SANDBOX_IMAGE": built["image_references"]["sandbox"],
                     "HW_SYMLINK_WORKSPACE_IMAGE": built["image_references"]["symlink_workspace"],
-                    # The manifest names a worker image by its digest in the worker's repository.
-                    "HW_REPLACEMENT_WORKER_IMAGE": built["image_references"][
-                        "replacement_worker"
-                    ].partition("@")[2],
+                    "HW_REPLACEMENT_WORKER_IMAGE": built["image_references"]["replacement_worker"],
                     "HW_OPENSHELL_ENDPOINT": launched["openshell_endpoint"],
                     "HW_PROVIDER_HOST": host,
                     "HW_WORKER_INTERPRETER": built["worker_interpreter"],
@@ -732,14 +747,18 @@ def _cluster_record(cluster: Cluster, launched: dict[str, Any]) -> dict[str, Any
         "network_plugin": plugin["spec"]["template"]["spec"]["containers"][0]["image"],
         "nodes": [
             {
-                name: node["status"]["nodeInfo"][name]
-                for name in (
-                    "architecture",
-                    "kernelVersion",
-                    "osImage",
-                    "containerRuntimeVersion",
-                    "kubeletVersion",
-                )
+                "name": node["metadata"]["name"],
+                **{
+                    name: node["status"]["nodeInfo"][name]
+                    for name in (
+                        "operatingSystem",
+                        "architecture",
+                        "kernelVersion",
+                        "osImage",
+                        "containerRuntimeVersion",
+                        "kubeletVersion",
+                    )
+                },
             }
             for node in nodes
         ],
@@ -798,6 +817,8 @@ def run(arguments: argparse.Namespace) -> None:
     native = _native()
     output = arguments.output.resolve()
     built = json.loads((output / "images.json").read_text())
+    if getattr(arguments, "runtime_manifests", None):
+        built["runtime_manifests"] = json.loads(arguments.runtime_manifests.read_text())
     cluster = Cluster(arguments.cluster)
     host = json.loads(
         _output(
@@ -901,6 +922,16 @@ def run(arguments: argparse.Namespace) -> None:
     (output / "cluster.json").write_text(json.dumps(record, indent=2) + "\n")
     evidence: dict[str, Any] = {
         "qualification_kind": "synthetic-kubernetes",
+        **(
+            {
+                "workflow_run": {
+                    "id": int(os.environ["GITHUB_RUN_ID"]),
+                    "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+                }
+            }
+            if "GITHUB_RUN_ID" in os.environ
+            else {}
+        ),
         "driver": "openshell-kubernetes",
         "release_version": tomllib.loads((ROOT / "VERSION.toml").read_text())["version"],
         "source": source,
@@ -946,15 +977,20 @@ def run(arguments: argparse.Namespace) -> None:
         )
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Prepare images or run the Kubernetes qualification."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     build = commands.add_parser("images", help=images.__doc__)
+    build.add_argument(
+        "--published-gateway", help="Use the published gateway and worker references"
+    )
     build.add_argument("--worker-image", required=True)
     build.add_argument("--runtime-image", required=True)
     build.add_argument("--gateway-artifacts", required=True, type=Path)
     build.set_defaults(function=images)
     execute = commands.add_parser("run", help=run.__doc__)
+    execute.add_argument("--runtime-manifests", type=Path)
     execute.set_defaults(function=run)
     for command in (build, execute):
         command.add_argument("--cluster", required=True, help="Name of the kind cluster")
@@ -965,3 +1001,7 @@ if __name__ == "__main__":
     except subprocess.CalledProcessError as error:
         sys.stderr.write(str(error.stderr or ""))
         raise
+
+
+if __name__ == "__main__":
+    main()
