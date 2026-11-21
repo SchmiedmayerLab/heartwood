@@ -359,6 +359,30 @@ def test_generated_revision_archives_are_pinned_by_content() -> None:
             assert "directory" not in source
 
 
+def test_openshell_inputs_name_the_canonical_repository() -> None:
+    gateway = json.loads((_ROOT / "images/worker/candidate/gateway.json").read_text())
+    assert gateway["source"]["url"].startswith(
+        "https://codeload.github.com/ai-openshell/openshell/"
+    )
+    releases = "https://github.com/ai-openshell/openshell/releases/download/"
+    cli = gateway["cli"]
+    assert all(item["url"].startswith(releases) for item in cli.values())
+    for dockerfile, stage_prefix in (
+        ("images/Dockerfile", "hosted-openshell-cli"),
+        ("reference-platform/services/Dockerfile", "openshell-cli"),
+    ):
+        content = (_ROOT / dockerfile).read_text()
+        for arch in ("amd64", "arm64"):
+            stage = f"{stage_prefix}-{arch}"
+            pins = re.findall(
+                rf"^FROM scratch AS {stage}\n"
+                r"ADD --checksum=sha256:([0-9a-f]{64}) \\\n\s+(\S+) /openshell\.tar\.gz$",
+                content,
+                re.MULTILINE,
+            )
+            assert pins == [(cli[arch]["sha256"], cli[arch]["url"])], (dockerfile, stage)
+
+
 @pytest.fixture
 def builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     spec = importlib.util.spec_from_file_location(
