@@ -372,7 +372,9 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
     proxy = types.ModuleType("jupyterhub.proxy")
     proxy.ConfigurableHTTPProxy = ConfigurableHTTPProxy  # type: ignore[attr-defined]
     user = types.ModuleType("jupyterhub.user")
-    user.User = type("User", (), {"server_url": lambda _self, _name: "/"})
+    monkeypatch.setattr(
+        user, "User", type("User", (), {"server_url": lambda _self, _name: "/"}), raising=False
+    )
     app = types.ModuleType("jupyterhub.app")
     app.JupyterHub = JupyterHub  # type: ignore[attr-defined]
     pycurl = types.ModuleType("pycurl")
@@ -415,8 +417,9 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         }
     ]
     module = _module()
-    module.SETTINGS = tmp_path / "settings.json"
-    module.SETTINGS.write_text(json.dumps(settings))
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps(settings))
+    monkeypatch.setattr(module, "SETTINGS", settings_path)
     module.configure(config, settings)
     return _Hub(
         config,

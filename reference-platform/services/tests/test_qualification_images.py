@@ -36,7 +36,7 @@ def observed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     pods = {}
     blobs = {}
 
-    def blob(value: dict) -> str:
+    def blob(value: dict[str, Any]) -> str:
         raw = json.dumps(value).encode()
         digest = "sha256:" + hashlib.sha256(raw).hexdigest()
         blobs[digest] = raw
@@ -93,7 +93,7 @@ def observed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
         assert command[:5] == ["kubectl", "--context", "kind-test", "get", "pods"]
         return json.dumps(pods[(command[6], command[8])]).encode()
 
-    monkeypatch.setattr(images.subprocess, "check_output", response)
+    monkeypatch.setattr(subprocess, "check_output", response)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -165,9 +165,10 @@ def test_release_rechecks_observations(
     }.items():
         monkeypatch.setenv(key, value)
     stages = dict(zip(release.STAGES, ["11", "12", "13"], strict=True))
-    receipt = {"commit": _COMMIT, "run": "17", "attempt": "2", "stages": stages.copy()}
+    receipt_stages = stages.copy()
     if mutation == "partial-receipt":
-        del receipt["stages"]["platform"]
+        del receipt_stages["platform"]
+    receipt = {"commit": _COMMIT, "run": "17", "attempt": "2", "stages": receipt_stages}
 
     if mutation in {"none", "drill-record"}:
         drill = tmp_path / "test-results/release-evidence/published" / record.name

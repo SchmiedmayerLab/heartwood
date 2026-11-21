@@ -50,6 +50,8 @@ dev = [
 ]
 
 [tool.mypy]
+# The standalone OCI verifier imports the gateway image identity module directly.
+mypy_path = "$MYPY_CONFIG_FILE_DIR/../../packages/gateway/src/heartwood/gateway"
 python_version = "3.12"
 strict = true
 warn_unreachable = true

@@ -82,7 +82,7 @@ SPDX-License-Identifier = "MIT"
 
 # Changes to Funnel, which is MIT-licensed.
 [[annotations]]
-path = ["reference-platform/images/funnel/0001-optional-tls-for-server-listeners-and-rpc-client.patch", "reference-platform/images/funnel/0002-per-task-worker-credentials.patch"]
+path = ["reference-platform/images/funnel/0001-optional-tls-for-server-listeners-and-rpc-client.patch", "reference-platform/images/funnel/0002-per-task-worker-credentials.patch", "reference-platform/images/funnel/0003-executor-template-gpu-count.patch"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2017 Oregon Health and Science University Computational Biology", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "MIT"
