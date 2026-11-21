@@ -277,21 +277,23 @@ class SessionService:
         self.model_data_handling = model_data_handling
         self.env = os.environ if env is None else env
         self.clock: Callable[[], str] = _utc_now if clock is None else clock
-        # Lock order, outermost first: the gateway state lock, the worker control lock,
-        # the command lock, the worker lease lock, then the stream lock an event or token
-        # sink takes. A worker response budget takes its own lock and then the lease lock.
-        # A backend read holds none of them; the first read holds only the open lock, which
-        # no other lock is held with. A command keeps others from journaling until it
-        # completes, but releases the command lock while the worker answers, so fencing,
-        # revocation and their journal records never wait for a worker request. The command
-        # lock is granted in request order, so reads that follow one another cannot keep a
-        # command, fencing or revocation waiting.
+        # Lock order, outermost first: the gateway state lock, the worker control lock, the
+        # command lock, the report lock, the worker lease lock, then the stream lock an
+        # event or token sink takes. A worker response budget takes its own lock and then
+        # the lease lock. A backend read holds none of them; the first read holds only the
+        # open lock, which no other lock is held with. A command keeps others from
+        # journaling until it completes, but releases the command lock while the worker
+        # answers, so fencing, revocation and their journal records never wait for a worker
+        # request. The command lock is granted in request order, so reads that follow one
+        # another cannot keep a command, fencing or revocation waiting.
         self._command_lock = _FairLock()
         # A condition needs only the acquire, release and wait protocol that the lock implements.
         self._command_changed = Condition(self._command_lock)  # type: ignore[arg-type]
         self._command_thread: Thread | None = None
         self._request_threads: set[Thread] = set()
         self._open_lock = Lock()
+        # Held while one backend report is journaled, so a read never ends inside it.
+        self._report_lock = Lock()
         self._worker_control_lock = RLock()
         self._worker_control_active = False
         self._closed = False
@@ -787,6 +789,17 @@ class SessionService:
     def replay_events(self) -> tuple[SessionEvent, ...]:
         """Return events after verifying their one-to-one audit correspondence."""
         return self.store.replay_events()
+
+    def replay_complete_reports(self) -> tuple[SessionEvent, ...]:
+        """Return the journaled events, never part of one backend report.
+
+        A backend report is journaled one record at a time, and its lifecycle state
+        precedes the reviews it requests; a read between those records would show a run
+        that waits for no review. The read waits only while a report is journaled, not
+        for a command in progress, so it can still fall between a command's records.
+        """
+        with self._report_lock:
+            return self.store.replay_events()
 
     def reconcile(self) -> tuple[SessionEvent, ...]:
         """Commit OpenHands state not yet represented in the durable session."""
@@ -1787,228 +1800,231 @@ class SessionService:
         translated: list[SessionEvent] = []
         execution_settled = False
         known_source_event_ids = self._known_source_event_ids_locked()
-        for event in stream:
-            if isinstance(event, BackendExecutionSettledEvent):
-                execution_settled = live
-                continue
-            if (
-                event.source_event_id is not None
-                and event.source_event_id in known_source_event_ids
-            ):
-                continue
-            source_payload: dict[str, JsonValue] = (
-                {"source_event_id": event.source_event_id}
-                if event.source_event_id is not None
-                else {}
-            )
-            if self._reserved_external_event(event):
-                # Retaining the source identity records the rejection once, not on every replay.
-                translated.append(
-                    self._record_event(
-                        EventKind.ERROR_RECORDED,
-                        {
-                            "reason": "worker event selected an outside operation identity",
-                            "affects_lifecycle": False,
-                            **source_payload,
-                        },
-                    )
+        # A read of complete reports waits for these records, never for the settlements
+        # below, which run the workflow evaluator.
+        with self._report_lock:
+            for event in stream:
+                if isinstance(event, BackendExecutionSettledEvent):
+                    execution_settled = live
+                    continue
+                if (
+                    event.source_event_id is not None
+                    and event.source_event_id in known_source_event_ids
+                ):
+                    continue
+                source_payload: dict[str, JsonValue] = (
+                    {"source_event_id": event.source_event_id}
+                    if event.source_event_id is not None
+                    else {}
                 )
-                continue
-            if isinstance(event, BackendAgentMessageEvent):
-                translated.append(
-                    self._record_event(
-                        EventKind.AGENT_MESSAGE_EMITTED,
-                        {
-                            "content": event.message,
-                            **(
-                                {"outcome_status": event.outcome_status}
-                                if event.outcome_status
-                                else {}
-                            ),
-                            **source_payload,
-                        },
-                    )
-                )
-            elif isinstance(event, BackendToolCallEvent):
-                tool_call = event.tool_call
-                translated.append(
-                    self._record_event(
-                        EventKind.TOOL_CALL_PROPOSED,
-                        {
-                            "tool_call_id": tool_call.tool_call_id,
-                            "action_id": tool_call.action_id,
-                            "tool_name": tool_call.tool_name,
-                            "kind": tool_call.kind,
-                            "risk": tool_call.risk,
-                            "summary": tool_call.summary,
-                            "arguments": tool_call.arguments,
-                            "affected_paths": list(tool_call.affected_paths),
-                            "project_path": tool_call.project_path,
-                            "specialist_label": tool_call.specialist_label,
-                            "specialist_capability": tool_call.specialist_capability,
-                            "review_class": tool_call.review_class,
-                            **source_payload,
-                        },
-                    )
-                )
-            elif isinstance(event, BackendConfirmationRequestEvent):
-                translated.append(self._record_confirmation_request(event))
-            elif isinstance(event, BackendConfirmationResolutionEvent):
-                tool_call = event.tool_call
-                if event.approved and not self._approval_recorded(event.action_group_id):
-                    # Only a recorded decision approves an action; a backend that reports
-                    # execution without one has left review and is not trusted further.
-                    if self._worker_lease is not None:
-                        self._worker_lease.fence()
+                if self._reserved_external_event(event):
+                    # Retaining the source identity records the rejection once, not on every replay.
                     translated.append(
                         self._record_event(
                             EventKind.ERROR_RECORDED,
                             {
-                                "reason": "action executed without a recorded review decision",
-                                "tool_call_id": tool_call.tool_call_id,
-                                "group_id": event.action_group_id,
+                                "reason": "worker event selected an outside operation identity",
+                                "affects_lifecycle": False,
                                 **source_payload,
                             },
                         )
                     )
                     continue
-                translated.append(
-                    self._record_event(
-                        EventKind.CONFIRMATION_RESOLVED,
-                        {
-                            "tool_call_id": tool_call.tool_call_id,
-                            "group_id": event.action_group_id,
-                            "decision": "approved" if event.approved else "denied",
-                            **source_payload,
-                        },
-                    )
-                )
-            elif isinstance(event, BackendToolExecutionEvent):
-                execution = event.tool_execution
-                translated.append(
-                    self._record_event(
-                        EventKind.TOOL_EXECUTION_RECORDED,
-                        {
-                            "backend_id": self.backend.backend_id,
-                            "tool_call_id": execution.tool_call_id,
-                            "action_id": execution.action_id,
-                            "tool_name": execution.tool_name,
-                            "exit_code": execution.exit_code,
-                            "summary": execution.summary,
-                            "result": execution.result,
-                            "result_truncated": execution.result_truncated,
-                            "working_directory": execution.working_directory,
-                            **source_payload,
-                        },
-                    )
-                )
-                if live and self._workflow_evaluator is not None:
-                    current = workflow_run(self.replay_events())
-                    if current is not None:
-                        observation = observe_reproduction(
-                            current,
-                            events=self.replay_events(),
-                            execution=translated[-1],
-                            inspector=self._workflow_evaluator,
+                if isinstance(event, BackendAgentMessageEvent):
+                    translated.append(
+                        self._record_event(
+                            EventKind.AGENT_MESSAGE_EMITTED,
+                            {
+                                "content": event.message,
+                                **(
+                                    {"outcome_status": event.outcome_status}
+                                    if event.outcome_status
+                                    else {}
+                                ),
+                                **source_payload,
+                            },
                         )
-                        if observation is not None:
-                            translated.append(self._record_reproduction(observation))
-            elif isinstance(event, BackendLifecycleEvent):
-                translated.append(
-                    self._record_event(
-                        EventKind.AGENT_LIFECYCLE_UPDATED,
-                        {"status": event.lifecycle.value, **source_payload},
                     )
-                )
-            elif isinstance(event, BackendTaskPlanEvent):
-                translated.append(
-                    self._record_event(
-                        EventKind.TASK_PLAN_UPDATED,
-                        {
-                            "tasks": [
+                elif isinstance(event, BackendToolCallEvent):
+                    tool_call = event.tool_call
+                    translated.append(
+                        self._record_event(
+                            EventKind.TOOL_CALL_PROPOSED,
+                            {
+                                "tool_call_id": tool_call.tool_call_id,
+                                "action_id": tool_call.action_id,
+                                "tool_name": tool_call.tool_name,
+                                "kind": tool_call.kind,
+                                "risk": tool_call.risk,
+                                "summary": tool_call.summary,
+                                "arguments": tool_call.arguments,
+                                "affected_paths": list(tool_call.affected_paths),
+                                "project_path": tool_call.project_path,
+                                "specialist_label": tool_call.specialist_label,
+                                "specialist_capability": tool_call.specialist_capability,
+                                "review_class": tool_call.review_class,
+                                **source_payload,
+                            },
+                        )
+                    )
+                elif isinstance(event, BackendConfirmationRequestEvent):
+                    translated.append(self._record_confirmation_request(event))
+                elif isinstance(event, BackendConfirmationResolutionEvent):
+                    tool_call = event.tool_call
+                    if event.approved and not self._approval_recorded(event.action_group_id):
+                        # Only a recorded decision approves an action; a backend that reports
+                        # execution without one has left review and is not trusted further.
+                        if self._worker_lease is not None:
+                            self._worker_lease.fence()
+                        translated.append(
+                            self._record_event(
+                                EventKind.ERROR_RECORDED,
                                 {
-                                    "title": task.title,
-                                    "status": task.status.value,
-                                }
-                                for task in event.tasks
-                            ],
-                            **source_payload,
-                        },
-                    )
-                )
-            elif isinstance(event, BackendUsageEvent):
-                usage = event.usage
-                translated.append(
-                    self._record_event(
-                        EventKind.MODEL_USAGE_UPDATED,
-                        {
-                            "usage": {
-                                "usage_id": usage.usage_id,
-                                "model_name": usage.model_name,
-                                "call_count": usage.call_count,
-                                "prompt_tokens": usage.prompt_tokens,
-                                "completion_tokens": usage.completion_tokens,
-                                "cache_read_tokens": usage.cache_read_tokens,
-                                "cache_write_tokens": usage.cache_write_tokens,
-                                "reasoning_tokens": usage.reasoning_tokens,
-                                "context_window": usage.context_window,
-                                "accumulated_cost": usage.accumulated_cost,
+                                    "reason": "action executed without a recorded review decision",
+                                    "tool_call_id": tool_call.tool_call_id,
+                                    "group_id": event.action_group_id,
+                                    **source_payload,
+                                },
+                            )
+                        )
+                        continue
+                    translated.append(
+                        self._record_event(
+                            EventKind.CONFIRMATION_RESOLVED,
+                            {
+                                "tool_call_id": tool_call.tool_call_id,
+                                "group_id": event.action_group_id,
+                                "decision": "approved" if event.approved else "denied",
+                                **source_payload,
                             },
-                            **source_payload,
-                        },
+                        )
                     )
-                )
-            elif isinstance(event, BackendSubagentEvent):
-                subagent = event.subagent
-                translated.append(
-                    self._record_event(
-                        EventKind.SUBAGENT_UPDATED,
-                        {
-                            "subagent": {
-                                "invocation_id": subagent.invocation_id,
-                                "task_id": subagent.task_id,
-                                "agent_name": subagent.agent_name,
-                                "role_label": subagent.role_label,
-                                "status": subagent.status.value,
-                                "parent_session_id": subagent.parent_session_id,
-                                "parent_action_id": subagent.parent_action_id,
-                                **(
-                                    {
-                                        "native_execution": subagent.native_execution.model_dump(
-                                            mode="json"
-                                        )
-                                    }
-                                    if subagent.native_execution is not None
-                                    else {}
-                                ),
-                                **(
-                                    {
-                                        "review_proposals": subagent.review_proposals.model_dump(
-                                            mode="json"
-                                        )
-                                    }
-                                    if subagent.review_proposals is not None
-                                    else {}
-                                ),
+                elif isinstance(event, BackendToolExecutionEvent):
+                    execution = event.tool_execution
+                    translated.append(
+                        self._record_event(
+                            EventKind.TOOL_EXECUTION_RECORDED,
+                            {
+                                "backend_id": self.backend.backend_id,
+                                "tool_call_id": execution.tool_call_id,
+                                "action_id": execution.action_id,
+                                "tool_name": execution.tool_name,
+                                "exit_code": execution.exit_code,
+                                "summary": execution.summary,
+                                "result": execution.result,
+                                "result_truncated": execution.result_truncated,
+                                "working_directory": execution.working_directory,
+                                **source_payload,
                             },
-                            **source_payload,
-                        },
+                        )
                     )
-                )
-            elif isinstance(event, BackendErrorEvent):
-                translated.append(
-                    self._record_event(
-                        EventKind.ERROR_RECORDED,
-                        {
-                            "backend_id": self.backend.backend_id,
-                            "code": event.error_code.value,
-                            "reason": backend_error_message(event.error_code),
-                            **source_payload,
-                        },
+                    if live and self._workflow_evaluator is not None:
+                        current = workflow_run(self.replay_events())
+                        if current is not None:
+                            observation = observe_reproduction(
+                                current,
+                                events=self.replay_events(),
+                                execution=translated[-1],
+                                inspector=self._workflow_evaluator,
+                            )
+                            if observation is not None:
+                                translated.append(self._record_reproduction(observation))
+                elif isinstance(event, BackendLifecycleEvent):
+                    translated.append(
+                        self._record_event(
+                            EventKind.AGENT_LIFECYCLE_UPDATED,
+                            {"status": event.lifecycle.value, **source_payload},
+                        )
                     )
-                )
-            else:
-                assert_never(event)
+                elif isinstance(event, BackendTaskPlanEvent):
+                    translated.append(
+                        self._record_event(
+                            EventKind.TASK_PLAN_UPDATED,
+                            {
+                                "tasks": [
+                                    {
+                                        "title": task.title,
+                                        "status": task.status.value,
+                                    }
+                                    for task in event.tasks
+                                ],
+                                **source_payload,
+                            },
+                        )
+                    )
+                elif isinstance(event, BackendUsageEvent):
+                    usage = event.usage
+                    translated.append(
+                        self._record_event(
+                            EventKind.MODEL_USAGE_UPDATED,
+                            {
+                                "usage": {
+                                    "usage_id": usage.usage_id,
+                                    "model_name": usage.model_name,
+                                    "call_count": usage.call_count,
+                                    "prompt_tokens": usage.prompt_tokens,
+                                    "completion_tokens": usage.completion_tokens,
+                                    "cache_read_tokens": usage.cache_read_tokens,
+                                    "cache_write_tokens": usage.cache_write_tokens,
+                                    "reasoning_tokens": usage.reasoning_tokens,
+                                    "context_window": usage.context_window,
+                                    "accumulated_cost": usage.accumulated_cost,
+                                },
+                                **source_payload,
+                            },
+                        )
+                    )
+                elif isinstance(event, BackendSubagentEvent):
+                    subagent = event.subagent
+                    translated.append(
+                        self._record_event(
+                            EventKind.SUBAGENT_UPDATED,
+                            {
+                                "subagent": {
+                                    "invocation_id": subagent.invocation_id,
+                                    "task_id": subagent.task_id,
+                                    "agent_name": subagent.agent_name,
+                                    "role_label": subagent.role_label,
+                                    "status": subagent.status.value,
+                                    "parent_session_id": subagent.parent_session_id,
+                                    "parent_action_id": subagent.parent_action_id,
+                                    **(
+                                        {
+                                            "native_execution": (
+                                                subagent.native_execution.model_dump(mode="json")
+                                            )
+                                        }
+                                        if subagent.native_execution is not None
+                                        else {}
+                                    ),
+                                    **(
+                                        {
+                                            "review_proposals": (
+                                                subagent.review_proposals.model_dump(mode="json")
+                                            )
+                                        }
+                                        if subagent.review_proposals is not None
+                                        else {}
+                                    ),
+                                },
+                                **source_payload,
+                            },
+                        )
+                    )
+                elif isinstance(event, BackendErrorEvent):
+                    translated.append(
+                        self._record_event(
+                            EventKind.ERROR_RECORDED,
+                            {
+                                "backend_id": self.backend.backend_id,
+                                "code": event.error_code.value,
+                                "reason": backend_error_message(event.error_code),
+                                **source_payload,
+                            },
+                        )
+                    )
+                else:
+                    assert_never(event)
         translated.extend(
             settle_workflow_review(
                 self, self._workflow_evaluator, execution_settled=execution_settled
