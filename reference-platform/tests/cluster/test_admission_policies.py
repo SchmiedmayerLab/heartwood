@@ -26,6 +26,9 @@ _NAMESPACE = f"hw-s-{_SESSION}"
 # comes from the staging policy alone.
 _OPEN_NAMESPACE = "hw-s-policyopen"
 _GATEWAY = f"system:serviceaccount:heartwood-sessions:hw-gw-{_SESSION}"
+# A pod named like the workload pod of a sandbox, <workspace>--<sandbox>, in the
+# workspace hw.
+_WORKLOAD_POD = "hw--hw-0123456789abcdef"
 
 _CONTROL_SCOPE = "ValidatingAdmissionPolicy 'heartwood-control-scope'"
 _STAGING_SHAPE = "ValidatingAdmissionPolicy 'heartwood-staging-shape'"
@@ -92,13 +95,24 @@ def _pod(
     return {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": name, "namespace": namespace},
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+            "labels": {
+                "heartwood.project": "demo",
+                "heartwood.attempt": "a",
+                "heartwood.role": "staging",
+            },
+        },
         "spec": {
             "serviceAccountName": "hw-staging",
             "automountServiceAccountToken": False,
             "securityContext": {
                 "runAsNonRoot": True,
-                "runAsUser": 65534,
+                "runAsUser": 10002,
+                "runAsGroup": 10002,
+                "fsGroup": 10002,
+                "supplementalGroupsPolicy": "Strict",
                 "seccompProfile": {"type": "RuntimeDefault"},
             },
             "containers": [
@@ -116,7 +130,7 @@ def _pod(
             ],
             "volumes": [
                 {"name": "inputs", "persistentVolumeClaim": {"claimName": "hw-attempt-a-inputs"}},
-                {"name": "scratch", "emptyDir": {}},
+                {"name": "skills", "persistentVolumeClaim": {"claimName": "hw-attempt-a-skills"}},
             ],
         },
     }
@@ -131,6 +145,91 @@ def _claim(name: str = "hw-attempt-a-inputs") -> dict[str, Any]:
             "accessModes": ["ReadWriteOnce"],
             "storageClassName": "heartwood-attempt",
             "resources": {"requests": {"storage": "1Gi"}},
+        },
+    }
+
+
+# The attempt of the documents that a Heartwood gateway creates for staging, as
+# KubernetesWorkerVolumes in packages/gateway/src/heartwood/gateway/worker_kubernetes.py
+# builds them.
+_ATTEMPT = "0123456789abcdef0123456789abcdef"
+_ATTEMPT_LABELS = {
+    "heartwood.project": "demo",
+    "heartwood.attempt": "01234567-89ab-cdef-0123-456789abcdef",
+}
+
+
+def _gateway_claim(mount: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": f"hw-attempt-{_ATTEMPT}-{mount}",
+            "namespace": _NAMESPACE,
+            "labels": {
+                **_ATTEMPT_LABELS,
+                "heartwood.role": "projection",
+                "openshell.ai/sandbox-attachable": "true",
+                "openshell.ai/sandbox-attachable-workspace": "hw",
+            },
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": "heartwood-attempt",
+            "resources": {"requests": {"storage": "256Mi"}},
+        },
+    }
+
+
+def _gateway_staging_pod(image: str) -> dict[str, Any]:
+    limits = {"cpu": "1", "memory": "256Mi"}
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": f"hw-staging-{_ATTEMPT}",
+            "namespace": _NAMESPACE,
+            "labels": {**_ATTEMPT_LABELS, "heartwood.role": "staging"},
+        },
+        "spec": {
+            "restartPolicy": "Never",
+            "activeDeadlineSeconds": 600,
+            "terminationGracePeriodSeconds": 1,
+            "serviceAccountName": "hw-staging",
+            "automountServiceAccountToken": False,
+            "enableServiceLinks": False,
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 10002,
+                "runAsGroup": 10002,
+                "fsGroup": 10002,
+                "supplementalGroupsPolicy": "Strict",
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {
+                    "name": "stage",
+                    "image": image,
+                    "command": ["/bin/sleep", "600"],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                        "readOnlyRootFilesystem": True,
+                    },
+                    "resources": {"limits": limits, "requests": limits},
+                    "volumeMounts": [
+                        {"name": "inputs", "mountPath": "/inputs"},
+                        {"name": "skills", "mountPath": "/skills"},
+                    ],
+                }
+            ],
+            "volumes": [
+                {
+                    "name": mount,
+                    "persistentVolumeClaim": {"claimName": f"hw-attempt-{_ATTEMPT}-{mount}"},
+                }
+                for mount in ("inputs", "skills")
+            ],
         },
     }
 
@@ -160,12 +259,14 @@ _RUNTIME_CLASS: dict[str, Any] = {
 
 
 @pytest.fixture(scope="module", autouse=True)
-def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
+def session(cluster: Cluster, probe_image: str) -> Iterator[None]:
     """Create the objects that the cases refer to, as the cluster administrator."""
-    probe = _pod(staging_image, name="hw-staging-probe", namespace=_NAMESPACE)
+    probe = _pod(probe_image, name="hw-staging-probe", namespace=_NAMESPACE)
     probe["spec"]["volumes"] = []
     other = copy.deepcopy(probe)
     other["metadata"]["name"] = "other-probe"
+    workload = copy.deepcopy(probe)
+    workload["metadata"]["name"] = _WORKLOAD_POD
     gateway = _account(f"hw-gw-{_SESSION}", "heartwood-sessions")
     wider = {
         "apiVersion": "rbac.authorization.k8s.io/v1",
@@ -213,6 +314,7 @@ def session(cluster: Cluster, staging_image: str) -> Iterator[None]:
         _RUNTIME_CLASS,
         probe,
         other,
+        workload,
     )
     ready = cluster.kubectl(
         "wait", "--namespace", _NAMESPACE, "--for=condition=Ready", "pod", "--all", "--timeout=180s"
@@ -641,9 +743,11 @@ def test_control_service_may_review_tokens(cluster: Cluster) -> None:
 
 
 _SERVICE_ACCOUNT = "ServiceAccount hw-staging without a mounted token"
-_IMAGE = "runs only the staging image"
+_IMAGE = "runs only a staging image"
 _SECURITY = "read-only root file system and no capabilities"
-_VOLUMES = "mounts only attempt volume claims and emptyDir volumes"
+_VOLUMES = "mounts only attempt volume claims"
+_LABELS = "carries only the labels heartwood.project, heartwood.attempt and heartwood.role"
+_USER = "runs as user and group 10002 with no other group and the supplemental group policy"
 _CLAIM = "uses the StorageClass heartwood-attempt and names no data source or volume"
 _ENVIRONMENT = "takes no environment value from another object or field"
 _PLACEMENT = "names no node, priority class or runtime class"
@@ -664,10 +768,18 @@ _SIDECAR = {
 _PLAIN = {"name": "KEY", "value": "value"}
 
 
+def _labelled(pod: dict[str, Any], labels: dict[str, str]) -> dict[str, Any]:
+    changed = copy.deepcopy(pod)
+    changed["metadata"]["labels"] = labels
+    return changed
+
+
 def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
     pod = _pod(image)
+    labels = pod["metadata"]["labels"]
     return [
         ("pod", pod, None),
+        ("gateway-staging-pod", _gateway_staging_pod(image), None),
         ("pod-restricted-namespace", _pod(image, namespace=_NAMESPACE), None),
         ("pod-plain-environment", _changed(pod, f"{_CONTAINER}.env", [_PLAIN]), None),
         (
@@ -692,6 +804,64 @@ def _pod_cases(image: str) -> list[tuple[str, dict[str, Any], str | None]]:
             "pod-second-container",
             _changed(pod, "spec.containers", [*pod["spec"]["containers"], _SIDECAR]),
             _IMAGE,
+        ),
+        ("pod-other-name", _changed(pod, "metadata.name", "hw-case"), _LABELS),
+        (
+            "pod-supervisor-label",
+            _labelled(pod, {**labels, "openshell.ai/boundary-role": "supervisor"}),
+            _LABELS,
+        ),
+        (
+            "pod-gateway-labels",
+            _labelled(
+                pod,
+                {
+                    **labels,
+                    "app.kubernetes.io/name": "openshell",
+                    "app.kubernetes.io/instance": "openshell",
+                },
+            ),
+            _LABELS,
+        ),
+        ("pod-other-role", _labelled(pod, {**labels, "heartwood.role": "worker"}), _LABELS),
+        (
+            "pod-without-role",
+            _labelled(pod, {k: v for k, v in labels.items() if k != "heartwood.role"}),
+            _LABELS,
+        ),
+        ("pod-without-labels", _changed(pod, "metadata.labels"), _LABELS),
+        ("pod-other-user", _changed(pod, "spec.securityContext.runAsUser", 10001), _USER),
+        ("pod-other-group", _changed(pod, "spec.securityContext.runAsGroup", 10001), _USER),
+        ("pod-without-fs-group", _changed(pod, "spec.securityContext.fsGroup"), _USER),
+        (
+            "pod-merged-groups",
+            _changed(pod, "spec.securityContext.supplementalGroupsPolicy", "Merge"),
+            _USER,
+        ),
+        (
+            "pod-default-group-policy",
+            _changed(pod, "spec.securityContext.supplementalGroupsPolicy"),
+            _USER,
+        ),
+        (
+            "pod-supplemental-group",
+            _changed(pod, "spec.securityContext.supplementalGroups", [10001]),
+            _USER,
+        ),
+        (
+            "pod-container-user",
+            _changed(pod, f"{_CONTAINER}.securityContext.runAsUser", 10001),
+            _USER,
+        ),
+        (
+            "pod-container-group",
+            _changed(pod, f"{_CONTAINER}.securityContext.runAsGroup", 10001),
+            _USER,
+        ),
+        (
+            "pod-empty-dir-volume",
+            _changed(pod, "spec.volumes.1", {"name": "v", "emptyDir": {}}),
+            _VOLUMES,
         ),
         ("pod-root", _changed(pod, "spec.securityContext.runAsNonRoot"), _SECURITY),
         (
@@ -845,6 +1015,8 @@ _SOURCE = {"kind": "PersistentVolumeClaim", "name": "openshell-data-openshell-0"
     ("document", "message"),
     [
         pytest.param(_claim(), None, id="claim"),
+        pytest.param(_gateway_claim("inputs"), None, id="gateway-inputs-claim"),
+        pytest.param(_gateway_claim("skills"), None, id="gateway-skills-claim"),
         pytest.param(_claim("inputs"), _CLAIM, id="claim-other-name"),
         pytest.param(
             _changed(_claim(), "spec.storageClassName", "standard"), _CLAIM, id="claim-other-class"
@@ -895,6 +1067,7 @@ def test_staging_shape_admits_exec_into_staging_pods_only(cluster: Cluster) -> N
     assert code == 0, error
     for arguments in (
         ("exec", "other-probe", "--", "/agnhost", "help"),
+        ("exec", _WORKLOAD_POD, "--", "/agnhost", "help"),
         ("attach", "hw-staging-probe"),
         ("port-forward", "pod/hw-staging-probe", ":8080"),
     ):

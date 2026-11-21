@@ -68,6 +68,7 @@ class Platform:
                 quota={"pods": "20"},
                 container_defaults={"cpu": "500m"},
                 container_default_requests={"cpu": "100m"},
+                platform_ca="-----BEGIN CERTIFICATE-----\n",
             ),
             self.registry.session_ids,
         )
@@ -306,6 +307,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "quota": {"pods": "20"},
             "container_defaults": {"cpu": "500m"},
             "container_default_requests": {"cpu": "100m"},
+            "platform_ca_file": "/etc/heartwood-control/platform-ca/ca.crt",
         },
         "projects": [project],
     }

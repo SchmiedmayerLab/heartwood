@@ -69,6 +69,15 @@ def _settings(root: Path, **changes: object) -> KubernetesWorkerDeployment:
     )
 
 
+@pytest.mark.parametrize("workspace", ["hw-staging", "hw-staging-a"])
+def test_a_workspace_named_like_a_staging_pod_is_refused(tmp_path: Path, workspace: str) -> None:
+    # A workload pod of such a workspace would be named `hw-staging-*`, the only pod name
+    # the platform admits exec sessions into.
+    with pytest.raises(ValueError, match="reserved for staging pods"):
+        _settings(tmp_path, workspace=workspace)
+    assert _settings(tmp_path, workspace="hw-stagings").workspace == "hw-stagings"
+
+
 def _intent() -> WorkerAttemptIntent:
     return WorkerAttemptIntent(
         project_id=uuid4(),
@@ -430,6 +439,51 @@ def _workload(objects: Objects) -> dict[str, Any]:
 
 def _supervisor(objects: Objects) -> dict[str, Any]:
     return _named(objects, "pod/os-supervisor-")
+
+
+_CA_BUNDLE = {
+    "name": "openshell-additional-ca",
+    "configMap": {
+        "defaultMode": 292,
+        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+        "name": "openshell-additional-ca-dc5cbc21a452-6e07edecaad1ecac6eff6a7cf2",
+    },
+}
+
+
+def test_the_supervisor_may_mount_the_drivers_certificate_bundle(
+    admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _objects(admission)
+    _supervisor(objects)["spec"]["volumes"].append(copy.deepcopy(_CA_BUNDLE))
+    _serve(admission, monkeypatch, objects)
+    admission.inspect_worker(_SANDBOX_ID)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("name",), "other"),
+        (("configMap", "name"), "openshell-config"),
+        (("configMap", "name"), "kube-root-ca.crt"),
+        (("configMap", "items"), _DELETE),
+        (("configMap", "items"), [{"key": "gateway.toml", "path": "ca.crt"}]),
+        (("configMap", "items", 0, "path"), "../ca.crt"),
+    ],
+)
+def test_any_other_config_map_volume_of_the_supervisor_is_refused(
+    admission: KubernetesWorkerAdmission,
+    monkeypatch: pytest.MonkeyPatch,
+    path: tuple[Any, ...],
+    value: object,
+) -> None:
+    objects = _objects(admission)
+    volume = copy.deepcopy(_CA_BUNDLE)
+    _change(volume, path, value)
+    _supervisor(objects)["spec"]["volumes"].append(volume)
+    _serve(admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match="supervisor confinement does not match"):
+        admission.inspect_worker(_SANDBOX_ID)
 
 
 def _control(objects: Objects) -> dict[str, Any]:

@@ -42,13 +42,22 @@ spec:
         + (has(object.spec.initContainers) ? object.spec.initContainers : [])
         + (has(object.spec.ephemeralContainers) ? object.spec.ephemeralContainers : [])
   validations:
+    # Network policies select pods by label, so a staging pod carries only the labels the
+    # gateway gives it and no label that a policy with allowances selects.
+    - expression: >-
+        !variables.pod || (has(object.metadata.name) && object.metadata.name.startsWith('hw-staging-')
+        && has(object.metadata.labels)
+        && object.metadata.labels.all(k, k in ['heartwood.project', 'heartwood.attempt', 'heartwood.role'])
+        && 'heartwood.role' in object.metadata.labels
+        && object.metadata.labels['heartwood.role'] == 'staging')
+      message: a staging pod is named hw-staging-* and carries only the labels heartwood.project, heartwood.attempt and heartwood.role with the role staging
     - expression: >-
         !variables.pod || (has(object.spec.serviceAccountName) && object.spec.serviceAccountName == 'hw-staging'
         && has(object.spec.automountServiceAccountToken) && object.spec.automountServiceAccountToken == false)
       message: a staging pod uses the ServiceAccount hw-staging without a mounted token
     - expression: >-
-        !variables.pod || variables.containers.all(c, c.image == {{ .Values.sessions.stagingImage | squote }})
-      message: a staging pod runs only the staging image
+        !variables.pod || variables.containers.all(c, c.image in {{ .Values.sessions.stagingImages | toJson }})
+      message: a staging pod runs only a staging image
     - expression: >-
         !variables.pod || (has(object.spec.securityContext)
         && has(object.spec.securityContext.runAsNonRoot) && object.spec.securityContext.runAsNonRoot
@@ -66,6 +75,17 @@ spec:
         && (!has(c.securityContext.seccompProfile) || c.securityContext.seccompProfile.type == 'RuntimeDefault')))
       message: a staging pod runs as a non-root user with the default seccomp profile, a read-only root file system and no capabilities
     - expression: >-
+        !variables.pod || (has(object.spec.securityContext)
+        && has(object.spec.securityContext.runAsUser) && object.spec.securityContext.runAsUser == 10002
+        && has(object.spec.securityContext.runAsGroup) && object.spec.securityContext.runAsGroup == 10002
+        && has(object.spec.securityContext.fsGroup) && object.spec.securityContext.fsGroup == 10002
+        && !has(object.spec.securityContext.supplementalGroups)
+        && has(object.spec.securityContext.supplementalGroupsPolicy)
+        && object.spec.securityContext.supplementalGroupsPolicy == 'Strict'
+        && variables.containers.all(c, !has(c.securityContext)
+        || (!has(c.securityContext.runAsUser) && !has(c.securityContext.runAsGroup))))
+      message: a staging pod runs as user and group 10002 with no other group and the supplemental group policy Strict
+    - expression: >-
         !variables.pod || variables.containers.all(c, !has(c.envFrom)
         && (!has(c.env) || c.env.all(e, !has(e.valueFrom))))
       message: a staging pod takes no environment value from another object or field
@@ -75,9 +95,8 @@ spec:
       message: a staging pod names no node, priority class or runtime class
     - expression: >-
         !variables.pod || !has(object.spec.volumes) || object.spec.volumes.all(v,
-        has(v.emptyDir) || (has(v.persistentVolumeClaim)
-        && v.persistentVolumeClaim.claimName.startsWith('hw-attempt-')))
-      message: a staging pod mounts only attempt volume claims and emptyDir volumes
+        has(v.persistentVolumeClaim) && v.persistentVolumeClaim.claimName.startsWith('hw-attempt-'))
+      message: a staging pod mounts only attempt volume claims
     - expression: >-
         !variables.claim || (object.metadata.name.startsWith('hw-attempt-')
         && has(object.spec.storageClassName) && object.spec.storageClassName == 'heartwood-attempt'

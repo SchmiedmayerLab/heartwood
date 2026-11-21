@@ -11,8 +11,9 @@ Fixed ClusterRoles of session namespaces. The control service binds them with
 RoleBindings inside one session namespace, to the subject that the admission policy
 heartwood-control-scope pairs with each role. No principal creates Roles.
 */ -}}
-# Copy of the Role openshell-sandbox of the OpenShell chart 0.1.9, with read access to
-# the session's own Namespace, which that chart grants through a ClusterRole.
+# Copy of the Role openshell-sandbox of the OpenShell chart 0.1.9 with the values in
+# tools/openshell-values.yaml, with read access to the session's own Namespace, which
+# that chart grants through a ClusterRole.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -44,6 +45,11 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [get]
+  # The chart adds this rule with supervisor.network.additionalCaConfigMapName: the
+  # driver creates content-addressed ConfigMaps with the platform CA for supervisor pods.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create]
 ---
 # Copy of the Role openshell-peer of the OpenShell chart 0.1.9.
 apiVersion: rbac.authorization.k8s.io/v1

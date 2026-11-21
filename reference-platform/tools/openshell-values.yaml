@@ -31,6 +31,9 @@ sandboxRuntime:
 supervisor:
   image:
     digest: sha256:f1ec231b5dbe5b6a40c33acb2ac847995aabb959a56134ef6d7d7aa4f43199d3
+  # Supervisors trust the platform CA, which the control service copies into each session namespace.
+  network:
+    additionalCaConfigMapName: platform-ca
 # Heartwood names the image of every sandbox. A sandbox without one cannot start,
 # because this default does not resolve.
 sandbox:

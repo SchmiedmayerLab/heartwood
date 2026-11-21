@@ -147,6 +147,33 @@ def test_control_service_binds_only_the_fixed_cluster_roles(
     assert "subjects" not in binding
 
 
+def test_openshell_sandbox_role_creates_and_reads_config_maps_only(
+    objects: list[dict[str, Any]],
+) -> None:
+    rules = _named(objects, "ClusterRole", "heartwood-openshell-sandbox")["rules"]
+    (rule,) = [rule for rule in rules if "configmaps" in rule["resources"]]
+    assert rule == {"apiGroups": [""], "resources": ["configmaps"], "verbs": ["get", "create"]}
+
+
+def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[str, Any]]) -> None:
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    path = Path(configuration["sessions"]["platform_ca_file"])
+    spec = _named(objects, "StatefulSet", "heartwood-control")["spec"]["template"]["spec"]
+    (volume,) = [
+        item for item in spec["volumes"] if item.get("configMap", {}).get("name") == "platform-ca"
+    ]
+    (mount,) = [
+        item for item in spec["containers"][0]["volumeMounts"] if item["name"] == volume["name"]
+    ]
+
+    assert volume["configMap"]["items"] == [{"key": "ca.crt", "path": path.name}]
+    assert Path(mount["mountPath"]) == path.parent
+    assert mount["readOnly"] is True
+    assert "ca.crt" in _named(objects, "ConfigMap", "platform-ca")["data"]
+
+
 @pytest.mark.parametrize(
     "name", ["heartwood-control-scope", "heartwood-staging-shape", "heartwood-session-services"]
 )
@@ -154,6 +181,55 @@ def test_admission_policies_fail_closed_and_deny(objects: list[dict[str, Any]], 
     assert _named(objects, "ValidatingAdmissionPolicy", name)["spec"]["failurePolicy"] == "Fail"
     binding = _named(objects, "ValidatingAdmissionPolicyBinding", name)
     assert binding["spec"] == {"policyName": name, "validationActions": ["Deny"]}
+
+
+@pytest.mark.parametrize(
+    ("images", "listed"),
+    [
+        ([], "[]"),
+        (
+            ["registry.example.test/worker@sha256:" + "3" * 64],
+            '["registry.example.test/worker@sha256:' + "3" * 64 + '"]',
+        ),
+        (
+            [
+                "registry.example.test/worker@sha256:" + "3" * 64,
+                "registry.example.test/worker@sha256:" + "4" * 64,
+            ],
+            '["registry.example.test/worker@sha256:'
+            + "3" * 64
+            + '","registry.example.test/worker@sha256:'
+            + "4" * 64
+            + '"]',
+        ),
+    ],
+)
+def test_staging_pods_run_only_the_listed_images(images: list[str], listed: str) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set-json", f"sessions.stagingImages={json.dumps(images)}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    objects = [item for item in yaml.safe_load_all(result.stdout) if item is not None]
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-staging-shape")
+    (rule,) = [
+        item["expression"]
+        for item in policy["spec"]["validations"]
+        if item["message"] == "a staging pod runs only a staging image"
+    ]
+    assert rule == f"!variables.pod || variables.containers.all(c, c.image in {listed})"
+
+
+@pytest.mark.parametrize("image", ["registry.example.test/worker:latest", ""])
+def test_staging_images_are_pinned_by_digest(image: str) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set-json", f"sessions.stagingImages={json.dumps([image])}"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "/sessions/stagingImages/0" in result.stderr
 
 
 def test_credentials_are_generated_for_each_installation() -> None:
@@ -236,6 +312,36 @@ def test_installation_needs_the_images_without_a_default(given: str, missing: st
     result = subprocess.run([*_BASE, *_API_SERVER, "--set", given], capture_output=True, text=True)
     assert result.returncode != 0
     assert missing in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("repository", "accepted"),
+    [
+        ("", True),
+        ("kind-registry:5000/openshell", True),
+        ("registry.example.test/mirror/openshell", True),
+        ("registry.example.test/openshell/", False),
+        ("registry.example.test/openshell:0.1.9", False),
+        ("registry.example.test/openshell@sha256:" + "2" * 64, False),
+    ],
+)
+def test_sandbox_image_repository_is_passed_to_the_control_service(
+    repository: str, accepted: bool
+) -> None:
+    result = subprocess.run(
+        [*_TEMPLATE, "--set", f"images.openshellRepository={repository}"],
+        capture_output=True,
+        text=True,
+    )
+    if not accepted:
+        assert result.returncode != 0
+        assert "/images/openshellRepository" in result.stderr
+        return
+    assert result.returncode == 0, result.stderr
+    objects = [item for item in yaml.safe_load_all(result.stdout) if item is not None]
+    config = _named(objects, "ConfigMap", "heartwood-control")
+    sessions = json.loads(config["data"]["configuration.json"])["sessions"]
+    assert sessions["openshell_repository"] == repository
 
 
 def test_control_service_configuration_holds_the_registry(objects: list[dict[str, Any]]) -> None:

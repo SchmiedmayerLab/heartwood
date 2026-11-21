@@ -51,9 +51,9 @@ def _probe(namespace: str, image: str) -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def probes(cluster: Cluster, staging_image: str) -> Iterator[None]:
+def probes(cluster: Cluster, probe_image: str) -> Iterator[None]:
     namespaces = ("default", "heartwood-sessions")
-    cluster.apply(*(_probe(namespace, staging_image) for namespace in namespaces))
+    cluster.apply(*(_probe(namespace, probe_image) for namespace in namespaces))
     for namespace in namespaces:
         ready = cluster.kubectl(
             "wait", f"--namespace={namespace}", "--for=condition=Ready", "pod/hw-network-probe"

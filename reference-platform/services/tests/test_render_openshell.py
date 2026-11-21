@@ -116,3 +116,25 @@ def test_other_chart_archive_fails(tmp_path: Path) -> None:
 
     with pytest.raises(tool.RenderError, match="chart archive has SHA-256"):
         tool.render(archive)
+
+
+def test_gateway_passes_the_platform_ca_to_sandbox_supervisors() -> None:
+    objects = {(item["kind"], item["metadata"]["name"]): item for item in _committed()}
+    spec = objects[("StatefulSet", "openshell")]["spec"]["template"]["spec"]
+    (volume,) = [item for item in spec["volumes"] if item["name"] == "additional-ca-source"]
+    (mount,) = [
+        item
+        for item in spec["containers"][0]["volumeMounts"]
+        if item["name"] == "additional-ca-source"
+    ]
+    configuration = objects[("ConfigMap", "openshell-config")]["data"]["gateway.toml"]
+
+    assert volume["configMap"] == {
+        "name": "platform-ca",
+        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+    }
+    assert mount["mountPath"] == "/etc/openshell-tls/additional-ca-source/ca.crt"
+    assert (
+        '[openshell.supervisor.network]\nadditional_ca_bundle = "/etc/openshell-tls/'
+        'additional-ca-source/ca.crt"' in configuration
+    )
