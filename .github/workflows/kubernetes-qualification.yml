@@ -115,6 +115,11 @@ jobs:
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-platform-services:candidate)"
           echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
+      - name: Push the hosted gateway image to the cluster registry
+        run: |
+          image="$(bash reference-platform/cluster/push-image.sh heartwood \
+            heartwood-hosted-gateway:qualification)"
+          echo "HOSTED_GATEWAY_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Build the gateway and controller images and push them with the worker and OpenShell images
         run: |
           python3 deploy/qualify-kubernetes-worker.py images --cluster heartwood \
@@ -138,6 +143,8 @@ jobs:
           --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
           --set "images.openshellGateway=${GATEWAY_IMAGE}"
           --set "images.openshellRepository=${OPENSHELL_REPOSITORY}"
+          --set "images.hostedGateway=${HOSTED_GATEWAY_IMAGE}"
+          --set "hub.worker.image=${WORKER_IMAGE}"
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
       - name: Test the installed chart
         working-directory: reference-platform/services

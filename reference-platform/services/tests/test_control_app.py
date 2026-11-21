@@ -33,6 +33,7 @@ from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
+from test_hosted import HOSTED
 
 from heartwood.schemas import PlatformLaunchContext
 
@@ -40,6 +41,7 @@ _HUB = {"Authorization": "Bearer hub-token"}
 _ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
 _BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
 _NOW = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+
 _OBJECTS = (
     Path(__file__).resolve().parents[2]
     / "chart"
@@ -317,6 +319,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "certificate_file": "/etc/heartwood-control/tls/tls.crt",
             "key_file": "/etc/heartwood-control/tls/tls.key",
         },
+        "hosted": HOSTED,
         "sessions": {
             "control_namespace": "heartwood-platform",
             "control_account": "heartwood-control",

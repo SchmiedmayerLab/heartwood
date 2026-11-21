@@ -17,6 +17,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from heartwood.schemas import PlatformLaunchContext
+from heartwood_platform.control.hosted import HostedGateway
 from heartwood_platform.control.keycloak import project_client
 from heartwood_platform.control.registry import Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession
@@ -85,14 +86,16 @@ class LaunchService:
         platform_id: str,
         redirect_uri_template: str,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        hosted: HostedGateway | None = None,
     ) -> None:
-        """Launch sessions of one platform."""
+        """Launch sessions of one platform; ``hosted`` renders their gateways' files."""
         self._registry = registry
         self._clients = clients
         self._sessions = sessions
         self._platform_id = platform_id
         self._redirect_uri_template = redirect_uri_template
         self._clock = clock
+        self._hosted = hosted
         # A launch waits for the session's gateway. A deletion that ran meanwhile
         # would leave what the launch writes afterwards, so both hold one lock for
         # each researcher and project.
@@ -155,11 +158,23 @@ class LaunchService:
             gateway_service_account=provisioned.gateway_account,
             openshell_endpoint=provisioned.openshell_endpoint,
         )
+        hosted = (
+            {}
+            if self._hosted is None
+            else self._hosted.files(
+                session=session.id,
+                subject=subject,
+                client_id=launch.client_id,
+                namespace=launch.namespace,
+                launch_context=launch.launch_context,
+            )
+        )
         # The gateway pod mounts this Secret. Only it carries credentials; the reply
         # to the spawner carries none.
         self._sessions.write_gateway_secret(
             session.id,
             {
+                **hosted,
                 "launch.json": launch.model_dump_json(),
                 "keycloak-client-secret": self._clients.client_secret(project),
                 **{

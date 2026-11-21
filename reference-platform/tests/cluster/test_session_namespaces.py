@@ -78,7 +78,7 @@ def _names(cluster: Cluster, kind: str, namespace: str) -> set[str]:
 
 def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[int, Any]:
     token = cluster.kubectl(
-        "create", "token", "hub", f"--namespace={_SESSIONS}", "--audience=heartwood-control"
+        "create", "token", "hub", f"--namespace={_PLATFORM}", "--audience=heartwood-control"
     )
     assert token.returncode == 0, token.stderr
     output = curl(
@@ -102,13 +102,7 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
 @pytest.fixture(scope="module")
 def launch(cluster: Cluster, probe_image: str) -> Iterator[dict[str, Any]]:
     """Launch one session and delete every session of the module afterwards."""
-    account = {
-        "apiVersion": "v1",
-        "kind": "ServiceAccount",
-        "metadata": {"name": "hub", "namespace": _SESSIONS},
-    }
-    existed = cluster.kubectl("get", f"--namespace={_SESSIONS}", "serviceaccount/hub")
-    cluster.apply(account, _pod("hw-session-probe", probe_image, {}))
+    cluster.apply(_pod("hw-session-probe", probe_image, {}))
     ready = cluster.kubectl(
         "wait", f"--namespace={_SESSIONS}", "--for=condition=Ready", "pod/hw-session-probe"
     )
@@ -128,8 +122,6 @@ def launch(cluster: Cluster, probe_image: str) -> Iterator[dict[str, Any]]:
         "hw-session-gateway",
         "hw-session-other",
     )
-    if existed.returncode != 0:
-        cluster.kubectl("delete", f"--namespace={_SESSIONS}", "serviceaccount/hub")
 
 
 def test_namespace_is_restricted_with_quota_limits_and_default_deny(
@@ -219,6 +211,10 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "openshell-tls.crt",
         "openshell-tls.key",
         "platform-ca.crt",
+        "deployment.toml",
+        "kubeconfig",
+        "worker-policy.json",
+        "launch-context.json",
     }
     platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
     assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]

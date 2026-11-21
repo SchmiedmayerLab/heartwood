@@ -36,6 +36,8 @@ release, and the default scope lists below repeat that release's defaults.
 {{- range $service := list "data" "jobs" -}}
 {{- $clients = append $clients (dict "clientId" (printf "heartwood-%s" $service) "bearerOnly" true) -}}
 {{- end -}}
+{{- /* The Hub signs researchers in with the authorization code flow. */ -}}
+{{- $clients = append $clients (dict "clientId" "heartwood-hub" "publicClient" false "secret" "${HEARTWOOD_HUB_CLIENT_SECRET}" "standardFlowEnabled" true "directAccessGrantsEnabled" false "serviceAccountsEnabled" false "redirectUris" (list (printf "%s/hub/oauth_callback" .Values.hub.publicOrigin)) "defaultClientScopes" $defaults) -}}
 {{- /* The command line client signs in with the device authorization grant. */ -}}
 {{- $clients = append $clients (dict "clientId" "heartwood-cli" "publicClient" true "standardFlowEnabled" false "directAccessGrantsEnabled" false "attributes" (dict "oauth2.device.authorization.grant.enabled" "true") "defaultClientScopes" $defaults "optionalClientScopes" $projectScopes) -}}
 {{- $serviceAccount := dict "username" "service-account-heartwood-control" "enabled" true "serviceAccountClientId" "heartwood-control" "clientRoles" (dict "realm-management" (list "manage-clients")) -}}

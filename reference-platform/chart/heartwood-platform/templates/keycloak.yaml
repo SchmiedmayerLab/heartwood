@@ -148,6 +148,11 @@ spec:
                 secretKeyRef:
                   name: heartwood-control-keycloak
                   key: client-secret
+            - name: HEARTWOOD_HUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: heartwood-hub-keycloak
+                  key: client-secret
             {{- range $index, $researcher := .Values.researchers }}
             - name: HEARTWOOD_RESEARCHER_PASSWORD_{{ $index }}
               valueFrom:

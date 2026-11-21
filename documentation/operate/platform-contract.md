@@ -31,7 +31,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
 | [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current; `heartwood gateway serve` installs a planning service only from a deployment manifest's `[planning]` table |
 | Verified OpenID Connect identity of one researcher per gateway, with `identity-proxy` ingress | Current, implemented and tested locally with a synthetic provider |
-| Launch of hosted per-project gateways by a platform | Unavailable |
+| Launch of hosted per-project gateways by a platform | Current in the Kubernetes reference platform in `reference-platform/`, which starts one gateway per researcher and project with JupyterHub; tested on a local cluster without a model route for workers |
 | Realtime voice | Unavailable |
 
 ## Responsibilities
@@ -98,7 +98,7 @@ Releases carry build attestations; separate artifact signatures, software bills 
 |---|---|---|---|
 | Workstation or container | The researcher | The operating system and the launch link | Current |
 | Platform workspace | The platform, in the researcher's workspace | The platform proxy | Current for the Terra terminal and notebook and the Stanford Carina terminal, CI validated |
-| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch unavailable |
+| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch current in the Kubernetes reference platform, tested on a local cluster without a model route for workers |
 
 Gateway shutdown does not stop external jobs or storage charges.
 

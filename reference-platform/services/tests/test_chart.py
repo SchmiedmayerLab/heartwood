@@ -28,7 +28,9 @@ _TEMPLATE += ["--namespace", "heartwood-platform"]
 # The platform services image has no default.
 _SERVICES = "images.platformServices=registry.example.test/services@sha256:" + "0" * 64
 _GATEWAY = "images.openshellGateway=registry.example.test/gateway@sha256:" + "1" * 64
-_IMAGES = ["--set", _SERVICES, "--set", _GATEWAY]
+_HOSTED = "images.hostedGateway=registry.example.test/hosted-gateway@sha256:" + "4" * 64
+_WORKER = "hub.worker.image=registry.example.test/worker@sha256:" + "5" * 64
+_IMAGES = ["--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
 # Without a cluster, Helm cannot read the API server addresses.
 _API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
 _IMAGES += _API_SERVER
@@ -103,7 +105,8 @@ def test_schema_rejects_an_image_without_a_digest() -> None:
 
 def test_pods_meet_the_restricted_pod_security_standard(objects: list[dict[str, Any]]) -> None:
     for name, spec in _pod_specs(objects):
-        assert spec["automountServiceAccountToken"] is (name == "heartwood-control"), name
+        # The control service and the Hub use their ServiceAccount tokens.
+        assert spec["automountServiceAccountToken"] is (name in {"heartwood-control", "hub"}), name
         assert spec["securityContext"]["runAsNonRoot"] is True, name
         assert spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}, name
         for container in spec["containers"] + spec.get("initContainers", []):
@@ -126,7 +129,10 @@ def test_every_platform_namespace_denies_ingress_by_default(
 
 def test_fixed_cluster_roles_grant_no_role_management(objects: list[dict[str, Any]]) -> None:
     roles = [item for item in objects if item["kind"] in {"ClusterRole", "Role"}]
-    assert {role["metadata"]["name"] for role in roles} == _FIXED_ROLES | {"heartwood-control"}
+    assert {role["metadata"]["name"] for role in roles} == _FIXED_ROLES | {
+        "heartwood-control",
+        "heartwood-hub-spawner",
+    }
     for role in roles:
         for rule in role["rules"]:
             assert "*" not in rule["verbs"] + rule["resources"] + rule["apiGroups"]
@@ -264,7 +270,10 @@ def test_credentials_are_generated_for_each_installation() -> None:
             for item in objects
             if item["kind"] == "Secret"
             for key, value in item["data"].items()
+            # The JupyterHub chart's values.yaml key holds its rendered values, which carry
+            # no generated credential.
             if key not in {"username", "access-key"}
+            and f"{item['metadata']['name']}/{key}" != "hub/values.yaml"
         }
 
     first, second = secrets(_render("values-kind.yaml")), secrets(_render("values-kind.yaml"))
@@ -515,7 +524,7 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
     configuration = json.loads(config["data"]["configuration.json"])
     assert configuration["audience"] == "heartwood-control"
     assert configuration["keycloak"]["issuer"].endswith("/realms/heartwood")
-    assert configuration["service_callers"] == ["system:serviceaccount:heartwood-sessions:hub"]
+    assert configuration["service_callers"] == ["system:serviceaccount:heartwood-platform:hub"]
     sessions = configuration["sessions"]
     assert sessions["openshell_gateway_image"].startswith("registry.example.test/gateway@sha256:")
     assert sessions["control_namespace"] == "heartwood-platform"
@@ -532,7 +541,16 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
                     "namespaceSelector": {
                         "matchLabels": {"kubernetes.io/metadata.name": "heartwood-sessions"}
                     }
-                }
+                },
+                {
+                    "podSelector": {
+                        "matchLabels": {
+                            "app.kubernetes.io/name": "jupyterhub",
+                            "app.kubernetes.io/instance": "heartwood-platform",
+                            "app.kubernetes.io/component": "hub",
+                        }
+                    }
+                },
             ],
             "ports": [{"protocol": "TCP", "port": 8443}],
         }
@@ -540,7 +558,7 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
 
 
 def test_installation_needs_the_api_server_addresses() -> None:
-    command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY]
+    command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
