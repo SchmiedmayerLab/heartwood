@@ -112,6 +112,17 @@ def test_an_unreadable_registry_stops_the_publication(monkeypatch: pytest.Monkey
         publish_images._registry_digest("ghcr.io/o/r:tag")
     monkeypatch.setattr(publish_images.subprocess, "run", absent)
     assert publish_images._registry_digest("ghcr.io/o/r:tag") is None
+    for answer in ("NAME_UNKNOWN: repository name not known", "MANIFEST_UNKNOWN: manifest unknown"):
+
+        def unknown(
+            arguments: list[str],
+            answer: str = answer,
+            **_: Any,  # noqa: ANN401
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(arguments, 1, "", f"ERROR: {answer}")
+
+        monkeypatch.setattr(publish_images.subprocess, "run", unknown)
+        assert publish_images._registry_digest("ghcr.io/o/r:tag") is None
 
 
 def test_the_gateway_packaging_of_the_qualification_loads() -> None:
