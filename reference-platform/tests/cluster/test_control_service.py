@@ -221,7 +221,7 @@ def test_launch_outside_the_registry_is_refused(cluster: Cluster) -> None:
     assert not _redirect_uri_is_registered(
         cluster,
         "other",
-        f"http://proxy-public.{_SESSIONS}.svc.cluster.local/user/{researcher(_SECOND)}/other/oauth_callback",
+        f"https://proxy-public.{_SESSIONS}.svc.cluster.local/user/{researcher(_SECOND)}/other/oauth_callback",
     )
 
 

@@ -57,8 +57,8 @@ The platform is for synthetic and open data only.
 | Keycloak | One Deployment that serves HTTPS on port 8443 and imports the realm `heartwood` at its first start |
 | Control service | One StatefulSet that serves HTTPS on port 8443, with the project registry, the launch interface and the provisioning of session namespaces |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
-| JupyterHub | The Hub, its proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
-| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls` and `heartwood-control-tls` with the serving certificates of Keycloak and the control service |
+| JupyterHub | The Hub, its HTTPS proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls` and `proxy-tls` with the serving certificates of Keycloak, the control service and the Hub's proxy |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services` and `heartwood-hub-pods` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -200,6 +200,14 @@ Researchers sign in to the Hub through Keycloak with the client `heartwood-hub`,
 The Hub trusts the platform CA alone for Keycloak and the control service, without the certificate directory that libcurl reads by default, and its user name is the researcher identifier of the subject of the researcher's sign-in.
 Every account of the realm may sign in; the control service decides which projects a researcher may start.
 
+The proxy serves researchers only over HTTPS, on port 443 of the Service `proxy-public`, with the certificate in the Secret `proxy-tls`.
+The chart signs that certificate with the platform CA for the names of the Services `proxy-public` and `proxy-api`, in the same four forms as Keycloak's, and for the host of `hub.publicOrigin`, which must be an `https` origin; a change of these names replaces the certificate at the next upgrade.
+The Service has no HTTP port, and no connection reaches the proxy's HTTP port, which would only redirect to HTTPS.
+The proxy serves its API on port 8001 over HTTPS with the same certificate, and the Hub calls it at `proxy-api` trusting the platform CA alone.
+Clients of the proxy, such as the cluster tests, verify it against the platform CA alone, and a researcher's browser opens it only when it trusts the platform CA.
+The proxy forwards requests to the Hub on port 8081 and to the gateways on port 8888 without TLS, inside the pod network, where the network policies admit only the proxy and the Hub.
+JupyterHub serves its own API over TLS only with its internal TLS, which also requires TLS of each server and a Secret per server.
+
 Each project of a researcher is one named server whose name is the project.
 The spawn form offers a server only the project of its name, after the Hub asks the control service for the researcher's projects with a projected token of the audience `heartwood-control`.
 Before each start the Hub asks the control service to prepare the session, and it refuses the start when the researcher is not a member of the project.
@@ -274,7 +282,7 @@ PostgreSQL accepts connections from Keycloak.
 Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service and from its bootstrap Job.
 The control service accepts connections from `heartwood-sessions` and from the Hub.
 versitygw accepts connections from its bootstrap Job.
-The proxy accepts researchers' connections on port 8000 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
+The proxy accepts researchers' HTTPS connections on port 8443 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
 
 ### Session Roles and Admission Policies
