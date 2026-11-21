@@ -146,7 +146,7 @@ def _count_task(operation: str, **changes: Any) -> dict[str, Any]:  # noqa: ANN4
 @pytest.fixture(scope="module")
 def fixture_object(cluster: Cluster) -> None:
     with store(cluster) as objects:
-        objects.put(_BUCKET, "jobs-fixture/cohort.csv", b"id\n1\n2\n3\n")
+        objects.put(_BUCKET, "datasets/jobs-fixture/cohort.csv", b"id\n1\n2\n3\n")
 
 
 @pytest.mark.usefixtures("fixture_object")
