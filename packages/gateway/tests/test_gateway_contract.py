@@ -525,6 +525,7 @@ def test_openhands_conversation_receives_exactly_the_selected_skills(
         "aggregate-export",
         "baseline-model",
         "omop-cohort-summary",
+        "workload-prediction",
         "community-summary",
     }
 
@@ -3614,7 +3615,7 @@ def test_rest_manages_skill_settings(
     removed = rest.handle(RestRequest(method="DELETE", path="/settings/skills/community-summary"))
 
     assert listed.status_code == 200
-    assert len(cast(list[object], listed.body["skills"])) == 3
+    assert len(cast(list[object], listed.body["skills"])) == 4
     assert inspected.body["name"] == "community-summary"
     assert installed.status_code == 200
     assert refreshed.body == {"skills": []}

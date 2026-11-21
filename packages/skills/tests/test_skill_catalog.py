@@ -153,6 +153,7 @@ def test_offline_tuf_catalog_refreshes_and_downloads_immutable_targets(tmp_path:
         "aggregate-export",
         "baseline-model",
         "omop-cohort-summary",
+        "workload-prediction",
     ]
 
     entry = snapshot.entry("aggregate-export")

@@ -20,6 +20,16 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+_PATH_PART = r"[A-Za-z0-9_-][A-Za-z0-9._-]*"
+_UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+EVIDENCE_REFERENCE_PATTERN = (
+    rf"^(?:project://{_PATH_PART}(?:/{_PATH_PART})*|experiment-run:{_UUID}"
+    r"|observation:[a-f0-9]{64})$"
+)
+
+# The final @ separates the revision from a nonblank PlanningReference record ID.
+_PREDICTION_REFERENCE = r"^prediction:\s*\S[\s\S]*@[1-9][0-9]*$"
+
 Text = Annotated[str, Field(min_length=1, pattern=r"\S")]
 Revision = Annotated[int, Field(ge=1)]
 Sha256 = Annotated[
@@ -57,12 +67,38 @@ class PlanningReference(_PlanningRecord):
 
 
 class WorkloadEvidence(_PlanningRecord):
-    """Project-local evidence or researcher correction; absent measurements remain unknown."""
+    """Project-local evidence or researcher correction; absent measurements remain unknown.
+
+    A reference names a project file (``project://PATH``), a local experiment
+    (``experiment-run:UUID``), a prediction revision (``prediction:ID@REVISION``),
+    or a platform observation (``observation:SHA256``).
+    Predictions and platform observations resolve within the active project launch context.
+    """
 
     evidence_id: Text
     project_context_id: Text
     kind: Literal["prior-run", "researcher-input", "sample-run", "correction"]
-    reference: Text
+    reference: (
+        Annotated[
+            str,
+            Field(
+                max_length=512,
+                pattern=EVIDENCE_REFERENCE_PATTERN,
+                json_schema_extra={
+                    "pattern": EVIDENCE_REFERENCE_PATTERN.removesuffix("$") + "(?![\\s\\S])"
+                },
+            ),
+        ]
+        | Annotated[
+            str,
+            Field(
+                pattern=_PREDICTION_REFERENCE,
+                json_schema_extra={
+                    "pattern": _PREDICTION_REFERENCE.removesuffix("$") + "(?![\\s\\S])"
+                },
+            ),
+        ]
+    )
     description: Text
     observed_at: AwareDatetime
     content_sha256: Sha256 | None = None

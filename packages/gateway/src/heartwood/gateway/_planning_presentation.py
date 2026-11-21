@@ -57,12 +57,18 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
             )
             lines.append(f"    Uncertainty: {prediction.uncertainty}")
             lines.extend(_texts("    Assumption", prediction.assumptions))
+            lines.extend(
+                f"    Evidence {item.evidence_id} ({item.kind}): {item.reference}; "
+                f"{item.description}"
+                for item in prediction.evidence
+            )
             for element, review in zip(prediction.elements, revision.elements, strict=True):
                 lines.append(f"    {_review(review)}")
                 lines.extend(
                     f"      {item.metric}: {_quantity(item)}; {item.uncertainty}"
                     for item in element.quantities
                 )
+                lines.extend(_texts("      Evidence", element.evidence_ids))
                 lines.extend(_texts("      Assumption", element.assumptions))
             overview = revision.overview
             lines.extend(
@@ -81,7 +87,9 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
             )
             lines.extend(
                 f"    Operation {item.operation_id}: {item.status}; observed {item.observed_at}"
-                for item in overview.operations
+                f"; {item.service_id} run {item.backend_operation_ref}; "
+                f"{item.platform_record_ref}; {item.reference}"
+                for item in revision.observation_evidence
             )
             states = {item.estimate_id: item for item in revision.estimates}
             for estimate in revision.overview.estimates:
@@ -108,7 +116,9 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
         for row in plan.comparison:
             denomination = "" if row.comparable else "; another denomination, not comparable"
             lines.append(
-                f"  Compare revision {row.prediction.revision}: {_cost(row.total)} with "
+                f"  Compare prediction {row.prediction.record_id}, "
+                f"revision {row.prediction.revision}, estimate {row.estimate_id}: "
+                f"{_cost(row.total)} with "
                 f"{', '.join(row.runtime_profile_refs)}; {row.state}{denomination}"
             )
     lines.extend(

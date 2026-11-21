@@ -67,15 +67,16 @@ describe("project planning", () => {
       name: "Estimate comparison",
     });
     expect(comparison).toHaveTextContent(
-      "Revision 1: 24.7 USD (from 18.54 USD to 37.05 USD), complete coverage",
+      "Prediction cohort-prediction, revision 1, estimate est-fd5a28fae8fd16a5: 24.7 USD (from 18.54 USD to 37.05 USD), complete coverage",
     );
     expect(comparison).toHaveTextContent(
-      "Revision 2: 22.5 USD (from 15.9 USD to 33.75 USD), complete coverage",
+      "Prediction cohort-prediction, revision 2, estimate est-b2c74310e784c1ab: 22.5 USD (from 15.9 USD to 33.75 USD), complete coverage",
     );
     const revised = screen.getByRole("region", { name: "Revision 2" });
     expect(revised).toHaveTextContent(
       "batch (batch, synthetic-batch-gpu): requires review; platform authorization not requested",
     );
+    expect(revised).toHaveTextContent("prediction:cohort-prediction@1");
     expect(revised).toHaveTextContent("a budget changed since");
     expect(revised).toHaveTextContent(
       "Uncertainty: Batch duration depends on input sizes not yet measured at full scale.",
@@ -96,6 +97,52 @@ describe("project planning", () => {
       ),
     ).toHaveLength(2);
     expect(screen.getByText(admissionNotice)).toBeInTheDocument();
+  });
+
+  it("identifies two first-revision alternatives with the same profiles", async () => {
+    const view = structuredClone(projection);
+    const [first, second] = view.plans?.[0]?.comparison ?? [];
+    if (!first || !second) throw new Error("Missing synthetic comparison");
+    second.prediction = { record_id: "pilot", revision: 1 };
+    second.runtime_profile_refs = first.runtime_profile_refs;
+    render(<ProjectPlanning client={client(view)} />);
+    fireEvent.click(await screen.findByText("Research Planning"));
+
+    const comparison = screen.getByRole("region", {
+      name: "Estimate comparison",
+    });
+    expect(comparison).toHaveTextContent(
+      "Prediction cohort-prediction, revision 1, estimate est-fd5a28fae8fd16a5: 24.7 USD",
+    );
+    expect(comparison).toHaveTextContent(
+      "Prediction pilot, revision 1, estimate est-b2c74310e784c1ab: 22.5 USD",
+    );
+  });
+
+  it("shows the cited platform observation on the corrected revision", async () => {
+    const revised = structuredClone(projection);
+    const second = revised.plans?.[0]?.revisions[1];
+    const correction = second?.overview.prediction.evidence?.find(
+      (item) => item.kind === "correction",
+    );
+    if (!second || !correction) throw new Error("Missing synthetic correction");
+    const reference = "observation:" + "a".repeat(64);
+    correction.reference = reference;
+    second.observation_evidence = [
+      {
+        operation_id: "batch",
+        service_id: "jobs",
+        backend_operation_ref: "run-2",
+        status: "running",
+        observed_at: "2026-07-01T00:06:00Z",
+        platform_record_ref: "report-6",
+        reference,
+      },
+    ];
+    render(<ProjectPlanning client={client(revised)} />);
+    fireEvent.click(await screen.findByText("Research Planning"));
+    const region = screen.getByRole("region", { name: "Revision 2" });
+    expect(region).toHaveTextContent(`jobs run run-2; report-6; ${reference}`);
   });
 
   it("reports a failed read instead of hiding the section", async () => {

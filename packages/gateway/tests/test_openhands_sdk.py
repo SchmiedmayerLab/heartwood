@@ -194,6 +194,7 @@ def test_verified_skills_load_through_openhands_native_loader() -> None:
         "aggregate-export",
         "baseline-model",
         "omop-cohort-summary",
+        "workload-prediction",
     }
 
 

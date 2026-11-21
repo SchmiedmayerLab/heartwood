@@ -881,4 +881,5 @@ def test_candidate_application_install_keeps_bundled_skills_verifiable(tmp_path:
         "aggregate-export",
         "baseline-model",
         "omop-cohort-summary",
+        "workload-prediction",
     }

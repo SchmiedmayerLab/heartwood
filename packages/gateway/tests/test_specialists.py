@@ -121,7 +121,7 @@ def test_catalog_rejects_an_empty_directory(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("specialist_id", "skill_names"),
     [
-        ("research-planner", []),
+        ("research-planner", ["workload-prediction"]),
         ("data-quality-reviewer", ["omop-cohort-summary"]),
         ("cohort-feature-reviewer", ["omop-cohort-summary"]),
         ("statistical-reviewer", ["baseline-model"]),
@@ -447,7 +447,12 @@ def test_specialist_skills_are_loaded_from_their_own_directories() -> None:
     catalog = _catalog()
 
     skills = {skill.name: skill for role in catalog.roles for skill in role.verified_skills}
-    assert set(skills) == {"aggregate-export", "baseline-model", "omop-cohort-summary"}
+    assert set(skills) == {
+        "aggregate-export",
+        "baseline-model",
+        "omop-cohort-summary",
+        "workload-prediction",
+    }
     assert all(
         skill.source == str(_skills_dir() / name / "SKILL.md") for name, skill in skills.items()
     )

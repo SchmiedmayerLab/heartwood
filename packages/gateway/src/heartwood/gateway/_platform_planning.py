@@ -15,6 +15,7 @@ ledger, monitors no spending and submits no work.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import ssl
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -58,6 +59,7 @@ from heartwood.schemas.planning import (
     ElementReview,
     EstimateComparison,
     EstimateState,
+    ObservationEvidence,
     PlanningEstimateRequest,
     PlanningOutcome,
     PlanningProjection,
@@ -114,7 +116,7 @@ class PlanningRecordError(ValueError):
 
 
 class PlanningStateError(RuntimeError):
-    """The local planning journal is damaged and needs integrity recovery."""
+    """The local planning journal requires operator attention before it can be used."""
 
 
 class PlanningNotOfferedError(RuntimeError):
@@ -354,7 +356,7 @@ class PlanningJournal:
             if not check(_entries(objects)):
                 raise _RepeatError
             return {
-                "schema_version": "heartwood.planning-entry.v1",
+                "schema_version": "heartwood.planning-entry.v2",
                 "kind": kind,
                 "record": record.model_dump(mode="json"),
             }
@@ -367,15 +369,48 @@ class PlanningJournal:
             raise PlanningStateError("Planning records require integrity recovery") from None
 
 
+def _legacy_prediction(value: object) -> bool:
+    """Distinguish valid free-text v1 references from a damaged prediction."""
+    if not isinstance(value, dict) or not isinstance(value.get("evidence"), list):
+        return False
+    evidence = []
+    for item in value["evidence"]:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("reference"), str)
+            or not item["reference"].strip()
+        ):
+            return False
+        evidence.append({**item, "reference": "project://legacy"})
+    try:
+        WorkloadPrediction.model_validate_json(json.dumps({**value, "evidence": evidence}))
+    except ValidationError:
+        return False
+    return True
+
+
 def _entries(objects: tuple[dict[str, Any], ...]) -> tuple[_Entry, ...]:
     entries: list[_Entry] = []
     for sequence, item in enumerate(objects, 1):
         model = _KINDS.get(str(item.get("kind")))
-        if item.get("schema_version") != "heartwood.planning-entry.v1" or model is None:
+        version = item.get("schema_version")
+        if (
+            version not in ("heartwood.planning-entry.v1", "heartwood.planning-entry.v2")
+            or model is None
+        ):
             raise PlanningStateError("Persisted planning record is invalid")
         try:
             record = model.model_validate_json(json.dumps(item.get("record")))
         except ValidationError:
+            if (
+                version == "heartwood.planning-entry.v1"
+                and model is WorkloadPrediction
+                and _legacy_prediction(item.get("record"))
+            ):
+                raise PlanningStateError(
+                    "This planning journal uses earlier evidence references. Preserve the journal "
+                    "before starting a new one. See Research Planning in Troubleshooting."
+                ) from None
             raise PlanningStateError("Persisted planning record is invalid") from None
         entries.append(_Entry(sequence, cast(_Record, record)))
     return tuple(entries)
@@ -402,12 +437,21 @@ class PlatformPlanning:
     across threads and processes, and this object's lock guards the service status.
     """
 
-    def __init__(self, binding: PlatformPlanningBinding, *, journal_path: Path) -> None:
+    def __init__(
+        self,
+        binding: PlatformPlanningBinding,
+        *,
+        journal_path: Path,
+        contains_file: Callable[[Path], bool],
+        run_ids: Callable[[], set[str]],
+    ) -> None:
         """Keep planning records in ``journal_path``; the binding's clock judges validity."""
         self.launch = binding.launch
         self.client = binding.client
         self.journal = PlanningJournal(journal_path)
         self.clock = binding.clock
+        self._contains_file = contains_file
+        self._run_ids = run_ids
         self._lock = Lock()
         self._discovery: PlanningDiscovery | None = None
         self._services = PlanningServices(budgets="unchecked", estimates="unchecked")
@@ -434,6 +478,19 @@ class PlatformPlanning:
         if prediction.project_context_id != self.launch.project_context_id:
             raise PlanningRecordError("The prediction belongs to another platform project context")
 
+        runs = {
+            item.reference.removeprefix("experiment-run:")
+            for item in prediction.evidence
+            if item.reference.startswith("experiment-run:")
+        }
+        if runs and not runs <= self._run_ids():
+            raise PlanningRecordError("Experiment run is not recorded in this project")
+        for item in prediction.evidence:
+            if item.reference.startswith("project://") and not self._contains_file(
+                Path(item.reference.removeprefix("project://"))
+            ):
+                raise PlanningRecordError("Evidence path is outside the research project")
+
         def check(entries: tuple[_Entry, ...]) -> bool:
             predictions = _predictions(entries)
             key = _key(prediction.prediction)
@@ -446,17 +503,36 @@ class PlatformPlanning:
                     raise PlanningRecordError(
                         "A later prediction revision must name the one it supersedes"
                     )
-                return True
-            superseded = predictions.get(_key(prediction.supersedes))
-            if superseded is None:
-                raise PlanningRecordError("The superseded prediction revision is not recorded")
-            if (
-                superseded.plan.record_id != prediction.plan.record_id
-                or superseded.plan.revision > prediction.plan.revision
-            ):
-                raise PlanningRecordError(
-                    "A revision must keep its plan and must not lower the plan revision"
-                )
+            else:
+                superseded = predictions.get(_key(prediction.supersedes))
+                if superseded is None:
+                    raise PlanningRecordError("The superseded prediction revision is not recorded")
+                if (
+                    superseded.plan.record_id != prediction.plan.record_id
+                    or superseded.plan.revision > prediction.plan.revision
+                ):
+                    raise PlanningRecordError(
+                        "A revision must keep its plan and must not lower the plan revision"
+                    )
+            cited = {
+                item.reference
+                for item in prediction.evidence
+                if item.reference.startswith("observation:")
+            }
+            if cited and not cited <= {
+                _observation_reference(record)
+                for record in _of(entries, PlatformOperationObservation)
+            }:
+                raise PlanningRecordError("Evidence operation observation is not recorded")
+            prior_predictions = {
+                item.reference
+                for item in prediction.evidence
+                if item.reference.startswith("prediction:")
+            }
+            if prior_predictions and not prior_predictions <= {
+                f"prediction:{name}@{number}" for name, number in predictions
+            }:
+                raise PlanningRecordError("Evidence prediction revision is not recorded")
             return True
 
         self.journal.append(prediction, self._scoped(check))
@@ -621,20 +697,38 @@ class PlatformPlanning:
         with self._lock:
             services = self._services
         outcomes = _service_outcomes(services)
+        observations = tuple(
+            ObservationEvidence(
+                reference=_observation_reference(record),
+                operation_id=record.operation_id,
+                service_id=record.service_id,
+                backend_operation_ref=record.backend_operation_ref,
+                observed_at=record.observed_at,
+                status=record.status,
+                platform_record_ref=record.platform_record_ref,
+            )
+            for record in _of(entries, PlatformOperationObservation)
+        )
         projected: list[PlanProjection] = []
         for plan_id in sorted(plans):
             revisions = sorted(
                 plans[plan_id],
                 key=lambda item: (item.plan.revision, _key(item.prediction)),
             )
-            views: list[PlanRevision] = []
+            by_prediction: dict[tuple[str, int], PlanRevision] = {}
             for prediction in revisions:
-                views.append(_revision(entries, prediction, views, now))
+                parent = (
+                    by_prediction[_key(prediction.supersedes)]
+                    if prediction.supersedes is not None
+                    else None
+                )
+                by_prediction[_key(prediction.prediction)] = _revision(
+                    entries, prediction, parent, now, observations
+                )
+            views = tuple(by_prediction.values())
             outcomes.extend(_revision_outcomes(views[-1]))
             projected.append(
-                PlanProjection(
-                    plan_id=plan_id, revisions=tuple(views), comparison=_comparison(views)
-                )
+                PlanProjection(plan_id=plan_id, revisions=views, comparison=_comparison(views))
             )
         return PlanningProjection(
             offered=True,
@@ -669,7 +763,8 @@ class PlatformPlanning:
             raise PlanningRecordError("The record belongs to another platform project context")
 
         def check(entries: tuple[_Entry, ...]) -> bool:
-            if any(_identity(item.record) == _identity(record) for item in entries):
+            identity = _identity(record)
+            if any(_identity(item.record) == identity for item in entries):
                 if any(item.record == record for item in entries):
                     return False
                 raise PlanningRecordError("A different record with this identity is linked")
@@ -727,45 +822,32 @@ def _next(entries: tuple[_Entry, ...]) -> int:
     return entries[-1].sequence + 1 if entries else 1
 
 
+def _observation_reference(record: PlatformOperationObservation) -> str:
+    content = json.dumps(record.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return "observation:" + hashlib.sha256(content.encode()).hexdigest()
+
+
 def _revision(
     entries: tuple[_Entry, ...],
     prediction: WorkloadPrediction,
-    earlier: Sequence[PlanRevision],
+    previous: PlanRevision | None,
     now: datetime,
+    observations: tuple[ObservationEvidence, ...],
 ) -> PlanRevision:
     """Project one revision; an unchanged element keeps the approval of its last revision."""
     overview = _overview(entries, prediction)
-    reviews = _element_reviews(overview)
-    previous = earlier[-1] if earlier else None
-    elements: list[ElementReview] = []
-    for element in prediction.elements:
-        review = reviews[element.element_id]
-        if review.review == "requires-review" and previous is not None:
-            before = next(
-                (
-                    (item, state)
-                    for item, state in zip(
-                        previous.overview.prediction.elements, previous.elements, strict=True
-                    )
-                    if item.element_id == element.element_id
-                ),
-                None,
-            )
-            if (
-                before is not None
-                and before[0] == element
-                and before[1].review in {"approved", "unchanged-since-approval"}
-            ):
-                review = review.model_copy(
-                    update={
-                        "review": "unchanged-since-approval",
-                        "approved_in": before[1].approved_in,
-                    }
-                )
-        elements.append(review)
+    operations = {item.operation_id for item in overview.operations}
+    cited = {
+        item.reference for item in prediction.evidence if item.reference.startswith("observation:")
+    }
     return PlanRevision(
+        observation_evidence=tuple(
+            item
+            for item in observations
+            if item.operation_id in operations or item.reference in cited
+        ),
         overview=overview,
-        elements=tuple(elements),
+        elements=_element_reviews(overview, previous),
         estimates=tuple(
             EstimateState(
                 estimate_id=item.estimate_id,
@@ -832,8 +914,7 @@ def _identity(record: _Record) -> tuple[str, ...]:
     if isinstance(record, PlatformAuthorization):
         return ("authorization", record.authorization_id)
     if isinstance(record, PlatformOperationObservation):
-        # Each observation of an operation is kept; the latest one is shown.
-        return ("operation", record.operation_id, record.observed_at.isoformat(), record.status)
+        return ("operation", _observation_reference(record))
     # Predictions, estimates and budgets have their own repeat checks.
     return ("unlinked",)
 
@@ -852,7 +933,11 @@ def _prediction_for(entries: tuple[_Entry, ...], record: _Record) -> WorkloadPre
             (
                 item
                 for item in sets
-                if any(op.operation_id == record.operation_id for op in item.proposal.operations)
+                if any(
+                    op.operation_id == record.operation_id
+                    and op.request.service_id == record.service_id
+                    for op in item.proposal.operations
+                )
             ),
             None,
         )
@@ -873,7 +958,10 @@ def _overview(entries: tuple[_Entry, ...], prediction: WorkloadPrediction) -> Pl
     operations = {op.operation_id for item in sets for op in item.proposal.operations}
     latest: dict[str, PlatformOperationObservation] = {}
     for observation in _of(entries, PlatformOperationObservation):
-        if observation.operation_id in operations:
+        if observation.operation_id not in operations:
+            continue
+        current = latest.get(observation.operation_id)
+        if current is None or observation.observed_at >= current.observed_at:
             latest[observation.operation_id] = observation
     return PlanningOverview(
         prediction=prediction,
@@ -907,7 +995,9 @@ def _answers(
     )
 
 
-def _element_reviews(overview: PlanningOverview) -> dict[str, ElementReview]:
+def _element_reviews(
+    overview: PlanningOverview, previous: PlanRevision | None
+) -> tuple[ElementReview, ...]:
     """Derive each element's researcher review and platform authorization state."""
     decisions: dict[tuple[str, int], ResearcherDecision] = {}
     for decision in sorted(overview.researcher_decisions, key=lambda item: item.decided_at):
@@ -915,7 +1005,24 @@ def _element_reviews(overview: PlanningOverview) -> dict[str, ElementReview]:
     authorizations: dict[tuple[str, int], PlatformAuthorization] = {}
     for authorization in sorted(overview.authorizations, key=lambda item: item.observed_at):
         authorizations[_key(authorization.proposal)] = authorization
-    reviews: dict[str, ElementReview] = {}
+    inherited: dict[str, PlanningReference] = {}
+    if previous is not None:
+        predecessor = previous.overview.prediction
+        prior_evidence = {item.evidence_id: item for item in predecessor.evidence}
+        unchanged_evidence = {
+            item.evidence_id
+            for item in overview.prediction.evidence
+            if prior_evidence.get(item.evidence_id) == item
+        }
+        current = {item.element_id: item for item in overview.prediction.elements}
+        for element, review in zip(predecessor.elements, previous.elements, strict=True):
+            if (
+                review.approved_in is not None
+                and current.get(element.element_id) == element
+                and unchanged_evidence.issuperset(element.evidence_ids)
+            ):
+                inherited[element.element_id] = review.approved_in
+    reviews: list[ElementReview] = []
     for element in overview.prediction.elements:
         covering = [
             item
@@ -939,21 +1046,29 @@ def _element_reviews(overview: PlanningOverview) -> dict[str, ElementReview]:
             key=lambda item: item.observed_at,
         )
         latest = decided[-1].decision if decided else None
-        reviews[element.element_id] = ElementReview(
-            element_id=element.element_id,
-            kind=element.kind,
-            runtime_profile_ref=element.runtime_profile_ref,
-            review=(
-                "approved"
-                if latest == "approved"
-                else "denied"
-                if latest == "denied"
-                else "requires-review"
-            ),
-            approved_in=overview.prediction.prediction if latest == "approved" else None,
-            platform=authorized[-1].status if authorized else "not-requested",
+        approved_in = None
+        state: Literal["approved", "denied", "unchanged-since-approval", "requires-review"]
+        if latest == "approved":
+            state = "approved"
+            approved_in = overview.prediction.prediction
+        elif latest == "denied":
+            state = "denied"
+        elif latest is None and element.element_id in inherited:
+            state = "unchanged-since-approval"
+            approved_in = inherited[element.element_id]
+        else:
+            state = "requires-review"
+        reviews.append(
+            ElementReview(
+                element_id=element.element_id,
+                kind=element.kind,
+                runtime_profile_ref=element.runtime_profile_ref,
+                review=state,
+                approved_in=approved_in,
+                platform=authorized[-1].status if authorized else "not-requested",
+            )
         )
-    return reviews
+    return tuple(reviews)
 
 
 def _budget_changed(entries: tuple[_Entry, ...], estimate: PlatformEstimate) -> bool:

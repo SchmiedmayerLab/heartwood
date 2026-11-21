@@ -333,6 +333,34 @@ def test_prediction_evidence_is_project_local_and_revision_bound() -> None:
     assert WorkloadPrediction.model_validate_json(json.dumps(value)).prediction.revision == 2
 
 
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "project:///tmp/run",
+        "project://../other/run",
+        "project://reports/%2e%2e/record",
+        "https://example.test/run",
+        "experiment-run:foreign",
+        "prediction:plan@0",
+        "prediction:plan@1\n",
+    ],
+)
+def test_prediction_rejects_unscoped_evidence_references(reference: str) -> None:
+    value = prediction()
+    value["evidence"] = [
+        {
+            "evidence_id": "measurement",
+            "project_context_id": "project",
+            "kind": "sample-run",
+            "reference": reference,
+            "description": "Synthetic sample",
+            "observed_at": NOW,
+        }
+    ]
+    with pytest.raises(ValidationError, match="reference"):
+        WorkloadPrediction.model_validate_json(json.dumps(value))
+
+
 def test_invalid_payload_values_are_not_in_exception_text() -> None:
     value = deepcopy(proposal())
     value["operations"][0]["request"]["request_sha256"] = "synthetic-secret-value"

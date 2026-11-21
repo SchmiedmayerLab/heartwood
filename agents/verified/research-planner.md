@@ -4,7 +4,8 @@ description: >-
   Develops a concise, sequential analysis plan before project files are changed.
 model: inherit
 tools: []
-skills: []
+skills:
+  - workload-prediction
 max_iteration_per_run: 12
 max_budget_per_run: 1.0
 permission_mode: always_confirm

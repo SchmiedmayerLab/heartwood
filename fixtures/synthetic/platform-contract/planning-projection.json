@@ -440,7 +440,8 @@
               "state": "current",
               "budget_changed": true
             }
-          ]
+          ],
+          "observation_evidence": []
         },
         {
           "overview": {
@@ -516,7 +517,8 @@
                     "Tasks run independently on one synthetic GPU each."
                   ],
                   "evidence_ids": [
-                    "sample-run"
+                    "sample-run",
+                    "batch-profile-change"
                   ]
                 },
                 {
@@ -573,6 +575,15 @@
                   "description": "Ten-task synthetic sample on the small batch profile.",
                   "observed_at": "2026-07-01T00:00:00Z",
                   "content_sha256": null
+                },
+                {
+                  "evidence_id": "batch-profile-change",
+                  "project_context_id": "launch-synthetic-1",
+                  "kind": "correction",
+                  "reference": "prediction:cohort-prediction@1",
+                  "description": "Researcher selected the GPU profile. The speedup remains an assumption.",
+                  "observed_at": "2026-07-01T00:00:00Z",
+                  "content_sha256": null
                 }
               ],
               "supersedes": {
@@ -584,7 +595,7 @@
               {
                 "schema_version": "heartwood.platform-estimate.v1",
                 "project_context_id": "launch-synthetic-1",
-                "estimate_id": "est-95f588caaccd6582",
+                "estimate_id": "est-b2c74310e784c1ab",
                 "scope": "plan",
                 "prediction": {
                   "record_id": "cohort-prediction",
@@ -753,11 +764,12 @@
           ],
           "estimates": [
             {
-              "estimate_id": "est-95f588caaccd6582",
+              "estimate_id": "est-b2c74310e784c1ab",
               "state": "current",
               "budget_changed": true
             }
-          ]
+          ],
+          "observation_evidence": []
         }
       ],
       "comparison": [
@@ -791,7 +803,7 @@
             "record_id": "cohort-prediction",
             "revision": 2
           },
-          "estimate_id": "est-95f588caaccd6582",
+          "estimate_id": "est-b2c74310e784c1ab",
           "runtime_profile_refs": [
             "synthetic-batch-gpu",
             "synthetic-coder",
@@ -819,7 +831,7 @@
       "code": "HW-PLAN-004",
       "title": "A platform budget changed after the estimate",
       "next_action": "Compare the plan with the current budgets and revise it if needed.",
-      "subject": "estimate est-95f588caaccd6582",
+      "subject": "estimate est-b2c74310e784c1ab",
       "diagnostic": "HW-PLAN-004: A platform budget changed after the estimate"
     }
   ]

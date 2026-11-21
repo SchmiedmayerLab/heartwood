@@ -512,6 +512,20 @@ The gateway requires protected state for it.
 The other built-in launchers install none.
 Without a binding, the planning projection reports that planning is not offered, and every interface hides it.
 
+A prediction can cite a research file with `project://PATH`, a local experiment with `experiment-run:UUID`, a recorded prediction with `prediction:ID@REVISION`, or a platform observation with `observation:SHA256`.
+A file reference records a location inside the research boundary. It does not establish that a measurement exists or verify a file digest.
+Experiment membership comes from the project's experiment journal, which carries no separate platform billing attribution.
+Prediction and observation references resolve within the active platform project context.
+Copy the observation reference from the planning overview to cite one status report for one operation.
+A correction retains the cited observation even when the platform reports a newer status.
+The overview shows the report with the latest observation time.
+When distinct reports share that time, it shows the last one recorded.
+Replaying an identical report preserves that order.
+An element requires review again when its cited evidence changes, including a change under the same evidence ID.
+To correct a duration or retry assumption, record a new revision, cite the earlier revision and observation, and request a new platform estimate.
+A change in price alone does not establish a workload prediction error.
+Evidence reuse requires explicit selection. No automatic learning occurs.
+
 The gateway does the following and nothing more:
 
 - **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when the last discovery found estimates offered, and a change in the service shows after the next refresh.
@@ -523,7 +537,8 @@ The gateway does the following and nothing more:
 
 The projection holds the latest observation of each budget and, for each revision, the contract overview, each element's review state and each estimate's freshness.
 An element's review state comes from researcher decisions on reviewed proposals that contain it; agreeing to one proposal does not approve elements outside it.
-An element that is unchanged since an approval in an earlier revision is shown as such, and a changed or new element requires review.
+An element with no decision in the current revision inherits approval only from the prediction it explicitly supersedes, when the element and its cited evidence are unchanged.
+Withdrawing a decision returns the element to review.
 Platform authorization is shown separately for each element.
 The comparison lists the complete-plan estimates of every revision with their runtime profiles, and marks an estimate in another denomination as not comparable; amounts are never converted or summed across estimates.
 The outcomes in [Failure States](#failure-states) cover each failed service capability, the plan's latest revision, its latest estimate for each scope and the latest platform authorization of each proposal.
