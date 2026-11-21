@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -179,7 +180,7 @@ def test_the_gateway_discovers_the_route_models_with_its_discovery_key(small: Se
     assert _MODEL in models
     declared = models[_MODEL]
     assert declared["availability"] == "available"
-    assert (declared["context_window"], declared["supports_tools"]) == (5120, True)
+    assert (declared["context_window"], declared["supports_tools"]) == (17408, True)
     status, settings = small.api("GET", "/settings/models")
     assert status == 200, settings
     assert settings["active_profile"] == _ROUTE
@@ -208,8 +209,11 @@ def test_an_approved_tool_call_runs_in_the_worker_through_the_model_route(
     assert json.loads(pods.stdout)["items"], pods.stderr
     small.command("approve", {"target_type": "action-set", "target_id": group})
 
-    executions = small.wait(lambda events: _of(events, "tool.execution.recorded"))
-    assert _COMMAND in json.dumps(executions)
+    # The execution names the approved call; it records no command or output.
+    calls = set(re.findall(r'"tool_call_id": "([^"]+)"', json.dumps(requested)))
+    (execution,) = small.wait(lambda events: _of(events, "tool.execution.recorded"))
+    assert execution["payload"]["tool_call_id"] in calls
+    assert (execution["payload"]["tool_name"], execution["payload"]["exit_code"]) == ("terminal", 0)
     finished = small.wait(
         lambda events: [
             event
@@ -264,9 +268,11 @@ def test_settlement_records_the_spending_above_the_key_budget(
         time.sleep(5)
     ((state, amount, incurred),) = ast.literal_eval(rows)
     assert state == "settled"
-    # Two requests of 0.00125 each; the key's budget was the reservation minus 0.003584.
+    # Two requests of 0.00125 each; the key's budget was the reservation minus one
+    # request's maximum cost, 16384 input tokens at 0.50 and 1024 output tokens at 1.50
+    # per million.
     assert float(incurred) == pytest.approx(0.0025)
-    assert float(incurred) > float(amount) - 0.003584
+    assert float(incurred) > float(amount) - 0.009728
 
 
 def test_the_second_researcher_cannot_start_a_server_of_project_small(
