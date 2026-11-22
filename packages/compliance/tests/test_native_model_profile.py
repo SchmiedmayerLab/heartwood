@@ -564,3 +564,66 @@ def test_direct_network_probe_uses_the_actual_provider_hostname(
     assert targets["researcher-gateway-via-qualification-network"] == ("192.0.2.1", 8123)
     # Without retained checkpoints no records service or signer runs.
     assert len(targets) == 8
+
+
+@pytest.mark.usefixtures("profile_module")
+def test_model_scenario_requires_a_linked_visible_result_and_later_agent_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openhands.sdk.event import ActionEvent, ObservationEvent
+    from openhands.sdk.llm import MessageToolCall, TextContent
+    from openhands.tools.terminal import TerminalAction, TerminalObservation
+
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root / "deploy/tests"))
+    runner = importlib.import_module("test_worker_model_integration")
+    action = ActionEvent(
+        action=TerminalAction(command=runner.TERMINAL_COMMAND),
+        thought=[],
+        tool_name="terminal",
+        tool_call_id="tool-1",
+        tool_call=MessageToolCall(
+            id="tool-1",
+            name="terminal",
+            arguments=json.dumps({"command": runner.TERMINAL_COMMAND}),
+            origin="completion",
+        ),
+        llm_response_id="response-1",
+    )
+    observed = ObservationEvent(
+        tool_name="terminal",
+        tool_call_id="tool-1",
+        action_id=action.id,
+        observation=TerminalObservation(
+            command=runner.TERMINAL_COMMAND,
+            content=[TextContent(text=runner._TOOL_NOTICE)],
+            exit_code=0,
+        ),
+    )
+    reply = action.model_copy(update={"llm_response_id": "response-2"})
+    assert runner.observed_scenarios([action, observed]) == set()
+    assert runner.observed_scenarios([action, observed, reply]) == {"aggregate-output"}
+    assert (
+        runner.observed_scenarios(
+            [action, observed.model_copy(update={"tool_call_id": "other"}), reply]
+        )
+        == set()
+    )
+    assert (
+        runner.observed_scenarios(
+            [
+                action,
+                observed.model_copy(
+                    update={
+                        "observation": TerminalObservation(
+                            command=runner._TOOL_NOTICE,
+                            content=[TextContent(text="no notice")],
+                            exit_code=0,
+                        )
+                    }
+                ),
+                reply,
+            ]
+        )
+        == set()
+    )

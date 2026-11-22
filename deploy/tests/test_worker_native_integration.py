@@ -196,6 +196,7 @@ def _application(
     client_tools: Sequence[ClientToolSpec] = (),
     project_name: str = "project",
     input_marker: str | None = None,
+    qualification_notice: str | None = None,
     deployment: OpenShellWorkerDeployment | None = None,
     action_review_modes: tuple[ActionReviewMode, ...] = ("review-all",),
     project: ProjectContext | None = None,
@@ -226,9 +227,14 @@ def _application(
             protected_state=fixture.private / "protected" / str(identity),
             project_id=identity,
         )
-    inputs = WorkerInputManifest(
-        files=(WorkspaceInspector(project).fingerprint("summary.json", max_bytes=1024),)
-    )
+    inspector = WorkspaceInspector(project)
+    files = [inspector.fingerprint("summary.json", max_bytes=1024)]
+    if qualification_notice is not None:
+        # The fixture tool prints its own diagnostic after the aggregate command.
+        # Its immutable input fingerprint is part of the approved worker deployment.
+        (project.root / "qualification-report.py").write_text(f"print({qualification_notice!r})\n")
+        files.append(inspector.fingerprint("qualification-report.py", max_bytes=1024))
+    inputs = WorkerInputManifest(files=tuple(files))
     settings = (
         fixture.deployment(inputs)
         if deployment is None

@@ -1,0 +1,117 @@
+# This source file is part of the Heartwood open-source project
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+# SPDX-License-Identifier: MIT
+
+name: GKE Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Full candidate commit on main
+        required: true
+        type: string
+      native_run:
+        description: Successful Native Qualification run that published this candidate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+  packages: read
+
+jobs:
+  qualify:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.candidate == github.sha
+    runs-on: [self-hosted, linux, x64, heartwood-gke-qualification]
+    environment: gke-qualification
+    concurrency:
+      group: gke-qualification
+      cancel-in-progress: false
+    timeout-minutes: 180
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CLOUDSDK_CORE_ACCOUNT: ${{ vars.GKE_CLOUD_ACCOUNT }}
+      CLOUD_PROJECT: ${{ vars.GKE_PROJECT }}
+      CLOUD_LOCATION: ${{ vars.GKE_LOCATION }}
+      CLOUD_CLUSTER: ${{ vars.GKE_CLUSTER }}
+      KUBE_IDENTITY: ${{ vars.GKE_KUBE_IDENTITY }}
+      PLATFORM_PROJECT: ${{ vars.GKE_PLATFORM_PROJECT }}
+      RESEARCHER_ISSUER: ${{ vars.GKE_RESEARCHER_ISSUER }}
+      RESEARCHER_SUBJECT: ${{ vars.GKE_RESEARCHER_SUBJECT }}
+      SESSION_NAMESPACE: ${{ vars.GKE_SESSION_NAMESPACE }}
+      GATEWAY_NAMESPACE: ${{ vars.GKE_GATEWAY_NAMESPACE }}
+      GATEWAY_POD: ${{ vars.GKE_GATEWAY_POD }}
+      GATEWAY_CONTAINER: ${{ vars.GKE_GATEWAY_CONTAINER }}
+      CONTROLLER_NAMESPACE: ${{ vars.GKE_CONTROLLER_NAMESPACE }}
+      CONTROLLER_POD: ${{ vars.GKE_CONTROLLER_POD }}
+      CONTROLLER_CONTAINER: ${{ vars.GKE_CONTROLLER_CONTAINER }}
+      CONTROLLER_ACCOUNT: ${{ vars.GKE_CONTROLLER_ACCOUNT }}
+      CONTROLLER_IMAGE: ${{ vars.GKE_CONTROLLER_IMAGE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          submodules: true
+          persist-credentials: false
+      - name: Select the candidate publication
+        env:
+          NATIVE_RUN: ${{ inputs.native_run }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$NATIVE_RUN" =~ ^[1-9][0-9]*$ ]]
+          root=$(mktemp -d "${RUNNER_TEMP}/gke.XXXXXXXX")
+          echo "RUN_ROOT=$root" >> "$GITHUB_ENV"
+          echo "KUBECONFIG=$root/kubeconfig" >> "$GITHUB_ENV"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN" |
+            jq -es --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" '
+              length == 1 and (.[0] |
+              .path == ".github/workflows/native-qualification.yml" and .head_sha == $sha
+              and .head_repository.full_name == $repo and .head_branch == "main"
+              and (.event == "push" or .event == "workflow_dispatch") and .conclusion == "success")' >/dev/null
+          gh run download "$NATIVE_RUN" -n "published-images-$GITHUB_SHA" -D "$root"
+          gh attestation verify "$root/published-images.json" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/native-qualification.yml" \
+            --source-ref refs/heads/main --source-digest "$GITHUB_SHA"
+          PYTHONPATH=reference-platform/tools python3 -c 'from pathlib import Path; import sys; from publish_images import read_record; read_record(Path(sys.argv[1]))' "$root/published-images.json"
+          jq -e --arg sha "$GITHUB_SHA" '.commit == $sha' "$root/published-images.json" >/dev/null
+          gh run download "$NATIVE_RUN" -n "worker-gateway-candidate-$GITHUB_SHA" -D "$root/gateway"
+          gh run download "$NATIVE_RUN" -n "records-tools-$GITHUB_SHA" -D "$root/records"
+          jq -er '.images | (.worker,.runtime) | .repository + "@" + .digest' "$root/published-images.json" |
+            while read -r image; do docker pull --platform linux/amd64 "$image"; done
+      - name: Bind the deployed project and inspect the attended suite
+        run: |
+          set -euo pipefail
+          : "${CLOUDSDK_CORE_ACCOUNT:?}" "${CLOUD_PROJECT:?}" "${CLOUD_LOCATION:?}" "${CLOUD_CLUSTER:?}" "${KUBE_IDENTITY:?}"
+          : "${PLATFORM_PROJECT:?}" "${RESEARCHER_SUBJECT:?}" "${RESEARCHER_ISSUER:?}" "${SESSION_NAMESPACE:?}"
+          : "${GATEWAY_NAMESPACE:?}" "${GATEWAY_POD:?}" "${GATEWAY_CONTAINER:?}"
+          : "${CONTROLLER_NAMESPACE:?}" "${CONTROLLER_ACCOUNT:?}" "${CONTROLLER_IMAGE:?}"
+          : "${CONTROLLER_POD:?}" "${CONTROLLER_CONTAINER:?}"
+          PYTHONPATH=deploy python3 -c 'from release_drills import ROUTES,supported_routes; supported_routes(ROUTES)'
+          gcloud container clusters get-credentials "$CLOUD_CLUSTER" --project "$CLOUD_PROJECT" --location "$CLOUD_LOCATION"
+          python3 deploy/gke_qualification.py bind --directory "$RUN_ROOT"
+          python3 deploy/gke_controller_records.py
+      - name: Run the declared managed model profiles
+        env:
+          ROUTE_PROFILES: ${{ vars.GKE_ROUTE_PROFILES }}
+          ROUTE_CREDENTIALS: ${{ secrets.GKE_ROUTE_CREDENTIALS }}
+        run: python3 deploy/gke_managed_routes.py
+      - name: Assemble the verified release qualification
+        run: python3 deploy/gke_qualification.py assemble --directory "$RUN_ROOT"
+      - name: Retain the candidate qualification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-qualification-${{ github.sha }}
+          path: ${{ env.RUN_ROOT }}/artifact/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove this run's local records
+        if: always() && env.RUN_ROOT != ''
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ROOT" == "$RUNNER_TEMP"/gke.???????? && -d "$RUN_ROOT" && ! -L "$RUN_ROOT" ]]
+          rm -rf -- "$RUN_ROOT"

@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -180,6 +181,14 @@ def gateway_image(
     return (output / "gateway-image-id").read_text().strip()
 
 
+def build_reference(reference: str, image_id: str, local_tag: str) -> str:
+    """Build from a publication pin directly or give a local candidate a build tag."""
+    if re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", reference):
+        return reference
+    run(["docker", "tag", image_id, local_tag])
+    return local_tag
+
+
 def timestamp() -> str:
     """Record run boundaries in Coordinated Universal Time."""
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -295,10 +304,8 @@ def qualify(
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     image_ids["gateway"] = gateway_image(artifacts, manifest, record, output)
     name = "hw-controller-" + uuid4().hex[:12]
-    runtime_tag = name + ":runtime"
-    run(["docker", "tag", image_ids["runtime"], runtime_tag])
-    worker_tag = name + ":worker"
-    run(["docker", "tag", image_ids["worker"], worker_tag])
+    runtime_tag = build_reference(runtime, image_ids["runtime"], name + ":runtime")
+    worker_tag = build_reference(worker, image_ids["worker"], name + ":worker")
     run(
         [
             "docker",

@@ -18,6 +18,7 @@ import http.client
 import json
 import os
 import shutil
+import socket
 import ssl
 import threading
 import time
@@ -112,6 +113,72 @@ def _pod_images(
     return {
         name: _observed_image(pod, name, reference, role)
         for name, (reference, role) in expected.items()
+    }
+
+
+def _gke_observations(
+    workload: dict[str, Any], supervisor: dict[str, Any], images: dict[str, Any]
+) -> dict[str, Any]:
+    """Inspect the live pods and check IPv4 metadata reachability from the controller."""
+    spec = workload["spec"]
+    if spec.get("ephemeralContainers"):
+        raise ValueError("unexpected ephemeral container in qualification workload")
+    contexts = []
+    devices = []
+    for container in [*spec["containers"], *spec.get("initContainers", [])]:
+        ctx = container["securityContext"]
+        contexts.append(
+            {
+                "run_as_user": ctx.get("runAsUser", spec["securityContext"].get("runAsUser")),
+                "privileged": ctx.get("privileged", False),
+                "allow_privilege_escalation": ctx["allowPrivilegeEscalation"],
+                "added_capabilities": ctx["capabilities"].get("add", []),
+                "dropped_capabilities": ctx["capabilities"]["drop"],
+                "seccomp_profile": ctx.get(
+                    "seccompProfile", spec["securityContext"]["seccompProfile"]
+                )["type"],
+            }
+        )
+        devices.extend(container.get("volumeDevices", []))
+    if not contexts or any(ctx != contexts[0] for ctx in contexts):
+        raise ValueError("inconsistent workload security settings")
+    volumes = spec["volumes"]
+    token = spec.get("automountServiceAccountToken") is not False or any(
+        "serviceAccountToken" in source
+        for volume in volumes
+        for source in volume.get("projected", {}).get("sources", [])
+    )
+    # Only establish a TCP connection. The control reads no metadata.
+    with socket.create_connection(("169.254.169.254", 80), timeout=4):
+        outside = {"metadata-ipv4": "reachable"}
+    inventory = json.loads(os.environ["HW_RUNTIME_MANIFESTS"])
+
+    def inspected(pod: dict[str, Any]) -> dict[str, Any]:
+        node = inventory[pod["spec"]["nodeName"]]
+        containers = {}
+        for name, row in images[pod["metadata"]["name"]].items():
+            image = node["images"][row["image"]]
+            containers[name] = {
+                **row,
+                "platform": node["platform"],
+                "manifests": image["manifests"],
+                "config_id": image["config_id"],
+            }
+        return {"pod_uid": pod["metadata"]["uid"], "containers": containers}
+
+    return {
+        "outside_worker": outside,
+        "workload": {
+            **inspected(workload),
+            **contexts[0],
+            "host_network": spec.get("hostNetwork", False),
+            "host_pid": spec.get("hostPID", False),
+            "host_ipc": spec.get("hostIPC", False),
+            "host_paths": [v["hostPath"]["path"] for v in volumes if "hostPath" in v],
+            "devices": devices,
+            "service_account_token_mounted": token,
+        },
+        "supervisor": inspected(supervisor),
     }
 
 
@@ -593,6 +660,21 @@ def test_kubernetes_workflow_boundary_and_revocation(
                 pods[supervisor], {"supervisor": (fixture.supervisor_image, "supervisor")}
             ),
         }
+        server = json.loads(fixture.outside("version", "--output=json"))["serverVersion"][
+            "gitVersion"
+        ]
+        gke = (
+            {
+                "gke_inspection": _gke_observations(pods[workload], pods[supervisor], images),
+                "gke_execution": {
+                    "run": int(os.environ["GITHUB_RUN_ID"]),
+                    "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+                    "commit": os.environ["GITHUB_SHA"],
+                },
+            }
+            if "-gke." in server
+            else {}
+        )
         namespace = json.loads(fixture.outside("get", "namespace", fixture.namespace, "-o=json"))
         identities = {
             "namespace_uid": namespace["metadata"]["uid"],
@@ -640,6 +722,7 @@ def test_kubernetes_workflow_boundary_and_revocation(
             fixture,
             {
                 "drill_id": "kubernetes-workflow.v1",
+                **gke,
                 "attempt_id": attempt_id,
                 "policy_sha256": attempt.runtime.sandbox_policy_sha256,
                 "kubernetes_identities": identities,

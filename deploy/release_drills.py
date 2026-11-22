@@ -232,8 +232,26 @@ def native_host_cases(directory: Path, host: dict[str, Any]) -> list[dict[str, s
     return [{"case": c["id"], "outcome": c["outcome"]} for c in manifest["cases"]]
 
 
+def require_managed_cleanup(directory: Path) -> None:
+    """Require the case teardown and the outside controller's network cleanup."""
+    covered = {line.split("  ", 1)[1] for line in (directory / CHECKSUMS).read_text().splitlines()}
+    cleanup = "capable-model/cleanup.json"
+    if not {MANIFEST, cleanup, "network.json"} <= covered:
+        raise ValueError("missing checksummed managed cleanup evidence")
+    if (
+        json.loads((directory / MANIFEST).read_bytes()).get("network_retained") is not False
+        or json.loads((directory / "network.json").read_bytes()).get(
+            "retained_for_attached_resources"
+        )
+        is not False
+        or json.loads((directory / cleanup).read_bytes()).get("complete") is not True
+    ):
+        raise ValueError("managed infrastructure cleanup did not complete")
+
+
 def capable_result(directory: Path, result: dict[str, Any], commit: str) -> dict[str, Any]:
     """Project a candidate-bound native record and its two observed scenario outcomes."""
+    require_managed_cleanup(directory)
     manifest = json.loads((directory / MANIFEST).read_text())
     images = manifest["image_sources"]
     if (

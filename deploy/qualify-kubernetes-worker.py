@@ -72,6 +72,7 @@ _SOURCES = (
     "deploy/worker_model_profile.py",
     "deploy/tests/test_worker_kubernetes_integration.py",
     "deploy/tests/worker_kubernetes_fixture.py",
+    "deploy/tests/gke_session_receipt.py",
     "deploy/tests/test_worker_native_integration.py",
     "deploy/tests/test_worker_lifecycle_integration.py",
     "deploy/tests/worker_native_fixture.py",

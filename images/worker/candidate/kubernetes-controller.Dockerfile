@@ -19,7 +19,7 @@ COPY deploy/tests/worker_network_*.py deploy/tests/worker_hostile_probe.py deplo
 COPY deploy/worker_model_profile.py /opt/qualification/worker_model_profile.py
 COPY deploy/tests/checkpoint_records_integration.py deploy/tests/checkpoint_transport_integration.py /opt/qualification/deploy/tests/
 COPY --from=records-tls-fixture /tls_fixture.py /opt/qualification/packages/audit/tests/tls_fixture.py
-COPY deploy/tests/worker_kubernetes_fixture.py deploy/tests/test_worker_kubernetes_integration.py /opt/qualification/tests/
+COPY deploy/tests/gke_session_receipt.py deploy/tests/worker_kubernetes_fixture.py deploy/tests/test_worker_kubernetes_integration.py /opt/qualification/tests/
 COPY images/worker/candidate/gateway.json /opt/qualification/gateway.json
 
 # The cases keep their state below this directory. Heartwood requires that no other user

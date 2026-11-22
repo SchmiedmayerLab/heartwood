@@ -384,6 +384,9 @@ def _drill_package(
     manifest = _manifest(evidence)
     cases = sorted(evidence.EXPECTED_CASES[_KIND])
     if profile is not None:
+        (directory / "network.json").write_text(
+            json.dumps({"retained_for_attached_resources": False})
+        )
         manifest.update(
             qualification_kind="capable-model-native",
             execution_id=_EXECUTION,
@@ -416,6 +419,7 @@ def _drill_package(
         )
         records = directory / "capable-model"
         records.mkdir()
+        (records / "cleanup.json").write_text(json.dumps({"complete": True}))
         (records / "model-qualification.json").write_text(
             json.dumps(
                 {
@@ -1970,3 +1974,585 @@ def test_release_requires_and_publishes_the_evidence_assets() -> None:
     assert 'release_assets+=("${evidence_assets[@]}")' in publish["run"]
     assert "printf '%s\\n' \"${release_assets[@]}\" | sort" in publish["run"]
     assert 'for asset in "${release_assets[@]}"; do' in publish["run"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "complete",
+        "other-session",
+        "other-worker",
+        "missing-inspection",
+        "other-node-config",
+        "other-managed-image",
+        "attached-network",
+        "incomplete-teardown",
+        "unobserved-tool",
+        "other-run",
+    ],
+)
+def test_gke_producer_artifact_reaches_release_consumer(
+    evidence: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """Run the producer projection and the release workflow on the resulting ZIP."""
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
+    producer = importlib.import_module("gke_qualification")
+    workspace, environment = _release_workspace(evidence, tmp_path)
+    monkeypatch.chdir(workspace)
+    root = tmp_path / "records"
+    managed = root / "route-1"
+    (root / "managed").rename(managed)
+    native = root / "gke-native"
+    binding = {
+        "namespace": "hw-s-one",
+        "namespace_uid": "observed-namespace",
+        "kube_system_uid": "observed-system",
+        "kubernetes": "v1.37.0-gke.1",
+        "worker_ref": _PINS["agent"],
+        "inventory": {"node-1": {"platform": "linux/amd64", "images": {}}},
+    }
+    node_images = binding["inventory"]["node-1"]["images"]
+    for name, role in (
+        ("agent", "worker"),
+        ("supervisor", "supervisor"),
+        ("openshell-sandbox-bootstrap", "sandbox"),
+    ):
+        row = _IMAGES[name]
+        node_images[row["image"]] = {"role": role, **producer.fields(row, "manifests", "config_id")}
+    manifest = producer.read(native / evidence.MANIFEST)
+    manifest["kubernetes_identities"] = producer.fields(
+        binding, "namespace", "namespace_uid", "kube_system_uid"
+    )
+    producer.write(native / evidence.MANIFEST, manifest)
+    boundary_path = native / producer.BOUNDARY
+    boundary = producer.read(boundary_path)
+    boundary["kubernetes_identities"]["namespace_uid"] = binding["namespace_uid"]
+    host = _host_record()
+    boundary["gke_inspection"] = producer.fields(host, "workload", "supervisor", "outside_worker")
+    if change == "missing-inspection":
+        del boundary["gke_inspection"]["outside_worker"]
+    producer.write(boundary_path, boundary)
+    evidence.write_checksums(native)
+    profile = producer.QualificationModelProfile(
+        **producer.read(managed / evidence.MANIFEST)["requested_model_profile"]
+    ).mapping()
+    manifest = producer.read(managed / evidence.MANIFEST)
+    publication = producer.read(Path(environment["PUBLISHED"]))
+    publication["images"]["runtime"] = {
+        "repository": "example.invalid/runtime",
+        "digest": "sha256:" + "5" * 64,
+    }
+    producer.write(Path(environment["PUBLISHED"]), publication)
+    manifest["invocation"] = {}
+    for role, image in publication["images"].items():
+        ref = image["repository"] + "@" + image["digest"]
+        manifest["invocation"][role + "_image"] = ref
+        manifest["image_sources"][role]["repo_digests"] = (
+            [] if change == "other-managed-image" else [ref]
+        )
+    _write_report(managed / evidence.REPORT, {manifest["cases"][0]["id"]: "failure"})
+    manifest.update(cases=evidence.cases(managed / evidence.REPORT), passed=False, returncode=1)
+    manifest["requested_model_profile"] = profile
+    producer.write(managed / evidence.MANIFEST, manifest)
+    model = producer.read(managed / producer.MODEL)
+    model.update(
+        requested_profile=profile,
+        tool_output_observed=change != "unobserved-tool",
+        tool_output_outcome="failed",
+    )
+    producer.write(managed / producer.MODEL, model)
+    producer.write(managed / evidence.DRILLS, evidence.drill_results(managed))
+    if change == "attached-network":
+        manifest.update(network_retained=True, passed=False)
+        producer.write(managed / evidence.MANIFEST, manifest)
+        producer.write(managed / "network.json", {"retained_for_attached_resources": True})
+        producer.write(managed / evidence.DRILLS, evidence.drill_results(managed))
+    elif change == "incomplete-teardown":
+        producer.write(managed / "capable-model/cleanup.json", {"complete": False})
+    evidence.write_checksums(managed)
+    if change == "other-session":
+        binding["namespace_uid"] = "replacement"
+    elif change == "other-worker":
+        binding["worker_ref"] = _PINS["supervisor"]
+    elif change == "other-node-config":
+        node_images[_PINS["agent"]]["config_id"] = "sha256:" + "0" * 64
+    target = tmp_path / "assembled"
+    arguments = (
+        root,
+        target,
+        Path(environment["PUBLISHED"]),
+        binding,
+        _COMMIT,
+        "0.5.1",
+        19 if change == "other-run" else 18,
+        ("openai/approved-model@approved-provider.example",),
+    )
+    if change != "complete":
+        with pytest.raises((ValueError, KeyError)):
+            producer.assemble(*arguments)
+        assert not target.exists()
+        if change in {"attached-network", "incomplete-teardown"}:
+            archive = Path(shutil.make_archive(str(tmp_path / "incomplete"), "zip", root))
+            environment.update(
+                DRILL_ARCHIVE=str(archive),
+                DRILL_SHA256=_digest(archive),
+                ARTIFACT_DIGEST=_digest(archive),
+            )
+            rejected = _run_release_steps(workspace, environment, _RELEASE_STEPS)
+            assert rejected.returncode != 0
+            assert "managed infrastructure cleanup did not complete" in rejected.stderr
+        return
+    producer.assemble(*arguments)
+    assert "action_decisions" not in producer.read(target / "route-1" / producer.MODEL)
+    archive = Path(shutil.make_archive(str(tmp_path / "produced"), "zip", target))
+    environment.update(
+        DRILL_ARCHIVE=str(archive), DRILL_SHA256=_digest(archive), ARTIFACT_DIGEST=_digest(archive)
+    )
+    completed = _run_release_steps(workspace, environment, _RELEASE_STEPS)
+    assert completed.returncode == 0, completed.stderr
+    result = producer.read(workspace / "dist" / _DRILL_ASSET)
+    assert result["capable_model"][0]["results"][0]["outcomes"] == {
+        "file-input-injection.v1": "passed",
+        "tool-output-injection.v1": "failed",
+    }
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["complete", "caller", "subject", "issuer", "project", "gateway", "namespace", "version"],
+)
+def test_gke_deployment_binding_reads_the_authenticated_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
+    producer = importlib.import_module("gke_qualification")
+    session = "hw-s-" + "a" * 16
+    for key, value in {
+        "KUBE_IDENTITY": "operator",
+        "GATEWAY_POD": "gateway",
+        "GATEWAY_CONTAINER": "notebook",
+        "GATEWAY_NAMESPACE": "gateways",
+        "SESSION_NAMESPACE": session,
+        "PLATFORM_PROJECT": "project-a",
+        "RESEARCHER_SUBJECT": "subject-a",
+        "RESEARCHER_ISSUER": "issuer-a",
+    }.items():
+        monkeypatch.setenv(key, value)
+    generations = {"pod": 0, "namespace": 0}
+
+    def kubectl(args: list[str], *, timeout: int) -> bytes:
+        value: object
+        assert timeout > 0
+        if "whoami" in args:
+            value = {
+                "status": {"userInfo": {"username": "other" if change == "caller" else "operator"}}
+            }
+        elif "pod" in args:
+            generations["pod"] += 1
+            value = {
+                "spec": {"serviceAccountName": "hw-gw-" + "a" * 16},
+                "metadata": {"uid": generations["pod"] if change == "gateway" else "p"},
+            }
+        elif "exec" in args:
+            value = [
+                "other" if change == "project" else "project-a",
+                session,
+                "other" if change == "subject" else "subject-a",
+                "other" if change == "issuer" else "issuer-a",
+                _PINS["agent"],
+                {},
+            ]
+        elif "namespace" in args:
+            generations["namespace"] += 1
+            value = {
+                "metadata": {"uid": generations["namespace"] if change == "namespace" else args[-2]}
+            }
+        else:
+            assert "version" in args
+            value = {
+                "serverVersion": {
+                    "gitVersion": "v1.36.0" if change == "version" else "v1.36.0-gke.1"
+                }
+            }
+        return json.dumps(value).encode()
+
+    monkeypatch.setattr(producer.subprocess, "check_output", kubectl)
+    if change != "complete":
+        with pytest.raises(ValueError, match=r"caller|deployed|replaced"):
+            producer.bind()
+    else:
+        assert producer.bind()["namespace_uid"] == session
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "complete",
+        "stale-output",
+        "different-controller",
+        "source",
+        "exit",
+        "checksum",
+        "cleanup",
+        "runtime",
+    ],
+)
+def test_attended_controller_collection_verifies_source_execution_and_cleanup(
+    evidence: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """Collect actual fixture files through an offline stand-in for the read-only transports."""
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
+    collector = importlib.import_module("gke_controller_records")
+    base = tmp_path / "controller"
+    host = _host_record()
+    _host_suite(evidence, base, host)
+    boundary = collector.read(base / collector.BOUNDARY)
+    boundary["gke_execution"] = {"run": 18, "attempt": 1, "commit": _COMMIT}
+    boundary["kubernetes_identities"]["namespace_uid"] = "session-uid"
+    collector.write(base / collector.BOUNDARY, boundary)
+    collector.write(
+        tmp_path / "binding.json",
+        {
+            "namespace_uid": "session-uid",
+            "namespace": "session",
+            "kube_system_uid": "system-uid",
+            "kubernetes": "v1.36.0-gke.1",
+        },
+    )
+    collector.write(
+        tmp_path / "published-images.json",
+        {
+            "commit": _COMMIT,
+            "images": {
+                role: {"repository": "example.invalid/" + role, "digest": "sha256:" + "1" * 64}
+                for role in ("worker", "runtime")
+            },
+        },
+    )
+    pin = _PINS["agent"]
+    for key, value in {
+        "CONTROLLER_NAMESPACE": "fixture",
+        "CONTROLLER_POD": "controller",
+        "CONTROLLER_ACCOUNT": "reader",
+        "CONTROLLER_CONTAINER": "tests",
+        "CONTROLLER_IMAGE": pin,
+        "GITHUB_RUN_ID": "18",
+        "GITHUB_SHA": _COMMIT,
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        collector.runpy,
+        "run_path",
+        lambda _: {"embedded_build_records": lambda _: {"application": {"commit": _COMMIT}}},
+    )
+    generation = 0
+
+    def transport(*args: str) -> bytes:
+        nonlocal generation
+        if args[0] == "git":
+            return _COMMIT.encode() if "rev-parse" in args else b""
+        if args[0] == "docker":
+            return json.dumps(
+                [{"Config": {"Labels": {"org.opencontainers.image.revision": _COMMIT}}}]
+            ).encode()
+        if "exec" in args:
+            i = args.index("-I") + 2
+            code = args[i]
+            if "hashlib" in code:
+                hashes = {p: _digest(f) for p, f in collector.SOURCES.items()}
+                return json.dumps({} if change == "source" else hashes).encode()
+            if "lexists" in code:
+                return b"True" if change == "stale-output" else b"False"
+            if "application-build-record" in code:
+                return json.dumps(
+                    {"commit": _OTHER_COMMIT if change == "runtime" else _COMMIT}
+                ).encode()
+            if "stdout.buffer" in code:
+                if args[-1] == "session-receipt.json":
+                    return json.dumps(
+                        {
+                            "run": 18,
+                            "attempt": 1,
+                            "commit": _COMMIT,
+                            "exitstatus": 1 if change == "exit" else 0,
+                            "files": {
+                                name: "0" * 64 if change == "checksum" else _digest(base / name)
+                                for name in (collector.BOUNDARY, evidence.REPORT)
+                            },
+                        }
+                    ).encode()
+                return (base / args[-1]).read_bytes()
+            assert "is_file()" in code
+            return str(args[-1].endswith(("session-receipt.json", collector.BOUNDARY))).encode()
+        if "pod" in args:
+            generation += 1
+            return json.dumps(
+                {
+                    "metadata": {
+                        "uid": "other"
+                        if change == "different-controller" and generation > 1
+                        else "p"
+                    },
+                    "spec": {
+                        "containers": [{"name": "tests", "image": pin}],
+                        "serviceAccountName": "reader",
+                        "nodeName": "node-1",
+                    },
+                    "status": {
+                        "containerStatuses": [
+                            {"name": "tests", "ready": True, "containerID": "instance"}
+                        ]
+                    },
+                }
+            ).encode()
+        if "nodes" in args:
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": "node-1"},
+                            "status": {
+                                "nodeInfo": {"architecture": "amd64", "operatingSystem": "linux"}
+                            },
+                        }
+                    ]
+                }
+            ).encode()
+        if "kube-system" in args:
+            return b'{"metadata":{"uid":"system-uid"}}'
+        assert "namespace" in args or "wait" in args
+        return b"namespace/session" if change == "cleanup" else b""
+
+    monkeypatch.setattr(collector, "command", transport)
+    if change != "complete":
+        with pytest.raises(
+            ValueError, match=r"already exists|controller|execution failed|still present|differs"
+        ):
+            collector.collect(tmp_path)
+        return
+    collector.collect(tmp_path)
+    assert not evidence.verify(tmp_path / "observations/gke-native", _COMMIT)
+
+
+@pytest.mark.parametrize(
+    "change", ["complete", "metadata-unreachable", "extra-token", "init-privileged"]
+)
+def test_gke_host_records_the_live_workload_and_outside_control(
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    from contextlib import nullcontext
+
+    monkeypatch.syspath_prepend(str(_ROOT))
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy/tests"))
+    producer = importlib.import_module("test_worker_kubernetes_integration")
+    host = _host_record()
+    pods: dict[str, dict[str, Any]] = {}
+    images: dict[str, dict[str, dict[str, str]]] = {}
+    inventory: dict[str, dict[str, Any]] = {}
+    for role in ("workload", "supervisor"):
+        pod: dict[str, Any] = {
+            "metadata": {"uid": host[role]["pod_uid"], "name": role},
+            "spec": {
+                "nodeName": role,
+                "automountServiceAccountToken": False,
+                "securityContext": {"seccompProfile": {"type": "RuntimeDefault"}},
+                "containers": [],
+                "initContainers": [],
+                "volumes": [],
+            },
+        }
+        pods[role] = pod
+        images[role] = {}
+        inventory[role] = {"platform": "linux/amd64", "images": {}}
+        for name, row in host[role]["containers"].items():
+            group = "containers" if name in ("agent", "supervisor") else "initContainers"
+            pod["spec"][group].append(
+                {
+                    "name": name,
+                    "securityContext": {
+                        "runAsUser": 10001,
+                        "privileged": change == "init-privileged" and name == "workspace-init",
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                }
+            )
+            images[role][name] = {key: row[key] for key in ("image", "image_id")}
+            inventory[role]["images"][row["image"]] = {
+                key: row[key] for key in ("config_id", "manifests")
+            }
+    if change == "extra-token":
+        pods["workload"]["spec"]["volumes"].append(
+            {"projected": {"sources": [{"serviceAccountToken": {}}]}}
+        )
+    monkeypatch.setenv("HW_RUNTIME_MANIFESTS", json.dumps(inventory))
+
+    def connect(address: tuple[str, int], *, timeout: int) -> object:
+        assert address == ("169.254.169.254", 80)
+        assert timeout > 0
+        if change == "metadata-unreachable":
+            raise TimeoutError
+        return nullcontext()
+
+    monkeypatch.setattr(producer.socket, "create_connection", connect)
+    if change == "metadata-unreachable":
+        with pytest.raises(TimeoutError):
+            producer._gke_observations(pods["workload"], pods["supervisor"], images)
+    elif change == "init-privileged":
+        with pytest.raises(ValueError, match="inconsistent workload"):
+            producer._gke_observations(pods["workload"], pods["supervisor"], images)
+    else:
+        observed = producer._gke_observations(pods["workload"], pods["supervisor"], images)
+        if change == "extra-token":
+            assert observed["workload"]["service_account_token_mounted"] is True
+        else:
+            assert observed == {
+                key: host[key] for key in ("workload", "supervisor", "outside_worker")
+            }
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "push",
+        "workflow_dispatch",
+        "empty",
+        "workflow",
+        "commit",
+        "repository",
+        "branch",
+        "event",
+        "conclusion",
+        "attestation",
+        "record",
+        "record-commit",
+    ],
+)
+def test_gke_selects_candidate_publication_in_a_fresh_directory(
+    tmp_path: Path, change: str
+) -> None:
+    workflow = _workflow("gke-qualification.yml")
+    script = next(
+        step["run"]
+        for step in workflow["jobs"]["qualify"]["steps"]
+        if step.get("name") == "Select the candidate publication"
+    )
+    repo = "example/heartwood"
+    metadata = {
+        "path": ".github/workflows/native-qualification.yml",
+        "head_sha": _COMMIT,
+        "head_repository": {"full_name": repo},
+        "head_branch": "main",
+        "event": "workflow_dispatch" if change == "workflow_dispatch" else "push",
+        "conclusion": "success",
+    }
+    for condition, key, value in (
+        ("workflow", "path", "other.yml"),
+        ("commit", "head_sha", _OTHER_COMMIT),
+        ("repository", "head_repository", {"full_name": "other/heartwood"}),
+        ("branch", "head_branch", "topic"),
+        ("event", "event", "pull_request"),
+        ("conclusion", "conclusion", "failure"),
+    ):
+        if change == condition:
+            metadata[key] = value
+    (tmp_path / "metadata").write_text("" if change == "empty" else json.dumps(metadata))
+    published_commit = _OTHER_COMMIT if change == "record-commit" else _COMMIT
+    names = (
+        "worker",
+        "runtime",
+        "sandbox-gateway",
+        "hosted-gateway",
+        "platform-services",
+        "funnel",
+    )
+    images = {
+        name: {
+            "repository": f"example.invalid/team/heartwood-{name}",
+            "tag": f"sha-{published_commit}",
+            "digest": "sha256:" + hashlib.sha256(name.encode()).hexdigest(),
+        }
+        for name in names
+    }
+    if change == "record":
+        del images["funnel"]
+    (tmp_path / "publication").write_text(
+        json.dumps(
+            {"images": images, "commit": published_commit, "worker_interpreter": "/bin/python"}
+        )
+    )
+    gh = tmp_path / "gh"
+    gh.write_text("""#!/bin/bash
+set -eu
+echo "$1 $2" >> "$FIXTURE/calls"
+case "$1 $2" in
+  "api repos/example/heartwood/actions/runs/18") cat "$FIXTURE/metadata" ;;
+  "run download")
+    [[ "$3" == 18 && "$4" == -n && "$6" == -D ]]
+    mkdir -p "$7"
+    if [[ "$5" == "published-images-$GITHUB_SHA" ]]; then
+      cp "$FIXTURE/publication" "$7/published-images.json"
+    fi ;;
+  "attestation verify") test -f "$3" && test "$EXAMPLE" != attestation ;;
+  *) exit 1 ;;
+esac
+""")
+    docker = tmp_path / "docker"
+    docker.write_text('#!/bin/bash\necho "$*" >> "$FIXTURE/pulls"\n')
+    gh.chmod(0o755)
+    docker.chmod(0o755)
+    (tmp_path / "python3").symlink_to(sys.executable)
+    completed = subprocess.run(
+        ["bash", "-c", script],
+        cwd=_ROOT,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_SHA": _COMMIT,
+            "GITHUB_REPOSITORY": repo,
+            "GITHUB_ENV": str(tmp_path / "env"),
+            "NATIVE_RUN": "18",
+            "RUNNER_TEMP": str(tmp_path),
+            "FIXTURE": str(tmp_path),
+            "EXAMPLE": change,
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        capture_output=True,
+        text=True,
+    )
+    calls = (tmp_path / "calls").read_text().splitlines()
+    if change in {"push", "workflow_dispatch"}:
+        assert completed.returncode == 0, completed.stderr
+        assert calls[1:] == ["run download", "attestation verify", "run download", "run download"]
+        assert (tmp_path / "pulls").read_text().splitlines() == [
+            f"pull --platform linux/amd64 {images[name]['repository']}@{images[name]['digest']}"
+            for name in ("worker", "runtime")
+        ]
+    else:
+        assert completed.returncode != 0
+        assert not (tmp_path / "pulls").exists()
+        if change in {"attestation", "record", "record-commit"}:
+            assert calls[1:] == ["run download", "attestation verify"]
+        else:
+            assert len(calls) == 1
+
+
+def test_published_native_build_inputs_need_no_run_owned_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import runpy
+
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy"))
+    build_reference = runpy.run_path(str(_ROOT / "deploy/qualify-native-worker.py"))[
+        "build_reference"
+    ]
+    commands: list[list[str]] = []
+    monkeypatch.setitem(build_reference.__globals__, "run", commands.append)
+    for role in ("worker", "runtime"):
+        pin = f"example.invalid/{role}@sha256:" + "b" * 64
+        assert build_reference(pin, "local-image-id", f"run:{role}") == pin
+    assert commands == []
+    assert build_reference("candidate:local", "local-image-id", "run:worker") == "run:worker"
+    assert commands == [["docker", "tag", "local-image-id", "run:worker"]]
