@@ -1527,7 +1527,9 @@ def _sdk_gateway(
             conversation_key=f"{root}#{session_id}",
             structured_task_outcomes=True,
             specialist_catalog=catalog,
-            env={},
+            # The terminal does not inherit the process environment; without PATH, bash's
+            # default path on macOS has no `python` for the approved analysis command.
+            env={"PATH": os.environ["PATH"]},
         )
 
     gateway = SessionGateway(
