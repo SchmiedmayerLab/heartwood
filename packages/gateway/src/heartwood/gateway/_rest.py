@@ -447,13 +447,14 @@ class RestGateway:
                 body=_json_object(projection.safe_dict()),
             )
         if request.method == "GET" and resource == "events":
-            query = parse_qs(parsed.query, keep_blank_values=True)
+            query = parse_qs(parsed.query)
             try:
                 after = _optional_int(query.get("after", [None])[0])
             except ValueError:
                 return _error(400, "after query parameter must be an integer")
             try:
-                settled = query.get("settled", ["false"])
+                # A blank or repeated value is refused instead of reading unsettled events.
+                settled = parse_qs(parsed.query, keep_blank_values=True).get("settled", ["false"])
                 if settled not in (["true"], ["false"]):
                     return _error(400, "settled query parameter must be true or false")
                 if settled == ["true"]:

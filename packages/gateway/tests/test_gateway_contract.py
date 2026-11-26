@@ -66,6 +66,7 @@ from heartwood.gateway import (
     SessionLifecycle,
     SkillSettingsError,
 )
+from heartwood.gateway._openapi import gateway_openapi
 from heartwood.gateway._openhands_sdk import OpenHandsSdkError
 from heartwood.schemas import AuditEvent
 from heartwood.schemas.review import ReviewCandidate, ReviewProposals
@@ -2032,7 +2033,15 @@ def test_settled_event_replay_waits_for_final_publication(
     gateway = _gateway(tmp_path)
     rest = RestGateway(gateway)
     request = RestRequest(method="GET", path="/sessions/session-1/events?settled=true")
-    assert rest.handle(request).body == {"error": "No locally owned session run"}
+    unowned = rest.handle(request)
+    assert unowned.status_code == 409
+    assert unowned.body == {"error": "No locally owned session run"}
+    for value in ("maybe", "", "true&settled=true"):
+        invalid = rest.handle(
+            RestRequest(method="GET", path=f"/sessions/session-1/events?settled={value}")
+        )
+        assert invalid.status_code == 400
+        assert invalid.body == {"error": "settled query parameter must be true or false"}
     rest.handle(
         RestRequest(
             method="POST",
@@ -2049,6 +2058,10 @@ def test_settled_event_replay_waits_for_final_publication(
     assert busy.status_code == 409
     assert busy.body == {"error": "session execution is still settling"}
     assert rest.handle(request).status_code == 200
+    parameters = gateway_openapi()["paths"]["/sessions/{session_id}/events"]["get"]["parameters"]
+    settled_parameter = next(item for item in parameters if item["name"] == "settled")
+    assert settled_parameter["in"] == "query"
+    assert settled_parameter["schema"] == {"type": "boolean", "default": False}
 
 
 def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) -> None:

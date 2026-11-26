@@ -160,11 +160,11 @@ def test_budget_exhaustion_is_answered_with_the_diagnostic(small: Server) -> Non
             for event in events_of(events[before:], "agent.lifecycle.updated")
         )
     )
-    codes = small.wait(lambda events: error_codes(events[before:]))
+    codes = error_codes(_settled_events(small)[before:])
 
-    # The exhausted inference key produces the quota diagnostic for this turn.
+    # The exhausted inference key produces only the quota diagnostic for this turn.
     assert "HW-AGENT-009" in codes, codes
-    assert "HW-AGENT-011" not in codes, codes
+    assert not {"HW-AGENT-010", "HW-AGENT-011"} & set(codes), codes
 
 
 def test_settlement_records_the_spending_above_the_key_budget(
@@ -412,20 +412,26 @@ def _revoked_turn(events: list[dict[str, Any]], conversation: str) -> bool:
     return bool(codes)
 
 
-def _settled_failure(server: Server) -> list[dict[str, Any]]:
-    server.wait(lambda events: bool(_failed_turn(events, server.conversation)))
+def _settled_events(server: Server) -> list[dict[str, Any]]:
+    """Read the conversation once its gateway has recorded the final callbacks."""
     deadline = time.monotonic() + 420
     while time.monotonic() < deadline:
         status, answer = server.api("GET", f"/sessions/{server.conversation}/events?settled=true")
         if status == 200:
             events: list[dict[str, Any]] = answer["events"]
-            if not _failed_turn(events, server.conversation):
-                raise AssertionError("Missing failure after execution settled")
             return events
         if status != 409 or answer != {"error": "session execution is still settling"}:
-            raise AssertionError("Could not observe the settled conversation")
+            raise AssertionError(f"Could not observe the settled conversation ({status})")
         time.sleep(3)
     raise AssertionError("Timed out waiting for the failed turn to settle")
+
+
+def _settled_failure(server: Server) -> list[dict[str, Any]]:
+    server.wait(lambda events: bool(_failed_turn(events, server.conversation)))
+    events = _settled_events(server)
+    if not _failed_turn(events, server.conversation):
+        raise AssertionError("Missing failure after execution settled")
+    return events
 
 
 def _require_model_denial(server: Server, events: list[dict[str, Any]]) -> None:
