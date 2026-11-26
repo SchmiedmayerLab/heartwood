@@ -2655,10 +2655,12 @@ class SessionGateway:
 
         mcp_adapter: McpOutsideAdapter | None = None
         if self._worker_plan_factory is not None and self._external_actions_factory is None:
+            # Worker sessions receive research service tools, and planning tools when the
+            # deployment offers planning; both run through outside review.
             bound = self.mcp_servers.bound_tools()
             mcp_adapter = (
                 McpOutsideAdapter(self.mcp_servers, bound, planning=self._planning)
-                if bound
+                if bound or self._planning is not None
                 else None
             )
         backend = self._backend(

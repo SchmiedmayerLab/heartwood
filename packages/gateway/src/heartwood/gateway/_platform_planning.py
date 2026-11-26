@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from heartwood.core_adapter.external_actions import ExternalOperationEstimate
+from heartwood.core_adapter.external_actions import ExternalOperationEstimate, canonical_request
 from heartwood.gateway._access import (
     AccessUnavailableError,
     ServiceTokens,
@@ -44,6 +44,7 @@ from heartwood.gateway._mcp_policy import (
 from heartwood.persistence import DurableFileError, LockedJsonlStore
 from heartwood.schemas import (
     BudgetObservation,
+    JsonValue,
     PlanningOverview,
     PlanningReference,
     PlatformAuthorization,
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
     from fastmcp.client.transports import StreamableHttpTransport
     from mcp.types import CallToolResult
     from openhands.sdk.mcp import MCPClient
+    from openhands.sdk.tool.client_tool import ClientToolSpec
 
     from heartwood.gateway.platform_conformance import McpEndpoint
 
@@ -89,6 +91,16 @@ type _Record = (
 
 BUDGET_TOOL = "get_budgets"
 ESTIMATE_TOOL = "estimate_workload"
+# The tools a worker's agent calls; each call runs only after the researcher reviews it.
+OVERVIEW_AGENT_TOOL = "planning_overview"
+ESTIMATE_AGENT_TOOL = "request_plan_estimate"
+PREDICTION_AGENT_TOOL = "record_plan_prediction"
+# The service identity of agent planning calls in outside-operation records.
+PLANNING_SERVICE_ID = "heartwood-planning"
+# The largest planning result released to an agent, as canonical JSON.
+AGENT_RESULT_BYTES = 48 * 1024
+# Fields OpenHands adds to every tool call; they are not tool arguments.
+_SDK_FIELDS = frozenset({"summary", "security_risk"})
 _TIMEOUT_SECONDS = 15.0
 _MAX_RESULT_BYTES = 256 * 1024
 _KINDS: dict[str, type[BaseModel]] = {
@@ -739,6 +751,163 @@ class PlatformPlanning:
             outcomes=tuple(outcomes),
         )
 
+    # Agent tools
+
+    @property
+    def client_tools(self) -> tuple[ClientToolSpec, ...]:
+        """Return the fixed planning tools a worker's agent receives."""
+        return _agent_tools()
+
+    def agent_request(self, tool_name: str, arguments: dict[str, JsonValue]) -> tuple[str, str]:
+        """Check an agent's planning call and return its review summary and exact request.
+
+        Nothing is recorded or sent. A prediction for another launch context is refused.
+        """
+        values = {key: value for key, value in arguments.items() if key not in _SDK_FIELDS}
+        if tool_name == OVERVIEW_AGENT_TOOL and not values:
+            return "Read the platform planning overview", "{}"
+        if tool_name == PREDICTION_AGENT_TOOL and set(values) == {"prediction"}:
+            prediction = cast(WorkloadPrediction, _parsed(WorkloadPrediction, values["prediction"]))
+            if prediction.project_context_id != self.launch.project_context_id:
+                raise PlanningRecordError(
+                    "The prediction belongs to another platform project context"
+                )
+            reference = prediction.prediction
+            content = json.dumps({"prediction": prediction.model_dump(mode="json")})
+            summary = f"Record workload prediction {reference.record_id} revision"
+        elif tool_name == ESTIMATE_AGENT_TOOL:
+            request = cast(PlanningEstimateRequest, _parsed(PlanningEstimateRequest, values))
+            reference = request.prediction
+            content = request.model_dump_json()
+            summary = f"Request a platform estimate for prediction {reference.record_id} revision"
+        else:
+            raise PlanningRecordError("The arguments do not match the planning tool")
+        try:
+            request_json = canonical_request(content)
+        except ValueError:
+            raise PlanningRecordError(
+                "The planning call is invalid or exceeds the request size limit"
+            ) from None
+        return f"{summary} {reference.revision}"[:512], request_json
+
+    def agent_call(
+        self, tool_name: str, request_json: str, *, operation_id: str
+    ) -> PlatformOperationObservation:
+        """Run a reviewed planning call through the same methods every interface uses.
+
+        The result is the planning overview afterwards. A refused record or a journal that
+        needs recovery is reported as a failed call with the reason.
+        """
+        try:
+            if tool_name == OVERVIEW_AGENT_TOOL:
+                self.refresh()
+            elif tool_name == PREDICTION_AGENT_TOOL:
+                self.record_prediction(
+                    WorkloadPrediction.model_validate_json(
+                        json.dumps(json.loads(request_json)["prediction"])
+                    )
+                )
+            elif tool_name == ESTIMATE_AGENT_TOOL:
+                self.request_estimate(PlanningEstimateRequest.model_validate_json(request_json))
+            else:
+                raise PlanningRecordError("This is not a planning tool")
+            return self.agent_observation(tool_name, operation_id=operation_id)
+        except (PlanningRecordError, PlanningStateError) as error:
+            return self._agent_failure(tool_name, operation_id, str(error))
+
+    def agent_observation(
+        self, tool_name: str, *, operation_id: str, limitation: str | None = None
+    ) -> PlatformOperationObservation:
+        """Report the current planning overview as a completed call; this contacts nothing.
+
+        An overview larger than an agent result keeps the latest revision of each plan,
+        and then no revisions; service status, budgets and outcomes remain, and the call
+        fails only when they alone exceed the limit.
+        """
+        try:
+            full = _agent_view(self.projection(), self.launch)
+        except PlanningStateError as error:
+            return self._agent_failure(tool_name, operation_id, str(error))
+        plans = cast(list[dict[str, Any]], full["plans"])
+        latest = [{**plan, "revisions": plan["revisions"][-1:]} for plan in plans]
+        shortened = (
+            "The overview lists only the latest revision of each plan; "
+            "the researcher can read every revision in the browser, terminal or notebook."
+        )
+        omitted = (
+            "The overview lists no plan revisions because they exceed an agent result; "
+            "the researcher can read them in the browser, terminal or notebook."
+        )
+        for view, note in (
+            (full, None),
+            ({**full, "plans": cast(JsonValue, latest)}, shortened),
+            ({**full, "plans": []}, omitted),
+        ):
+            notes = tuple(item for item in (limitation, note) if item is not None)
+            observation = PlatformOperationObservation(
+                project_context_id=self.launch.project_context_id,
+                operation_id=operation_id,
+                service_id=PLANNING_SERVICE_ID,
+                backend_operation_ref=tool_name,
+                observed_at=self.clock(),
+                status="completed",
+                platform_record_ref=f"planning:{operation_id}",
+                limitations=notes,
+                result=view,
+            )
+            released = json.dumps(
+                observation.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            )
+            if len(released.encode()) <= AGENT_RESULT_BYTES:
+                return observation
+        return self._agent_failure(
+            tool_name,
+            operation_id,
+            "The planning overview is larger than an agent result; "
+            "the researcher can read it in the browser, terminal or notebook.",
+        )
+
+    def agent_outcome(
+        self, tool_name: str, request_json: str, *, operation_id: str
+    ) -> PlatformOperationObservation:
+        """Report a call whose outcome was not recorded, without running it again.
+
+        A prediction counts as recorded only when the journal holds that exact revision.
+        """
+        if tool_name == PREDICTION_AGENT_TOOL:
+            try:
+                prediction = WorkloadPrediction.model_validate_json(
+                    json.dumps(json.loads(request_json)["prediction"])
+                )
+                recorded = _predictions(self._entries()).get(_key(prediction.prediction))
+            except PlanningStateError as error:
+                return self._agent_failure(tool_name, operation_id, str(error))
+            if recorded != prediction:
+                return self._agent_failure(
+                    tool_name, operation_id, "The prediction revision was not recorded"
+                )
+        return self.agent_observation(
+            tool_name,
+            operation_id=operation_id,
+            limitation=(
+                "The outcome of this call was not observed; this is the current planning overview."
+            ),
+        )
+
+    def _agent_failure(
+        self, tool_name: str, operation_id: str, reason: str
+    ) -> PlatformOperationObservation:
+        return PlatformOperationObservation(
+            project_context_id=self.launch.project_context_id,
+            operation_id=operation_id,
+            service_id=PLANNING_SERVICE_ID,
+            backend_operation_ref=tool_name,
+            observed_at=self.clock(),
+            status="failed",
+            platform_record_ref=f"planning:{operation_id}",
+            limitations=(reason,),
+        )
+
     def _entries(self) -> tuple[_Entry, ...]:
         return self._scope(self.journal.entries())
 
@@ -1174,14 +1343,148 @@ def _outcome(check_id: str, subject: str) -> PlanningOutcome:
     )
 
 
+_REVIEWED = (
+    "\n\nThe researcher reviews the call before it runs, and the result arrives later as a "
+    "separate message."
+)
+
+
+def _parsed(model: type[BaseModel], value: object) -> BaseModel:
+    try:
+        return model.model_validate_json(json.dumps(value))
+    except (ValidationError, ValueError, TypeError):
+        raise PlanningRecordError("The arguments do not match the planning tool") from None
+
+
+def _agent_tools() -> tuple[ClientToolSpec, ...]:
+    from openhands.sdk.tool.client_tool import ClientToolSpec
+
+    # The record's own schema, with its definitions where the references resolve.
+    prediction = WorkloadPrediction.model_json_schema()
+    reference = {
+        "type": "object",
+        "description": "The recorded prediction revision.",
+        "properties": {
+            "record_id": {"type": "string"},
+            "revision": {"type": "integer", "minimum": 1},
+        },
+        "required": ["record_id", "revision"],
+        "additionalProperties": False,
+    }
+    return (
+        ClientToolSpec(
+            name=OVERVIEW_AGENT_TOOL,
+            description=(
+                "Report which planning capabilities this platform offers, budgets and "
+                "estimates, each as available, not-offered, unavailable or refused, or "
+                "unchecked before the first discovery. Also "
+                "return the latest budget observations with their observation times, the "
+                "recorded prediction revisions with their platform estimates and element "
+                "reviews, observation references for evidence, and planning outcomes. Call "
+                "it before relying on a budget or an estimate: a platform may offer neither."
+                + _REVIEWED
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ClientToolSpec(
+            name=PREDICTION_AGENT_TOOL,
+            description=(
+                "Record one immutable workload prediction revision for this launch context. "
+                "The prediction is a heartwood.workload-prediction.v1 record whose "
+                "project_context_id is the one planning_overview reports; a later revision "
+                "names the revision it supersedes." + _REVIEWED
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prediction": {
+                        key: value for key, value in prediction.items() if key != "$defs"
+                    }
+                },
+                "required": ["prediction"],
+                "additionalProperties": False,
+                "$defs": prediction["$defs"],
+            },
+        ),
+        ClientToolSpec(
+            name=ESTIMATE_AGENT_TOOL,
+            description=(
+                "Ask the platform to estimate a recorded prediction revision, for the whole "
+                "plan or for named elements. Call it only when planning_overview reports "
+                "estimates as available. The platform reserves, charges and runs nothing."
+                + _REVIEWED
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prediction": reference,
+                    "scope": {"type": "string", "enum": ["plan", "elements"]},
+                    "element_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Elements to estimate; only for elements scope.",
+                    },
+                },
+                "required": ["prediction"],
+                "additionalProperties": False,
+            },
+        ),
+    )
+
+
+def _agent_view(
+    projection: PlanningProjection, launch: PlatformLaunchContext
+) -> dict[str, JsonValue]:
+    """Keep what an agent plans with; proposals, decisions and launch details stay out."""
+    plans: list[JsonValue] = []
+    for plan in projection.plans:
+        revisions: list[JsonValue] = []
+        for revision in plan.revisions:
+            prediction = revision.overview.prediction
+            states = {item.estimate_id: item for item in revision.estimates}
+            revisions.append(
+                {
+                    "prediction": prediction.prediction.model_dump(mode="json"),
+                    "plan": prediction.plan.model_dump(mode="json"),
+                    "elements": [item.model_dump(mode="json") for item in revision.elements],
+                    "estimates": [
+                        {
+                            **item.model_dump(mode="json"),
+                            "state": states[item.estimate_id].state,
+                            "budget_changed": states[item.estimate_id].budget_changed,
+                        }
+                        for item in revision.overview.estimates
+                    ],
+                    "observation_evidence": [
+                        item.model_dump(mode="json") for item in revision.observation_evidence
+                    ],
+                }
+            )
+        plans.append({"plan_id": plan.plan_id, "revisions": revisions})
+    return {
+        "project_context_id": launch.project_context_id,
+        "services": None
+        if projection.services is None
+        else projection.services.model_dump(mode="json"),
+        "budgets": [item.model_dump(mode="json") for item in projection.budgets],
+        "plans": plans,
+        "outcomes": [item.model_dump(mode="json") for item in projection.outcomes],
+    }
+
+
 def not_offered_projection() -> PlanningProjection:
     """Return the projection of a deployment without a planning service."""
     return PlanningProjection(offered=False)
 
 
 __all__ = [
+    "AGENT_RESULT_BYTES",
     "BUDGET_TOOL",
+    "ESTIMATE_AGENT_TOOL",
     "ESTIMATE_TOOL",
+    "OVERVIEW_AGENT_TOOL",
+    "PLANNING_SERVICE_ID",
+    "PREDICTION_AGENT_TOOL",
     "HostedPlanningClient",
     "McpPlanningClient",
     "PlanningDeployment",
