@@ -26,7 +26,7 @@
         },
         {
           "path": "inference-gateway-refusals.patch",
-          "sha256": "1e4b6ad8cefc17d2801d4bef60b42aa5678f79201b1790bbbb628f5830fc5140"
+          "sha256": "c0c07663ec76d5a5cb6e7ca2178e9129e110364c37e837529f58c215fa4ab4d8"
         },
         {
           "path": "subprocess-pty-completion.patch",
