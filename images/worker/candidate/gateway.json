@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "purpose": "deployable",
-  "version": "0.1.9+heartwood.3",
+  "version": "0.1.9+heartwood.4",
   "source": {
     "url": "https://codeload.github.com/ai-openshell/openshell/tar.gz/ce58cf8e9b953281352d98a637e41616295b1318",
     "tree_sha256": "daf2239105deca6b3f07d7fe08b343ae84bdc4811f4ee371e5f8eb4199c1c6c0",
@@ -27,6 +27,16 @@
       "path": "gateway-create-after-absence.patch",
       "sha256": "70bf2811f124c5cedb29a7b1add4ed69f513995ffbe455d09167d2c7f5ffde7d",
       "purpose": "Record confirmed absence so a delayed create request cannot recreate a sandbox under its revoked name during the retention window."
+    },
+    {
+      "path": "request-admission-release.patch",
+      "sha256": "a2938af2d3f8b19ff85acd1c141eb7d709d15df0ac653a20656ef02e14e649a0",
+      "purpose": "Record a failed sandbox creation or deletion with a request identifier as a terminal admission, so a repeated delivery is refused without executing and its admission slot is released after the replay window."
+    },
+    {
+      "path": "request-admission-lifecycle.patch",
+      "sha256": "96aad5e517f7337631ab815c7316cc7313d75106e2a3a3cc904206e17200b1f6",
+      "purpose": "Record failed sandbox start, stop and update requests with a request identifier the same way, so their admission slots are also released after the replay window."
     }
   ],
   "images": {

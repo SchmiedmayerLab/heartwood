@@ -1,0 +1,941 @@
+diff --git a/crates/openshell-server/src/grpc/mutation_replay.rs b/crates/openshell-server/src/grpc/mutation_replay.rs
+index d76680e..50d0be4 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay.rs
+@@ -2,12 +2,13 @@
+ // SPDX-License-Identifier: Apache-2.0
+ 
+ //! Explicitly opted-in unary mutations. This is an admission fence, not a lease:
+-//! an owner that cannot persist success leaves an unresolved claim forever.
+-//! Each adapter explicitly approves its authorization and replay representation.
++//! an owner that cannot persist its outcome leaves an unresolved claim forever.
++//! Each adapter explicitly approves its authorization and replay representation,
++//! and whether a handler error completes the claim as a recorded failure.
+ 
+ #![allow(clippy::result_large_err)]
+ 
+-use std::collections::BTreeMap;
++use std::collections::{BTreeMap, HashMap};
+ use std::sync::{Arc, LazyLock};
+ 
+ use hmac::{Hmac, Mac};
+@@ -18,13 +19,14 @@ use openshell_core::proto::{
+     RemoveWorkspaceMemberRequest, RemoveWorkspaceMemberResponse, SandboxTemplateResponse,
+     Workspace, WorkspaceSelector,
+ };
+-use openshell_core::{GetResourceVersion, ObjectId, rpc_error};
++use openshell_core::rpc_error::{self, ErrorDetails, StatusExt};
++use openshell_core::{GetResourceVersion, ObjectId};
+ use prost::Message;
+ use prost_reflect::{DescriptorPool, DynamicMessage};
+ use serde::{Deserialize, Serialize};
+ use sha2::{Digest, Sha256};
+ use tokio::sync::Semaphore;
+-use tonic::{Request, Response, Status};
++use tonic::{Code, Request, Response, Status};
+ 
+ use super::{sandbox, workspace};
+ use crate::ServerState;
+@@ -58,9 +60,68 @@ struct Admission {
+     #[serde(default)]
+     target_id: Option<String>,
+     success: Option<Success>,
++    // Omitted when absent, so success records keep their earlier encoding.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    failure: Option<Failure>,
+     completed_at_ms: Option<i64>,
+ }
+ 
++impl Admission {
++    /// A terminal record never changes again and expires with the replay window.
++    fn terminal(&self) -> bool {
++        self.success.is_some() || self.failure.is_some()
++    }
++}
++
++/// A handler error of an adapter that records failures. Only the status code
++/// and the gateway's own error reason are kept, never the message.
++#[derive(Serialize, Deserialize)]
++struct Failure {
++    code: i32,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    reason: Option<String>,
++}
++
++impl Failure {
++    fn new(status: &Status) -> Self {
++        let reason = status
++            .get_error_details()
++            .error_info()
++            .filter(|info| {
++                info.domain == rpc_error::ERROR_DOMAIN
++                    && (1..=64).contains(&info.reason.len())
++                    && info
++                        .reason
++                        .bytes()
++                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
++            })
++            .map(|info| info.reason.clone());
++        Self {
++            code: status.code() as i32,
++            reason,
++        }
++    }
++
++    /// The same refusal for every replay. It is not retryable, and it never
++    /// claims that the failed attempt had no effects.
++    fn replay(self) -> Status {
++        let mut metadata = HashMap::from([("original_code".to_string(), self.code.to_string())]);
++        if let Some(reason) = self.reason {
++            metadata.insert("original_reason".into(), reason);
++        }
++        let mut status = Status::with_error_details(
++            Code::FailedPrecondition,
++            "the original request failed and was not executed again; reconcile its effects before starting a new request with a new request_id",
++            ErrorDetails::with_error_info("REQUEST_FAILED", rpc_error::ERROR_DOMAIN, metadata),
++        );
++        status.metadata_mut().insert(
++            "openshell-replayed",
++            "true".parse().expect("static metadata"),
++        );
++        status
++    }
++}
++
+ #[derive(Serialize, Deserialize, PartialEq)]
+ struct Protection {
+     key_id: String,
+@@ -107,6 +168,11 @@ pub(super) trait Mutation: Message + Default + Send + Sync + 'static {
+     const PROTECTED: bool = false;
+     // Streaming producers, not returned stream handles, confirm completion.
+     const DEFERRED: bool = false;
++    /// Complete the claim with the code of a handler error, so a replay is
++    /// refused without executing again and the claim expires after the replay
++    /// window. Without it, a handler error leaves the claim unresolved forever.
++    /// Ignored for deferred mutations.
++    const RECORD_FAILURES: bool = false;
+     fn request_id(&self) -> &str;
+     /// Name-addressed targets must keep their identity unless an interceptor
+     /// actually changes the selector, not merely another request field.
+@@ -279,6 +345,7 @@ async fn execute_owned<M: Mutation>(
+         workspace_id: scope.workspace_id,
+         target_id: scope.target_id,
+         success: None,
++        failure: None,
+         completed_at_ms: None,
+     };
+     // Contention is bounded. Losing a race never authorizes execution.
+@@ -294,7 +361,7 @@ async fn execute_owned<M: Mutation>(
+             if previous.format_version != 1 {
+                 return Err(replay_unavailable());
+             }
+-            if previous.success.is_some()
++            if previous.terminal()
+                 && previous.completed_at_ms.is_some_and(|completed| {
+                     current_time_ms() >= completed.saturating_add(window_ms)
+                 })
+@@ -325,6 +392,9 @@ async fn execute_owned<M: Mutation>(
+             {
+                 return Err(replay_unavailable());
+             }
++            if let Some(failure) = previous.failure {
++                return Err(failure.replay());
++            }
+             let success = previous.success.ok_or_else(uncertain)?;
+             let output = M::restore(&state.store, success).await?;
+             M::before_replay(state, request.get_ref(), &scope.name, &output).await?;
+@@ -364,8 +434,10 @@ async fn execute_owned<M: Mutation>(
+             }
+             Err(error) => return Err(storage_error(error)),
+         };
+-        // Any error or panic from here leaves the claim unresolved. Status codes
+-        // do not establish that a handler performed no effects.
++        // Any error or panic from here leaves the claim unresolved, except a
++        // handler error of an adapter that records failures. Status codes do
++        // not establish that a handler performed no effects, so a recorded
++        // failure only refuses replays and never reports the attempt as void.
+         let completion = Completion {
+             store: state.store.clone(),
+             claim_id,
+@@ -379,7 +451,18 @@ async fn execute_owned<M: Mutation>(
+         }
+         let facts = ordinary::Facts::default();
+         request.extensions_mut().insert(facts.clone());
+-        let mut response = M::execute(state, request).await?;
++        let mut response = match M::execute(state, request).await {
++            Ok(response) => response,
++            Err(status) => {
++                if M::RECORD_FAILURES
++                    && !M::DEFERRED
++                    && let Err(error) = completion.fail(&status).await
++                {
++                    tracing::warn!(%error, "recording a failed mutation admission failed");
++                }
++                return Err(status);
++            }
++        };
+         if M::DEFERRED {
+             return Ok(response);
+         }
+@@ -423,9 +506,20 @@ impl Completion {
+     }
+ 
+     async fn complete(&self, success: Success) -> Result<(), Status> {
++        self.finish(|admission| admission.success = Some(success))
++            .await
++    }
++
++    async fn fail(&self, status: &Status) -> Result<(), Status> {
++        let failure = Failure::new(status);
++        self.finish(|admission| admission.failure = Some(failure))
++            .await
++    }
++
++    async fn finish(&self, outcome: impl FnOnce(&mut Admission)) -> Result<(), Status> {
+         let mut admission: Admission =
+             serde_json::from_slice(&self.admission).map_err(|_| uncertain())?;
+-        admission.success = Some(success);
++        outcome(&mut admission);
+         admission.completed_at_ms = Some(current_time_ms());
+         let payload = serde_json::to_vec(&admission).map_err(|_| uncertain())?;
+         if payload.len() > 64 * 1024 {
+@@ -456,7 +550,7 @@ fn replay_window_ms(config: &openshell_core::Config) -> i64 {
+     ) * 1000
+ }
+ 
+-/// Delete expired successful admissions for one bucket, or all buckets, in
++/// Delete expired terminal admissions for one bucket, or all buckets, in
+ /// bounded batches. Returns whether any admission was removed.
+ async fn sweep_expired(
+     store: &Store,
+@@ -477,7 +571,7 @@ async fn sweep_expired(
+             .filter(|row| {
+                 serde_json::from_slice::<Admission>(&row.payload).is_ok_and(|admission| {
+                     admission.format_version == 1
+-                        && admission.success.is_some()
++                        && admission.terminal()
+                         && admission
+                             .completed_at_ms
+                             .is_some_and(|completed| now >= completed.saturating_add(window_ms))
+@@ -499,7 +593,7 @@ async fn sweep_expired(
+     }
+ }
+ 
+-/// Periodically delete expired successful admissions.
++/// Periodically delete expired terminal admissions.
+ pub fn spawn_expiry_sweeper(
+     state: Arc<ServerState>,
+     mut shutdown: tokio::sync::watch::Receiver<bool>,
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs b/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
+index 2b2f2ba..598b225 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
+@@ -335,12 +335,13 @@ async fn profile_scope(
+ }
+ 
+ macro_rules! mutation {
+-    ($req:ty, $resp:ty, $method:literal, $handler:path, $auth:expr, $capture:expr, $restore:expr $(, $replay_method:literal)?) => {
++    ($req:ty, $resp:ty, $method:literal, $handler:path, $auth:expr, $capture:expr, $restore:expr $(, $replay_method:literal)? $(; record_failures = $record:literal)?) => {
+         impl Mutation for $req {
+             type Output = $resp;
+             const METHOD: &'static str = $method;
+             $(const REPLAY_METHOD: &'static str = $replay_method;)?
+             const PROTECTED: bool = true;
++            $(const RECORD_FAILURES: bool = $record;)?
+             fn request_id(&self) -> &str {
+                 &self.request_id
+             }
+@@ -368,7 +369,7 @@ macro_rules! mutation {
+ }
+ 
+ macro_rules! scoped_mutation {
+-    ($req:ty, $resp:ty, $method:literal, $handler:path, $role:ident, $capture:expr, $restore:expr) => {
++    ($req:ty, $resp:ty, $method:literal, $handler:path, $role:ident, $capture:expr, $restore:expr $(; record_failures = $record:literal)?) => {
+         mutation!(
+             $req,
+             $resp,
+@@ -385,6 +386,7 @@ macro_rules! scoped_mutation {
+             },
+             $capture,
+             $restore
++            $(; record_failures = $record)?
+         );
+     };
+ }
+@@ -472,7 +474,10 @@ scoped_mutation!(
+             sandbox: Some(live(store, &id).await?),
+             service_urls,
+         })
+-    }
++    };
++    // A failed creation completes its claim. A replay is refused and carries
++    // the original code; the caller lists the workspace to learn what remains.
++    record_failures = true
+ );
+ sandbox_mutation!(
+     openshell_core::proto::UpdateSandboxRequest,
+@@ -551,6 +556,8 @@ impl Mutation for DeleteSandboxRequest {
+     type Output = DeleteSandboxResponse;
+     const METHOD: &'static str = "DeleteSandbox";
+     const PROTECTED: bool = true;
++    // As for creation; a sandbox left after a failed deletion stays readable.
++    const RECORD_FAILURES: bool = true;
+     fn request_id(&self) -> &str {
+         &self.request_id
+     }
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs b/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
+index a18fdfa..e4aae6a 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
+@@ -15,6 +15,7 @@ use openshell_core::proto::{
+     ProviderProfileImportItem, SandboxPhase, SandboxPolicy, SandboxSpec, ServiceEndpoint,
+     SettingValue, SubmitPolicyAnalysisRequest, WorkspaceMember, WorkspaceRole, setting_value,
+ };
++use openshell_core::rpc_error::StatusExt;
+ use tonic::Code;
+ 
+ async fn protected_state() -> (tempfile::TempDir, Arc<ServerState>) {
+@@ -91,6 +92,228 @@ pub(in crate::grpc::mutation_replay) async fn exercise_protected_backend(url: &s
+             .unwrap()
+             .is_some()
+     );
++
++    // Concurrent duplicates of a failing deletion execute it once. The others
++    // see the unresolved claim or the recorded failure, also after a restart.
++    let failing = DeleteSandboxRequest {
++        name: "keyed-missing".into(),
++        workspace_scope: Some(openshell_core::proto::workspace_selector(
++            "default".to_string(),
++        )),
++        allow_missing: false,
++        request_id: id(),
++    };
++    let mut second = state_for(Store::connect(url).await.unwrap()).await;
++    configure_key(&mut second, &directory);
++    let mut tasks = Vec::new();
++    for index in 0..16 {
++        let state = if index % 2 == 0 {
++            restarted.clone()
++        } else {
++            second.clone()
++        };
++        let req = failing.clone();
++        tasks.push(tokio::spawn(async move {
++            run(&state, authed_request(req)).await
++        }));
++    }
++    let mut executed = 0;
++    for task in tasks {
++        let status = task.await.unwrap().unwrap_err();
++        if status.code() == Code::NotFound {
++            executed += 1;
++        } else {
++            assert!(
++                ["REQUEST_OUTCOME_UNCERTAIN", "REQUEST_FAILED"].contains(&reason(&status).as_str()),
++                "{status:?}"
++            );
++        }
++    }
++    assert_eq!(executed, 1);
++    drop(restarted);
++    drop(second);
++    let mut again = state_for(Store::connect(url).await.unwrap()).await;
++    configure_key(&mut again, &directory);
++    assert_replayed_failure(
++        &run(&again, authed_request(failing)).await.unwrap_err(),
++        Code::NotFound,
++    );
++}
++
++fn assert_replayed_failure(status: &Status, code: Code) {
++    assert_eq!(reason(status), "REQUEST_FAILED");
++    assert_eq!(status.metadata().get("openshell-replayed").unwrap(), "true");
++    assert_eq!(
++        status
++            .get_error_details()
++            .error_info()
++            .unwrap()
++            .metadata
++            .get("original_code")
++            .unwrap(),
++        &(code as i32).to_string()
++    );
++}
++
++/// Make every completed admission older than the replay window.
++async fn expire_terminal_admissions(state: &Arc<ServerState>) {
++    let past = crate::persistence::current_time_ms()
++        - crate::grpc::mutation_replay::replay_window_ms(&state.config)
++        - 1;
++    for row in state
++        .store
++        .list_by_type_after(OBJECT_TYPE, None, 100)
++        .await
++        .unwrap()
++    {
++        let mut admission: Admission = serde_json::from_slice(&row.payload).unwrap();
++        assert!(admission.terminal());
++        admission.completed_at_ms = Some(past);
++        state
++            .store
++            .put_if(
++                OBJECT_TYPE,
++                &row.id,
++                &row.name,
++                &row.workspace,
++                &serde_json::to_vec(&admission).unwrap(),
++                None,
++                crate::persistence::WriteCondition::MatchResourceVersion(row.resource_version),
++            )
++            .await
++            .unwrap();
++        state.store.backdate(&row.id, past).await.unwrap();
++    }
++}
++
++#[tokio::test]
++async fn failed_sandbox_creation_and_deletion_release_their_slots_after_the_window() {
++    let (_directory, mut state) = protected_state().await;
++    {
++        let state = Arc::get_mut(&mut state).unwrap();
++        state.config.mutation_admission_limit_per_caller = 2;
++        state.admin_role = "openshell-admin".into();
++    }
++    let mut creation = create_sandbox("failed-creation");
++    creation.spec = None;
++    let deletion = DeleteSandboxRequest {
++        name: "never-created".into(),
++        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
++        allow_missing: false,
++        request_id: id(),
++    };
++    assert_eq!(
++        run(&state, authed_request(creation.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::InvalidArgument
++    );
++    assert_eq!(
++        run(&state, authed_request(deletion.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::NotFound
++    );
++    // Replays are refused without executing again, and the slots stay taken
++    // for the replay window.
++    assert_replayed_failure(
++        &run(&state, authed_request(creation.clone()))
++            .await
++            .unwrap_err(),
++        Code::InvalidArgument,
++    );
++    assert_replayed_failure(
++        &run(&state, authed_request(deletion.clone()))
++            .await
++            .unwrap_err(),
++        Code::NotFound,
++    );
++    // The replay checks still come first: a changed payload is a mismatch, and
++    // a caller who lost access gets the current denial.
++    let mut changed = deletion.clone();
++    changed.allow_missing = true;
++    assert_eq!(
++        reason(&run(&state, authed_request(changed)).await.unwrap_err()),
++        "REQUEST_ID_PAYLOAD_MISMATCH"
++    );
++    let mut revoked = authed_request(deletion.clone());
++    if let Principal::User(user) = revoked.extensions_mut().get_mut::<Principal>().unwrap() {
++        user.identity.roles.clear();
++    }
++    let denied = run(&state, revoked).await.unwrap_err();
++    assert_eq!(denied.code(), Code::NotFound);
++    assert_eq!(denied.message(), "sandbox not found");
++    let next = create_sandbox("after-failures");
++    assert_eq!(
++        run(&state, authed_request(next.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::ResourceExhausted
++    );
++    assert!(
++        state
++            .store
++            .get_message_by_name::<Sandbox>("default", "after-failures")
++            .await
++            .unwrap()
++            .is_none()
++    );
++
++    // After the window, the same request_id executes again, as after a
++    // success, and the caller at the limit reclaims the other expired failure.
++    expire_terminal_admissions(&state).await;
++    assert_eq!(
++        run(&state, authed_request(deletion))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::NotFound
++    );
++    run(&state, authed_request(next)).await.unwrap();
++    assert_eq!(
++        state
++            .store
++            .list_by_type_after(OBJECT_TYPE, None, 100)
++            .await
++            .unwrap()
++            .len(),
++        2
++    );
++}
++
++#[tokio::test]
++async fn mutations_without_recorded_failures_keep_errors_unresolved() {
++    let (_directory, state) = protected_state().await;
++    let req = StartSandboxRequest {
++        name: "missing".into(),
++        workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
++        request_id: id(),
++    };
++    assert_eq!(
++        run(&state, authed_request(req.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::NotFound
++    );
++    assert_eq!(
++        reason(&run(&state, authed_request(req)).await.unwrap_err()),
++        "REQUEST_OUTCOME_UNCERTAIN"
++    );
++    let rows = state
++        .store
++        .list_by_type_after(OBJECT_TYPE, None, 10)
++        .await
++        .unwrap();
++    assert_eq!(rows.len(), 1);
++    assert!(
++        !serde_json::from_slice::<Admission>(&rows[0].payload)
++            .unwrap()
++            .terminal()
++    );
+ }
+ 
+ #[tokio::test]
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/tests.rs b/crates/openshell-server/src/grpc/mutation_replay/tests.rs
+index c6cabf4..a4f0593 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/tests.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/tests.rs
+@@ -759,6 +759,7 @@ async fn quota_fails_closed_but_replays_and_expired_success_cleanup_still_work()
+         workspace_id: None,
+         target_id: None,
+         success: None,
++        failure: None,
+         completed_at_ms: None,
+     };
+     let payload = serde_json::to_vec(&pending).unwrap();
+@@ -892,6 +893,7 @@ async fn expiry_sweeper_removes_only_expired_successes() {
+         workspace_id: None,
+         target_id: None,
+         success: None,
++        failure: None,
+         completed_at_ms: None,
+     };
+     state
+@@ -1010,6 +1012,7 @@ async fn expiry_sweep_continues_past_a_full_batch() {
+         workspace_id: None,
+         target_id: None,
+         success: Some(Success::StreamTerminal),
++        failure: None,
+         completed_at_ms: Some(0),
+     };
+     let payload = serde_json::to_vec(&expired).unwrap();
+@@ -1405,3 +1408,260 @@ async fn denial_in_the_admission_worker_keeps_the_request_context() {
+     assert_eq!(events[0]["api"]["operation"], "CreateWorkspace");
+     assert_origin(&events[0]);
+ }
++
++#[derive(Clone, PartialEq, Message)]
++struct ControlledFailure {
++    #[prost(string, tag = "1")]
++    name: String,
++    #[prost(string, tag = "3")]
++    request_id: String,
++}
++
++impl Mutation for ControlledFailure {
++    type Output = CreateWorkspaceResponse;
++    const METHOD: &'static str = "CreateWorkspace";
++    const REPLAY_METHOD: &'static str = "/test/ControlledFailure";
++    const RECORD_FAILURES: bool = true;
++    fn request_id(&self) -> &str {
++        &self.request_id
++    }
++    async fn authorize(&self, state: &ServerState, principal: &Principal) -> Result<Scope, Status> {
++        CreateWorkspaceRequest {
++            name: self.name.clone(),
++            ..Default::default()
++        }
++        .authorize(state, principal)
++        .await
++    }
++    async fn execute(
++        _state: &Arc<ServerState>,
++        request: Request<Self>,
++    ) -> Result<Response<Self::Output>, Status> {
++        let control = request.extensions().get::<Arc<Control>>().unwrap().clone();
++        control.calls.fetch_add(1, Ordering::SeqCst);
++        control.started.notify_one();
++        control.proceed.notified().await;
++        Err(rpc_error::failed_precondition(
++            "TEST_REFUSAL",
++            "message with private detail",
++        ))
++    }
++    fn capture(response: &Response<Self::Output>) -> Result<Success, Status> {
++        resource_success(response.get_ref().workspace.as_ref())
++    }
++    async fn restore(store: &Store, success: Success) -> Result<Self::Output, Status> {
++        Ok(CreateWorkspaceResponse {
++            workspace: Some(restore_resource(store, success).await?),
++        })
++    }
++}
++
++fn controlled_failure(
++    req: &ControlledFailure,
++    control: &Arc<Control>,
++    subject: &str,
++) -> Request<ControlledFailure> {
++    let mut request = authed_request(req.clone());
++    request.extensions_mut().insert(control.clone());
++    if let Principal::User(user) = request.extensions_mut().get_mut::<Principal>().unwrap() {
++        user.identity.subject = subject.into();
++    }
++    request
++}
++
++fn assert_recorded_failure(status: &Status, code: Code, original_reason: Option<&str>) {
++    assert_eq!(status.code(), Code::FailedPrecondition);
++    assert_eq!(status.metadata().get("openshell-replayed").unwrap(), "true");
++    assert!(!status.message().contains("private detail"));
++    let details = status.get_error_details();
++    let info = details.error_info().unwrap();
++    assert_eq!(info.reason, "REQUEST_FAILED");
++    assert_eq!(
++        info.metadata.get("original_code").unwrap(),
++        &(code as i32).to_string()
++    );
++    assert_eq!(
++        info.metadata.get("original_reason").map(String::as_str),
++        original_reason
++    );
++    assert!(details.retry_info().is_none());
++}
++
++#[tokio::test]
++async fn recorded_failure_refuses_replays_across_cancellation_and_expires() {
++    let state = test_server_state().await;
++    let control = Arc::new(Control::default());
++    let req = ControlledFailure {
++        name: "recorded-failure".into(),
++        request_id: uuid::Uuid::new_v4().to_string(),
++    };
++
++    // The caller goes away while the owner executes; the owner still records.
++    let worker_state = state.clone();
++    let request = controlled_failure(&req, &control, "dev-user");
++    let caller = tokio::spawn(async move { run(&worker_state, request).await });
++    tokio::time::timeout(Duration::from_secs(5), control.started.notified())
++        .await
++        .unwrap();
++    caller.abort();
++    assert_eq!(
++        reason(
++            &run(&state, controlled_failure(&req, &control, "dev-user"))
++                .await
++                .unwrap_err()
++        ),
++        "REQUEST_OUTCOME_UNCERTAIN"
++    );
++    control.proceed.notify_one();
++    let replayed = tokio::time::timeout(Duration::from_secs(5), async {
++        loop {
++            let status = run(&state, controlled_failure(&req, &control, "dev-user"))
++                .await
++                .unwrap_err();
++            if reason(&status) == "REQUEST_FAILED" {
++                break status;
++            }
++            assert_eq!(reason(&status), "REQUEST_OUTCOME_UNCERTAIN");
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++    })
++    .await
++    .unwrap();
++    assert_recorded_failure(&replayed, Code::FailedPrecondition, Some("TEST_REFUSAL"));
++    assert_eq!(control.calls.load(Ordering::SeqCst), 1);
++
++    let rows = state
++        .store
++        .list_by_type_after(OBJECT_TYPE, None, 10)
++        .await
++        .unwrap();
++    assert_eq!(rows.len(), 1);
++    let row = rows.into_iter().next().unwrap();
++    assert!(row.resource_version > 1);
++    assert!(!String::from_utf8_lossy(&row.payload).contains("private detail"));
++    let admission: Admission = serde_json::from_slice(&row.payload).unwrap();
++    assert!(admission.success.is_none());
++    assert!(admission.terminal());
++
++    // Another caller with the same request_id has its own admission and
++    // cannot read, complete, or remove this one.
++    control.proceed.notify_one();
++    let other = run(&state, controlled_failure(&req, &control, "other-user"))
++        .await
++        .unwrap_err();
++    assert_eq!(reason(&other), "TEST_REFUSAL");
++    assert_eq!(control.calls.load(Ordering::SeqCst), 2);
++    assert_eq!(
++        state
++            .store
++            .get(OBJECT_TYPE, &row.id)
++            .await
++            .unwrap()
++            .unwrap()
++            .payload,
++        row.payload
++    );
++
++    // The record is kept for the replay window and then swept like a success.
++    let window_ms = replay_window_ms(&state.config);
++    assert!(
++        !sweep_expired(&state.store, Some(&row.workspace), window_ms)
++            .await
++            .unwrap()
++    );
++    let mut aged = admission;
++    aged.completed_at_ms = Some(current_time_ms() - window_ms - 1);
++    state
++        .store
++        .put_if(
++            OBJECT_TYPE,
++            &row.id,
++            &row.name,
++            &row.workspace,
++            &serde_json::to_vec(&aged).unwrap(),
++            None,
++            WriteCondition::MatchResourceVersion(row.resource_version),
++        )
++        .await
++        .unwrap();
++    state
++        .store
++        .backdate(&row.id, current_time_ms() - window_ms - 1)
++        .await
++        .unwrap();
++    assert!(
++        sweep_expired(&state.store, Some(&row.workspace), window_ms)
++            .await
++            .unwrap()
++    );
++    assert_eq!(
++        state
++            .store
++            .count_in_workspace(OBJECT_TYPE, &row.workspace)
++            .await
++            .unwrap(),
++        0
++    );
++    control.proceed.notify_one();
++    assert_eq!(
++        reason(
++            &run(&state, controlled_failure(&req, &control, "dev-user"))
++                .await
++                .unwrap_err()
++        ),
++        "TEST_REFUSAL"
++    );
++    assert_eq!(control.calls.load(Ordering::SeqCst), 3);
++}
++
++#[test]
++fn success_records_keep_their_encoding_without_a_failure() {
++    // The row as a gateway without recorded failures decodes it.
++    #[derive(Deserialize)]
++    struct Previous {
++        format_version: u32,
++        success: Option<Success>,
++        completed_at_ms: Option<i64>,
++    }
++    let admission = Admission {
++        format_version: 1,
++        payload_hash: "unused".into(),
++        protection: None,
++        workspace_id: None,
++        target_id: None,
++        success: Some(Success::StreamTerminal),
++        failure: None,
++        completed_at_ms: Some(1),
++    };
++    let encoded = String::from_utf8(serde_json::to_vec(&admission).unwrap()).unwrap();
++    assert!(!encoded.contains("failure"));
++    // A row written before failures were recorded still decodes.
++    let legacy: Admission = serde_json::from_str(&encoded).unwrap();
++    assert!(legacy.failure.is_none() && legacy.terminal());
++    // A gateway without recorded failures reads one as unresolved: no success.
++    let recorded = Admission {
++        success: None,
++        failure: Some(Failure {
++            code: Code::NotFound as i32,
++            reason: None,
++        }),
++        ..admission
++    };
++    let previous: Previous =
++        serde_json::from_slice(&serde_json::to_vec(&recorded).unwrap()).unwrap();
++    assert_eq!(previous.format_version, 1);
++    assert!(previous.success.is_none() && previous.completed_at_ms.is_some());
++    let failed = Failure::new(&Status::with_error_details(
++        Code::FailedPrecondition,
++        "detail",
++        ErrorDetails::with_error_info("lower-case reason", rpc_error::ERROR_DOMAIN, HashMap::new()),
++    ));
++    assert!(failed.reason.is_none());
++    let foreign = Failure::new(&Status::with_error_details(
++        Code::Internal,
++        "detail",
++        ErrorDetails::with_error_info("FOREIGN", "example.com", HashMap::new()),
++    ));
++    assert!(foreign.reason.is_none());
++    assert_eq!(foreign.code, Code::Internal as i32);
++}
+diff --git a/docs/how-it-works/gateways/configuration.mdx b/docs/how-it-works/gateways/configuration.mdx
+index b486eaf..ac3b986 100644
+--- a/docs/how-it-works/gateways/configuration.mdx
++++ b/docs/how-it-works/gateways/configuration.mdx
+@@ -130,7 +130,8 @@ sandbox again. CLI wait and image-preparation timeouts are separate settings.
+ 
+ Clients that send a `request_id` get a durable admission for each mutation, such
+ as sandbox create, start, exec, or delete. A successful admission keeps its slot
+-until its replay window ends, and an unresolved one keeps it until an operator
++until its replay window ends, and so does a sandbox create or delete that
++returned an error. An unresolved admission keeps its slot until an operator
+ reconciles it. The gateway deletes expired admissions in the background about
+ once a minute, and immediately for a caller that reaches the limit. Admissions are counted per caller identity across every replica
+ that shares the database. When a caller's admissions reach the limit, the gateway
+diff --git a/docs/kubernetes/high-availability.mdx b/docs/kubernetes/high-availability.mdx
+index cae356e..06483b0 100644
+--- a/docs/kubernetes/high-availability.mdx
++++ b/docs/kubernetes/high-availability.mdx
+@@ -501,11 +501,11 @@ Sandbox create, start, restart, and delete also take one fleet-wide lock while
+ they provision or remove the sandbox's SSH host identity, so that step runs for
+ one sandbox at a time across all replicas. For other
+ mutations, a lock wait longer than 10 seconds returns `UNAVAILABLE` with the
+-reason `MUTATION_LOCK_TIMEOUT`, and clients can retry the request. A request
+-that carried a `request_id` leaves its admission unresolved, like any other
+-error, so a retry with the same ID returns `REQUEST_OUTCOME_UNCERTAIN`. Observe
+-resource state and reconcile effects, then send a new request with a new
+-`request_id`. Refer to
++reason `MUTATION_LOCK_TIMEOUT`, and clients can retry the request. A retry
++with the same `request_id` returns `REQUEST_FAILED` for sandbox create and
++delete, and `REQUEST_OUTCOME_UNCERTAIN` for other mutations, whose admission
++stays unresolved. Observe resource state and reconcile effects, then send a new
++request with a new `request_id`. Refer to
+ [Durable Request Admission](/sdk/api-errors#durable-request-admission).
+ 
+ ### Upgrade from an Earlier Release
+diff --git a/docs/sdk/api-errors.mdx b/docs/sdk/api-errors.mdx
+index 153e271..7ac7c01 100644
+--- a/docs/sdk/api-errors.mdx
++++ b/docs/sdk/api-errors.mdx
+@@ -32,7 +32,8 @@ Recognized gateway reasons include the following.
+ | `RESOURCE_VERSION_CONFLICT` | `ABORTED` | Read the resource again and construct a new conditional write. `metadata.recovery` is `REFRESH_STATE`; `current_resource_version` is included when known. |
+ | `PROFILE_SOURCE_UNAVAILABLE` | `UNAVAILABLE` | Retry a profile snapshot read after at least the supplied delay. |
+ | `DATABASE_UNAVAILABLE` | `UNAVAILABLE` | The gateway could not get a database connection within 5 seconds. Retry after at least the supplied delay. |
+-| `MUTATION_LOCK_TIMEOUT` | `UNAVAILABLE` | The request waited more than 10 seconds for a concurrent mutation to release a sandbox, workspace, or gateway-wide lock. Retry after at least the supplied delay. A request that carried a `request_id` leaves its admission unresolved, like any other error, so a retry with that ID returns `REQUEST_OUTCOME_UNCERTAIN`. Observe resource state and reconcile effects before you start a new request with a new ID. |
++| `MUTATION_LOCK_TIMEOUT` | `UNAVAILABLE` | The request waited more than 10 seconds for a concurrent mutation to release a sandbox, workspace, or gateway-wide lock. Retry after at least the supplied delay. A retry with the same `request_id` returns `REQUEST_FAILED` for `CreateSandbox` and `DeleteSandbox`, and `REQUEST_OUTCOME_UNCERTAIN` for other mutations, whose admission stays unresolved. Observe resource state and reconcile effects before you start a new request with a new ID. |
++| `REQUEST_FAILED` | `FAILED_PRECONDITION` | The original attempt with this request ID returned an error, and the gateway did not execute it again. `metadata.original_code` is the numeric gRPC code of that error and `metadata.original_reason` its gateway reason, when it had one. The error does not prove that the attempt had no effects. Observe resource state and reconcile effects before you start a new request with a new ID. |
+ | `REQUEST_ID_PAYLOAD_MISMATCH` | `FAILED_PRECONDITION` | Keep the original payload for that request ID. Inspect the original operation before submitting a different one. |
+ | `REQUEST_OUTCOME_UNCERTAIN` | `FAILED_PRECONDITION` | An attempt is admitted but has no confirmed replayable success. Observe resource state and reconcile effects. Do not switch to a new ID to bypass the admission. |
+ | `REQUEST_REPLAY_UNAVAILABLE` | `FAILED_PRECONDITION` | The original scope, resource, interceptor transformation, or fingerprint key is no longer replayable. Reconcile effects; the gateway does not execute the request again. Missing private-key material can also reject admission before work starts. |
+@@ -137,12 +138,27 @@ leaves the admission unresolved. No gateway replica takes over that admission,
+ even after restart or after the replay window. Status codes alone do not prove
+ that the attempt had no effects.
+ 
++`CreateSandbox` and `DeleteSandbox` record an error instead. The gateway stores
++its gRPC code and gateway reason, never its message, and completes the admission
++with that failure. A replay, including a concurrent duplicate that arrives after
++the failure is recorded, returns `REQUEST_FAILED` with `openshell-replayed: true`
++metadata and does not execute the request again. List or read the sandboxes in
++the workspace to learn what the failed attempt left. A crash or a failed write
++of the failure record still leaves these admissions unresolved.
++
++A gateway release without recorded failures treats them as unresolved and never
++removes them. After a rollback to such a release, recorded failures stay until
++an operator removes them from the database, and its background cleanup stops
++removing expired successes once the 1,000 oldest expired admissions are recorded
++failures. A later upgrade removes them again after their replay window.
++
+ Successful results have a replay window, measured from durable completion. It is
+ 24 hours unless the operator sets `mutation_replay_window_seconds`.
+ A successful replay includes `openshell-replayed: true` response metadata and
+-does not extend the window. After it expires, the same ID can admit a new
+-execution. Do not retry an old operation after that window without reconciling
+-its effects. Unresolved admissions never expire.
++does not extend the window. Recorded failures use the same window. After it
++expires, the same ID can admit a new execution. Do not retry an old operation
++after that window without reconciling its effects. Unresolved admissions never
++expire.
+ 
+ Every replay checks current authorization, including membership and permission
+ to assign workspace administrators. A replacement workspace makes workspace-scoped
+@@ -168,8 +184,8 @@ use HMAC with domain-separated material derived from the configured gateway JWT
+ private key, or the primary TLS private key when JWT signing is not configured.
+ These methods require readable, stable private-key material when you supply an
+ ID. Replicas sharing a database must share that material. Changing it makes
+-existing protected receipts unavailable until their successful replay window
+-expires; unresolved admissions remain protected indefinitely. Workspace,
++existing protected receipts and recorded failures unavailable until their replay
++window expires; unresolved admissions remain protected indefinitely. Workspace,
+ membership, and template methods retain their original fingerprint format.
+ 
+ Gateway interceptors run their current modification and validation phases on
+@@ -186,8 +202,8 @@ Completed receipts are limited to 64 KiB. A failure to capture a bounded receipt
+ after execution leaves the admission unresolved. Each caller can
+ hold at most 1,000 durable admissions across all replicas sharing a database,
+ unless the operator sets `mutation_admission_limit_per_caller`. Successful
+-admissions count until their replay window ends. At capacity, the gateway
+-removes expired successes; if no space remains, it rejects new admissions with
++admissions and recorded failures count until their replay window ends. At
++capacity, the gateway removes expired ones; if no space remains, it rejects new admissions with
+ `RESOURCE_EXHAUSTED`. Existing records remain protected. Unresolved records
+ require operator investigation; there is no automatic reset or takeover API.
+ The gateway also limits detached admission workers to 64 per process and these
+diff --git a/proto/openshell.proto b/proto/openshell.proto
+index 198990a..2e1f65a 100644
+--- a/proto/openshell.proto
++++ b/proto/openshell.proto
+@@ -1360,7 +1360,8 @@ message CreateSandboxRequest {
+   // Workspace-scoped SandboxWorkloadTemplate name to resolve at creation time.
+   string workload_template = 6;
+   // Optional nonzero UUID for durable at-most-once admission. Successful results
+-  // can be replayed for 24 hours; see the API errors and retries reference.
++  // can be replayed for 24 hours, and a failed attempt is refused for the same
++  // window; see the API errors and retries reference.
+   string request_id = 8;
+   // HTTP services to expose when the sandbox is created. Endpoints are
+   // registered after the sandbox has been persisted and route only while the
+@@ -1563,7 +1564,8 @@ message DeleteSandboxRequest {
+   // asynchronous cleanup and does not suppress authorization or parent errors.
+   bool allow_missing = 3;
+   // Optional nonzero UUID for durable at-most-once admission. Successful results
+-  // can be replayed for 24 hours; see the API errors and retries reference.
++  // can be replayed for 24 hours, and a failed attempt is refused for the same
++  // window; see the API errors and retries reference.
+   string request_id = 4;
+ }
+ 
