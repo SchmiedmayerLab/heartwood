@@ -27,6 +27,9 @@ from heartwood_platform.common.kubernetes import Kubernetes
 
 NAMESPACE_PLACEHOLDER = "hw-s-placeholder"
 GATEWAY_IMAGE_PLACEHOLDER = "heartwood.invalid/openshell-gateway:placeholder"
+# The repository of the OpenShell release images that the sandbox gateway gives its pods.
+OPENSHELL_REPOSITORY = "ghcr.io/nvidia/openshell"
+_SANDBOX_IMAGES = ("supervisor", "sandbox")
 
 _SESSION_LABEL = "heartwood.platform/session"
 _RBAC = "rbac.authorization.k8s.io"
@@ -59,6 +62,11 @@ class SessionSettings:
     quota: dict[str, str]
     container_defaults: dict[str, str]
     container_default_requests: dict[str, str]
+    # The platform CA certificate in PEM form, which sandbox supervisors trust.
+    platform_ca: str
+    # The repository from which session pods pull the supervisor and sandbox runtime
+    # images, each under its upstream name and digest. Empty keeps OPENSHELL_REPOSITORY.
+    openshell_repository: str = ""
     ready_timeout_seconds: float = 180.0
 
 
@@ -135,7 +143,7 @@ class Sessions:
         self._removed: set[str] = set()
 
     def _namespace_objects(self, session: str) -> list[dict[str, Any]]:
-        """Quota, limits and network policies of a session namespace."""
+        """Quota, limits, network policies and platform objects of a session namespace."""
         namespace = session_namespace(session)
         settings = self._settings
         dns = {
@@ -150,6 +158,22 @@ class Sessions:
             "podSelector": {"matchLabels": {_SESSION_LABEL: session}},
         }
         return [
+            # The ServiceAccount of the staging pods that the Heartwood gateway creates.
+            # It grants nothing, and staging pods mount no token.
+            {
+                "apiVersion": "v1",
+                "kind": "ServiceAccount",
+                "metadata": {"name": "hw-staging", "namespace": namespace},
+                "automountServiceAccountToken": False,
+            },
+            # The OpenShell gateway mounts the platform CA certificate and passes it to
+            # the supervisors of its sandboxes, which trust it for allowed destinations.
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "platform-ca", "namespace": namespace},
+                "data": {"ca.crt": settings.platform_ca},
+            },
             {
                 "apiVersion": "v1",
                 "kind": "ResourceQuota",
@@ -222,6 +246,13 @@ class Sessions:
         text = self._settings.openshell_objects.replace(NAMESPACE_PLACEHOLDER, namespace).replace(
             GATEWAY_IMAGE_PLACEHOLDER, self._settings.openshell_gateway_image
         )
+        if self._settings.openshell_repository:
+            # Only the repository changes; each reference keeps the digest of the release.
+            for name in _SANDBOX_IMAGES:
+                text = text.replace(
+                    f"{OPENSHELL_REPOSITORY}/{name}@",
+                    f"{self._settings.openshell_repository}/{name}@",
+                )
         items = json.loads(text)["items"]
         assert isinstance(items, list)
         return items

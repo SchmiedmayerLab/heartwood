@@ -4,7 +4,7 @@
     {
       "apiVersion": "v1",
       "data": {
-        "gateway.toml": "\n[openshell]\nversion = 2\n[openshell.drivers.kubernetes]\nallow_driver_config = true\nallowed_pod_labels = [\"heartwood.project\", \"heartwood.attempt\", \"heartwood.role\"]\nclient_tls_secret_name = \"openshell-client-tls\"\ndefault_image = \"heartwood.invalid/no-default-sandbox-image@sha256:0000000000000000000000000000000000000000000000000000000000000000\"\ngateway_id = \"openshell\"\ngrpc_endpoint = \"https://openshell.hw-s-placeholder.svc.cluster.local:8080\"\nnamespace = \"hw-s-placeholder\"\nsa_token_ttl_secs = 3600\nsandbox_gid = 10001\nsandbox_runtime = { boundary_port = 5500 }\nsandbox_runtime_image = \"ghcr.io/nvidia/openshell/sandbox@sha256:e57d07cd6cc1fc314b80368d6b51ec6fbf825fb62cd8f081312941180846866f\"\nsandbox_runtime_image_pull_policy = \"if_not_present\"\nsandbox_uid = 10001\nservice_account_name = \"openshell-sandbox\"\nsupervisor_image = \"ghcr.io/nvidia/openshell/supervisor@sha256:f1ec231b5dbe5b6a40c33acb2ac847995aabb959a56134ef6d7d7aa4f43199d3\"\nsupervisor_image_pull_policy = \"if_not_present\"\nworkspace_mode = \"shared\"\n[openshell.drivers.kubernetes.managed_ssh_ingress]\nenabled = true\ngateway_namespace = \"hw-s-placeholder\"\ngateway_pod_selector = { \"app.kubernetes.io/instance\" = \"openshell\", \"app.kubernetes.io/name\" = \"openshell\" }\n[openshell.drivers.kubernetes.resource_admission]\nenabled = true\n[openshell.gateway]\nbind_address = \"0.0.0.0:8080\"\ncompute_driver = \"kubernetes\"\ndisable_tls = false\nenable_loopback_service_http = true\nenable_websocket_tunnel = false\nhealth_bind_address = \"0.0.0.0:8081\"\nlog_level = \"info\"\nmetrics_bind_address = \"0.0.0.0:9090\"\nname = \"openshell\"\npolicy_validation_failure_mode = \"fail_closed\"\n[openshell.gateway.credential_storage]\nkey_encryption_key_env = \"OPENSHELL_GATEWAY_CREDENTIAL_KEY_ENCRYPTION_KEY\"\n[openshell.gateway.gateway_jwt]\ngateway_id = \"openshell\"\nkid_path = \"/etc/openshell-jwt/kid\"\npublic_key_path = \"/etc/openshell-jwt/public.pem\"\nsigning_key_path = \"/etc/openshell-jwt/signing.pem\"\nttl_secs = 3600\n[openshell.gateway.tls]\ncert_path = \"/etc/openshell-tls/server/tls.crt\"\nclient_ca_path = \"/etc/openshell-tls/client-ca/ca.crt\"\nkey_path = \"/etc/openshell-tls/server/tls.key\"\n"
+        "gateway.toml": "\n[openshell]\nversion = 2\n[openshell.drivers.kubernetes]\nallow_driver_config = true\nallowed_pod_labels = [\"heartwood.project\", \"heartwood.attempt\", \"heartwood.role\"]\nclient_tls_secret_name = \"openshell-client-tls\"\ndefault_image = \"heartwood.invalid/no-default-sandbox-image@sha256:0000000000000000000000000000000000000000000000000000000000000000\"\ngateway_id = \"openshell\"\ngrpc_endpoint = \"https://openshell.hw-s-placeholder.svc.cluster.local:8080\"\nnamespace = \"hw-s-placeholder\"\nsa_token_ttl_secs = 3600\nsandbox_gid = 10001\nsandbox_runtime = { boundary_port = 5500 }\nsandbox_runtime_image = \"ghcr.io/nvidia/openshell/sandbox@sha256:e57d07cd6cc1fc314b80368d6b51ec6fbf825fb62cd8f081312941180846866f\"\nsandbox_runtime_image_pull_policy = \"if_not_present\"\nsandbox_uid = 10001\nservice_account_name = \"openshell-sandbox\"\nsupervisor_image = \"ghcr.io/nvidia/openshell/supervisor@sha256:f1ec231b5dbe5b6a40c33acb2ac847995aabb959a56134ef6d7d7aa4f43199d3\"\nsupervisor_image_pull_policy = \"if_not_present\"\nworkspace_mode = \"shared\"\n[openshell.drivers.kubernetes.managed_ssh_ingress]\nenabled = true\ngateway_namespace = \"hw-s-placeholder\"\ngateway_pod_selector = { \"app.kubernetes.io/instance\" = \"openshell\", \"app.kubernetes.io/name\" = \"openshell\" }\n[openshell.drivers.kubernetes.resource_admission]\nenabled = true\n[openshell.gateway]\nbind_address = \"0.0.0.0:8080\"\ncompute_driver = \"kubernetes\"\ndisable_tls = false\nenable_loopback_service_http = true\nenable_websocket_tunnel = false\nhealth_bind_address = \"0.0.0.0:8081\"\nlog_level = \"info\"\nmetrics_bind_address = \"0.0.0.0:9090\"\nname = \"openshell\"\npolicy_validation_failure_mode = \"fail_closed\"\n[openshell.gateway.credential_storage]\nkey_encryption_key_env = \"OPENSHELL_GATEWAY_CREDENTIAL_KEY_ENCRYPTION_KEY\"\n[openshell.gateway.gateway_jwt]\ngateway_id = \"openshell\"\nkid_path = \"/etc/openshell-jwt/kid\"\npublic_key_path = \"/etc/openshell-jwt/public.pem\"\nsigning_key_path = \"/etc/openshell-jwt/signing.pem\"\nttl_secs = 3600\n[openshell.gateway.tls]\ncert_path = \"/etc/openshell-tls/server/tls.crt\"\nclient_ca_path = \"/etc/openshell-tls/client-ca/ca.crt\"\nkey_path = \"/etc/openshell-tls/server/tls.key\"\n[openshell.supervisor.network]\nadditional_ca_bundle = \"/etc/openshell-tls/additional-ca-source/ca.crt\"\n"
       },
       "kind": "ConfigMap",
       "metadata": {
@@ -289,7 +289,7 @@
         "template": {
           "metadata": {
             "annotations": {
-              "checksum/gateway-config": "33ecd25af1f79fccda80449ceeb9e6054cdfa3a49212377c785af12ec3024c96"
+              "checksum/gateway-config": "ae44037379e1cbe71f2495ded04ad9a71522a3fce7ebc2743dbea4a3fc790f07"
             },
             "labels": {
               "app.kubernetes.io/instance": "openshell",
@@ -472,6 +472,12 @@
                     "readOnly": true
                   },
                   {
+                    "mountPath": "/etc/openshell-tls/additional-ca-source/ca.crt",
+                    "name": "additional-ca-source",
+                    "readOnly": true,
+                    "subPath": "ca.crt"
+                  },
+                  {
                     "mountPath": "/etc/openshell-tls/server",
                     "name": "tls-cert",
                     "readOnly": true
@@ -526,6 +532,18 @@
                     }
                   ]
                 }
+              },
+              {
+                "configMap": {
+                  "items": [
+                    {
+                      "key": "ca.crt",
+                      "path": "ca.crt"
+                    }
+                  ],
+                  "name": "platform-ca"
+                },
+                "name": "additional-ca-source"
               },
               {
                 "name": "tls-cert",

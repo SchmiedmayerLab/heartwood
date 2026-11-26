@@ -32,7 +32,7 @@ _POD = "hw-control-probe"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def caller(cluster: Cluster, staging_image: str) -> Iterator[None]:
+def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
     pod = {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -47,7 +47,7 @@ def caller(cluster: Cluster, staging_image: str) -> Iterator[None]:
             "containers": [
                 {
                     "name": "agnhost",
-                    "image": staging_image,
+                    "image": probe_image,
                     "args": ["pause"],
                     "securityContext": {
                         "allowPrivilegeEscalation": False,

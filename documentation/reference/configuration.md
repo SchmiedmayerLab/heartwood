@@ -235,17 +235,17 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 | `kubectl_cli` | Absolute executable path of `kubectl` |
 | `kubeconfig` | Absolute path of the `kubectl` configuration for the cluster, with a current context and the cluster's certificate authority; accessible by its owner only |
 | `namespace` | Namespace in which the sandbox gateway creates the session's pods; lowercase letters, digits, and hyphens |
-| `image_repository` | Registry repository of the worker image, with its registry host and without a tag or digest; pods reference the image as `<image_repository>@<image_digest>` |
+| `image_repository` | Registry repository of the worker image, with its registry host and without a tag or digest; the host is a dotted name, `localhost`, or a single name with a port; pods reference the image as `<image_repository>@<image_digest>` |
 | `supervisor_image_digest` | `sha256:` digest of the OpenShell supervisor image |
 | `sandbox_image_digest` | `sha256:` digest of the OpenShell sandbox runtime image |
-| `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver |
+| `workspace` | At most 19 characters, the limit of the OpenShell command-line tool with this driver; `hw-staging` and names that begin with `hw-staging-` are refused, because the workload pods of such a workspace would carry the name of a staging pod |
 
 A key of the other driver is rejected with `HW-DEPLOY-001`.
 With this driver, `image_digest` is the registry digest by which a pod references the worker image; with `openshell-docker` it is the image identifier the Docker engine reports.
 `kubectl_cli` and `kubeconfig` follow the same ownership and location rules as the other native tools and configuration files.
 The registered sandbox gateway must report one `openshell/kubernetes` compute driver with both deletion capabilities.
 The policy file must also list `/workspace` under `filesystem.read_write`, because the driver confines the worker to the listed paths and the worker's working directory is `/workspace`.
-The credential in `kubeconfig` needs these permissions in `namespace` and no others: create, delete, get, and list pods and persistent volume claims, create `pods/exec`, get and list NetworkPolicies and `sandboxes.agents.x-k8s.io`, and get the namespace.
+The credential in `kubeconfig` needs these permissions in `namespace` and no others: create, delete, get, and list pods and persistent volume claims, create `pods/exec`, get and list NetworkPolicies, get and list `sandboxes.agents.x-k8s.io`, and get the namespace.
 The namespace must provide what [staging](../architecture/system.md#kubernetes-worker-staging) uses: a service account `hw-staging`, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pod all traffic.
 `kubectl` runs with `PATH` and a temporary home directory only, so a `kubeconfig` that calls a credential plugin is not supported.
 

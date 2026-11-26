@@ -94,7 +94,7 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
 
 
 @pytest.fixture(scope="module")
-def launch(cluster: Cluster, staging_image: str) -> Iterator[dict[str, Any]]:
+def launch(cluster: Cluster, probe_image: str) -> Iterator[dict[str, Any]]:
     """Launch one session and delete every session of the module afterwards."""
     account = {
         "apiVersion": "v1",
@@ -102,7 +102,7 @@ def launch(cluster: Cluster, staging_image: str) -> Iterator[dict[str, Any]]:
         "metadata": {"name": "hub", "namespace": _SESSIONS},
     }
     existed = cluster.kubectl("get", f"--namespace={_SESSIONS}", "serviceaccount/hub")
-    cluster.apply(account, _pod("hw-session-probe", staging_image, {}))
+    cluster.apply(account, _pod("hw-session-probe", probe_image, {}))
     ready = cluster.kubectl(
         "wait", f"--namespace={_SESSIONS}", "--for=condition=Ready", "pod/hw-session-probe"
     )
@@ -148,6 +148,18 @@ def test_namespace_is_restricted_with_quota_limits_and_default_deny(
         "openshell-sandbox-ssh",
     } <= _names(cluster, "networkpolicy", namespace)
     assert _names(cluster, "role", namespace) == set()
+
+
+def test_namespace_holds_the_staging_account_and_the_platform_ca(
+    cluster: Cluster, launch: dict[str, Any]
+) -> None:
+    namespace = launch["namespace"]
+
+    staging = _json(cluster, "serviceaccount", "hw-staging", f"--namespace={namespace}")
+    assert staging["automountServiceAccountToken"] is False
+    copied = _json(cluster, "configmap", "platform-ca", f"--namespace={namespace}")
+    platform = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
+    assert copied["data"]["ca.crt"] == platform["data"]["ca.crt"]
 
 
 def test_fixed_roles_are_bound_to_the_session_accounts_only(
@@ -265,12 +277,12 @@ def test_sessions_are_separate_and_the_node_reader_follows_them(
 
 
 def test_only_the_gateway_pod_of_the_session_reaches_the_openshell_gateway(
-    cluster: Cluster, launch: dict[str, Any], staging_image: str
+    cluster: Cluster, launch: dict[str, Any], probe_image: str
 ) -> None:
     label = "heartwood.platform/session"
     cluster.apply(
-        _pod("hw-session-gateway", staging_image, {label: launch["session"]}),
-        _pod("hw-session-other", staging_image, {label: "0000000000000000"}),
+        _pod("hw-session-gateway", probe_image, {label: launch["session"]}),
+        _pod("hw-session-other", probe_image, {label: "0000000000000000"}),
     )
     ready = cluster.kubectl(
         "wait",

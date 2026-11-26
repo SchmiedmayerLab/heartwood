@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -116,3 +117,48 @@ def test_other_chart_archive_fails(tmp_path: Path) -> None:
 
     with pytest.raises(tool.RenderError, match="chart archive has SHA-256"):
         tool.render(archive)
+
+
+def test_gateway_passes_the_platform_ca_to_sandbox_supervisors() -> None:
+    objects = {(item["kind"], item["metadata"]["name"]): item for item in _committed()}
+    spec = objects[("StatefulSet", "openshell")]["spec"]["template"]["spec"]
+    (volume,) = [item for item in spec["volumes"] if item["name"] == "additional-ca-source"]
+    (mount,) = [
+        item
+        for item in spec["containers"][0]["volumeMounts"]
+        if item["name"] == "additional-ca-source"
+    ]
+    configuration = objects[("ConfigMap", "openshell-config")]["data"]["gateway.toml"]
+
+    assert volume["configMap"] == {
+        "name": "platform-ca",
+        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+    }
+    assert mount["mountPath"] == "/etc/openshell-tls/additional-ca-source/ca.crt"
+    assert (
+        '[openshell.supervisor.network]\nadditional_ca_bundle = "/etc/openshell-tls/'
+        'additional-ca-source/ca.crt"' in configuration
+    )
+
+
+def test_gateway_has_the_settings_the_platform_requirements_name() -> None:
+    objects = {(item["kind"], item["metadata"]["name"]): item for item in _committed()}
+    configuration = tomllib.loads(
+        objects[("ConfigMap", "openshell-config")]["data"]["gateway.toml"]
+    )
+    driver = configuration["openshell"]["drivers"]["kubernetes"]
+    release = json.loads(
+        (_PLATFORM.parent / "images" / "worker" / "candidate" / "gateway.json").read_text()
+    )["images"]
+
+    assert objects[("StatefulSet", "openshell")]["spec"]["replicas"] == 1
+    assert driver["allow_driver_config"] is True
+    assert driver["allowed_pod_labels"] == [
+        "heartwood.project",
+        "heartwood.attempt",
+        "heartwood.role",
+    ]
+    assert (driver["sandbox_uid"], driver["sandbox_gid"]) == (10001, 10001)
+    assert driver["workspace_mode"] == "shared"
+    assert driver["supervisor_image"] == release["supervisor"]
+    assert driver["sandbox_runtime_image"] == release["sandbox"]

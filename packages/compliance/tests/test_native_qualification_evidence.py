@@ -275,9 +275,10 @@ def _catalogued_drills() -> dict[str, list[str]]:
     return tables
 
 
-def test_the_drill_catalog_lists_exactly_the_recorded_native_drills() -> None:
+def test_the_drill_catalog_lists_exactly_the_recorded_drills() -> None:
     recorded = _recorded_drills()
-    catalogued = _catalogued_drills()["Native case"]
+    tables = _catalogued_drills()
+    catalogued = tables["Native case"] + tables["Kubernetes case"]
 
     assert recorded
     # A drill without a row, a stale version or a repeated row fails.

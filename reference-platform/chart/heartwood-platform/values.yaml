@@ -18,6 +18,10 @@ images:
   # Image of the OpenShell gateway of each session, with the Kubernetes driver.
   # It has no default: set it to a reference by digest.
   openshellGateway: ""
+  # Repository from which session pods pull the OpenShell supervisor and sandbox runtime
+  # images, each under its upstream name and digest, such as a mirror of the release.
+  # Empty pulls them from ghcr.io/nvidia/openshell.
+  openshellRepository: ""
 
 # StorageClass of the platform's own volumes. Empty selects the cluster default.
 storageClassName: ""
@@ -55,8 +59,10 @@ versitygw:
 sessions:
   # Namespace of the Hub and the Heartwood gateway pods.
   namespace: heartwood-sessions
-  # Image of the staging pods that a Heartwood gateway may create, by digest.
-  stagingImage: ""
+  # Images of the staging pods that a Heartwood gateway may create, by digest: the
+  # worker images of the sessions' deployment manifests. During a change of the worker
+  # image, list the current and the next image. An empty list denies every pod.
+  stagingImages: []
   # Addresses under which pods reach the Kubernetes API server, as a list of
   # {cidr, port}. Session namespaces deny egress by default, and the OpenShell gateway
   # may reach these. Empty reads the addresses from the cluster at installation.

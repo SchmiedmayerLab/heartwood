@@ -105,6 +105,81 @@ def embedded_build_records(image: str) -> dict[str, Any]:
     return records
 
 
+def verified_gateway(artifacts: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Require gateway artifacts that the current reviewed manifest and builder produced."""
+    manifest_path = ROOT / "images/worker/candidate/gateway.json"
+    manifest = json.loads(manifest_path.read_text())
+    record = json.loads((artifacts / "gateway-build-record.json").read_text())
+    if (
+        record["manifest_sha256"] != digest(manifest_path)
+        or record["builder_sha256"] != digest(ROOT / "deploy/build-worker-candidate.py")
+        or record["source_revision"] != manifest["source"]["revision"]
+        or record["version"] != manifest["version"]
+        or record["architecture"] not in {"amd64", "arm64"}
+        or set(record["binaries"]) != {"openshell", "openshell-gateway"}
+    ):
+        raise ValueError("Gateway artifacts do not match the current reviewed manifest")
+    for name, expected in record["binaries"].items():
+        if Path(name).name != name or digest(artifacts / "bin" / name) != expected:
+            raise ValueError("Gateway binary digest mismatch")
+    dockerfile = artifacts / "deploy/docker/Dockerfile.gateway"
+    prebuilt = (
+        artifacts
+        / "deploy/docker/.build/prebuilt-binaries"
+        / record["architecture"]
+        / "openshell-gateway"
+    )
+    if (
+        digest(dockerfile) != record["dockerfile_sha256"]
+        or digest(prebuilt) != record["binaries"]["openshell-gateway"]
+    ):
+        raise ValueError("Gateway packaging inputs differ from their build record")
+    return manifest, record
+
+
+def gateway_image(
+    artifacts: Path, manifest: dict[str, Any], record: dict[str, Any], output: Path
+) -> str:
+    """Package the verified gateway binary with the upstream Dockerfile and return the image."""
+    dockerfile = artifacts / "deploy/docker/Dockerfile.gateway"
+    prebuilt = (
+        artifacts
+        / "deploy/docker/.build/prebuilt-binaries"
+        / record["architecture"]
+        / "openshell-gateway"
+    )
+    # Artifact services discard execute bits. Normalize a private packaging copy,
+    # preserving both the supplied artifacts and the upstream Dockerfile bytes.
+    packaging = output / "gateway"
+    packaged_binary = packaging / prebuilt.relative_to(artifacts)
+    packaged_binary.parent.mkdir(parents=True)
+    shutil.copyfile(prebuilt, packaged_binary)
+    packaged_binary.chmod(0o555)
+    packaged_dockerfile = packaging / dockerfile.relative_to(artifacts)
+    shutil.copyfile(dockerfile, packaged_dockerfile)
+    if (
+        digest(packaged_binary) != record["binaries"]["openshell-gateway"]
+        or digest(packaged_dockerfile) != record["dockerfile_sha256"]
+    ):
+        raise ValueError("Gateway packaging inputs changed during staging")
+    run(
+        [
+            "docker",
+            "buildx",
+            "build",
+            "--load",
+            "--file",
+            str(packaged_dockerfile),
+            "--build-arg",
+            "GATEWAY_BASE_IMAGE=" + manifest["images"]["gateway_base"],
+            "--iidfile",
+            str(output / "gateway-image-id"),
+            str(packaging),
+        ]
+    )
+    return (output / "gateway-image-id").read_text().strip()
+
+
 def timestamp() -> str:
     """Record run boundaries in Coordinated Universal Time."""
     return datetime.now(UTC).isoformat(timespec="seconds")
@@ -163,33 +238,7 @@ def qualify(
     artifacts, records, output = artifacts.resolve(), records.resolve(), output.resolve()
     if any("," in str(path) for path in (artifacts, records, output)):
         raise ValueError("Docker paths must not contain commas")
-    manifest_path = ROOT / "images/worker/candidate/gateway.json"
-    manifest = json.loads(manifest_path.read_text())
-    record = json.loads((artifacts / "gateway-build-record.json").read_text())
-    if (
-        record["manifest_sha256"] != digest(manifest_path)
-        or record["builder_sha256"] != digest(ROOT / "deploy/build-worker-candidate.py")
-        or record["source_revision"] != manifest["source"]["revision"]
-        or record["version"] != manifest["version"]
-        or record["architecture"] not in {"amd64", "arm64"}
-        or set(record["binaries"]) != {"openshell", "openshell-gateway"}
-    ):
-        raise ValueError("Gateway artifacts do not match the current reviewed manifest")
-    for name, expected in record["binaries"].items():
-        if Path(name).name != name or digest(artifacts / "bin" / name) != expected:
-            raise ValueError("Gateway binary digest mismatch")
-    dockerfile = artifacts / "deploy/docker/Dockerfile.gateway"
-    prebuilt = (
-        artifacts
-        / "deploy/docker/.build/prebuilt-binaries"
-        / record["architecture"]
-        / "openshell-gateway"
-    )
-    if (
-        digest(dockerfile) != record["dockerfile_sha256"]
-        or digest(prebuilt) != record["binaries"]["openshell-gateway"]
-    ):
-        raise ValueError("Gateway packaging inputs differ from their build record")
+    manifest, record = verified_gateway(artifacts)
     records_manifest_path = ROOT / "images/worker/candidate/records.json"
     records_manifest = json.loads(records_manifest_path.read_text())
     records_build = json.loads((records / "records-build-record.json").read_text())
@@ -244,36 +293,7 @@ def qualify(
     ):
         raise ValueError("Docker host identity is incomplete")
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
-    # Artifact services discard execute bits. Normalize a private packaging copy,
-    # preserving both the supplied artifacts and the upstream Dockerfile bytes.
-    packaging = output / "gateway"
-    packaged_binary = packaging / prebuilt.relative_to(artifacts)
-    packaged_binary.parent.mkdir(parents=True)
-    shutil.copyfile(prebuilt, packaged_binary)
-    packaged_binary.chmod(0o555)
-    packaged_dockerfile = packaging / dockerfile.relative_to(artifacts)
-    shutil.copyfile(dockerfile, packaged_dockerfile)
-    if (
-        digest(packaged_binary) != record["binaries"]["openshell-gateway"]
-        or digest(packaged_dockerfile) != record["dockerfile_sha256"]
-    ):
-        raise ValueError("Gateway packaging inputs changed during staging")
-    run(
-        [
-            "docker",
-            "buildx",
-            "build",
-            "--load",
-            "--file",
-            str(packaged_dockerfile),
-            "--build-arg",
-            "GATEWAY_BASE_IMAGE=" + manifest["images"]["gateway_base"],
-            "--iidfile",
-            str(output / "gateway-image-id"),
-            str(packaging),
-        ]
-    )
-    image_ids["gateway"] = (output / "gateway-image-id").read_text().strip()
+    image_ids["gateway"] = gateway_image(artifacts, manifest, record, output)
     name = "hw-controller-" + uuid4().hex[:12]
     runtime_tag = name + ":runtime"
     run(["docker", "tag", image_ids["runtime"], runtime_tag])

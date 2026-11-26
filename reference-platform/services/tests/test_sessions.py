@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ import pytest
 from fakes import FakeKubernetes
 from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.control.sessions import (
+    OPENSHELL_REPOSITORY,
     ApiServerAddress,
     SessionError,
     Sessions,
@@ -30,6 +32,7 @@ _OBJECTS = (
     / "openshell-session.json"
 )
 _IMAGE = "registry.example.test/openshell-gateway@sha256:" + "1" * 64
+_CA = "-----BEGIN CERTIFICATE-----\nplatform\n-----END CERTIFICATE-----\n"
 _RBAC = "/apis/rbac.authorization.k8s.io/v1"
 
 
@@ -51,6 +54,7 @@ class Platform:
             quota={"pods": "20"},
             container_defaults={"cpu": "500m", "memory": "512Mi"},
             container_default_requests={"cpu": "100m", "memory": "128Mi"},
+            platform_ca=_CA,
             ready_timeout_seconds=10,
         )
         self.sessions = Sessions(
@@ -176,6 +180,55 @@ def test_openshell_objects_are_applied_in_the_namespace_with_the_configured_imag
         "tls.crt": "tls.crt of hw-s-abc123",
         "tls.key": "tls.key of hw-s-abc123",
     }
+
+
+def test_sandbox_images_are_pulled_from_the_configured_repository(platform: Platform) -> None:
+    platform.sessions = Sessions(
+        Kubernetes(platform.api.client()),
+        dataclasses.replace(platform.settings, openshell_repository="registry.example.test/mirror"),
+        lambda: platform.active,
+        sleep=platform._sleep,
+        clock=lambda: platform.now,
+    )
+    platform.provision("abc123")
+
+    rendered = _OBJECTS.read_text(encoding="utf-8")
+    text = json.dumps(list(platform.api.objects.values()))
+    assert OPENSHELL_REPOSITORY not in text
+    for name in ("supervisor", "sandbox"):
+        digest = rendered.split(f"{OPENSHELL_REPOSITORY}/{name}@", 1)[1][:71]
+        assert text.count(f"registry.example.test/mirror/{name}@{digest}") == 1
+
+
+def test_staging_pods_get_a_service_account_without_a_token(platform: Platform) -> None:
+    platform.provision("abc123")
+
+    accounts = platform.api.kind("ServiceAccount", "hw-s-abc123")
+    assert accounts["hw-staging"] == {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {"name": "hw-staging", "namespace": "hw-s-abc123"},
+        "automountServiceAccountToken": False,
+    }
+    # No role is bound to it.
+    bindings = platform.api.kind("RoleBinding", "hw-s-abc123").values()
+    assert all(
+        subject["name"] != "hw-staging" for binding in bindings for subject in binding["subjects"]
+    )
+
+
+def test_platform_ca_is_applied_before_the_openshell_gateway_that_mounts_it(
+    platform: Platform,
+) -> None:
+    platform.provision("abc123")
+
+    config_map = platform.api.kind("ConfigMap", "hw-s-abc123")["platform-ca"]
+    assert config_map["data"] == {"ca.crt": _CA}
+    writes = [path for method, path in platform.api.calls if method == "PATCH"]
+    namespace = "/namespaces/hw-s-abc123"
+    assert writes.index(f"/api/v1{namespace}/configmaps/platform-ca") < writes.index(
+        f"/apis/apps/v1{namespace}/statefulsets/openshell"
+    )
 
 
 def test_each_session_gets_its_own_credential_storage_key_and_keeps_it(
