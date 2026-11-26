@@ -1,0 +1,151 @@
+diff --git a/openhands-tools/openhands/tools/terminal/terminal/subprocess_terminal.py b/openhands-tools/openhands/tools/terminal/terminal/subprocess_terminal.py
+index 2672b7fc..82baa4ae 100644
+--- a/openhands-tools/openhands/tools/terminal/terminal/subprocess_terminal.py
++++ b/openhands-tools/openhands/tools/terminal/terminal/subprocess_terminal.py
+@@ -8,6 +8,7 @@ import signal
+ import subprocess
+ import threading
+ import time
++import uuid
+ from collections import deque
+ from collections.abc import Mapping
+ 
+@@ -194,13 +195,25 @@ class SubprocessTerminal(TerminalInterface):
+         self._initialized: bool = True
+ 
+         # Configure bash: disable history expansion, set up PS1/PS2 prompts
++        marker = uuid.uuid4().hex
+         init_cmd = (
+-            f'set +H; export PROMPT_COMMAND=\'export PS1="{self.PS1}"\'; export PS2=""'
++            f'set +H; export PROMPT_COMMAND=\'export PS1="{self.PS1}"\'; '
++            'export PS2=""; '
++            f"printf '\\n%s\\n' {marker}"
+         ).encode("utf-8", "ignore")
+ 
+-        self._write_pty(init_cmd + ENTER)
+-        time.sleep(1.0)  # Wait for command to take effect
+-
++        try:
++            self._write_pty(init_cmd + ENTER)
++            # The echoed setup command contains the marker as an argument.
++            # Only its own output line followed by the configured prompt is ready.
++            ready = re.compile(
++                rf"(?m)^{marker}\r?\n[\s\S]*?^{CMD_OUTPUT_PS1_END.strip()}\r?\n"
++            )
++            if not self._wait_for_output(ready):
++                raise RuntimeError("Timed out waiting for the subprocess shell prompt")
++        except BaseException:
++            self.close()
++            raise
+         self.clear_screen()
+ 
+         logger.debug("PTY terminal initialized with work dir: %s", self.work_dir)
+@@ -476,27 +489,13 @@ class SubprocessTerminal(TerminalInterface):
+         if not self._initialized:
+             return
+ 
+-        need_prompt_nudge = False
+         with self.output_lock:
+-            if not self.output_buffer:
+-                need_prompt_nudge = True
+-            else:
+-                data = "".join(self.output_buffer)
+-                start_idx = data.rfind(CMD_OUTPUT_PS1_BEGIN)
+-                end_idx = data.rfind(CMD_OUTPUT_PS1_END)
+-                if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+-                    tail = data[start_idx:]
+-                    self.output_buffer.clear()
+-                    self.output_buffer.append(tail)
+-                else:
+-                    self.output_buffer.clear()
+-                    need_prompt_nudge = True
+-
+-        if need_prompt_nudge:
+-            try:
+-                self._write_pty(ENTER)  # ask bash to render a prompt, no screen clear
+-            except Exception:
+-                pass
++            data = "".join(self.output_buffer).replace("\r\n", "\n")
++            end = data.rfind(CMD_OUTPUT_PS1_END)
++            start = data.rfind(CMD_OUTPUT_PS1_BEGIN, 0, end) if end >= 0 else -1
++            self.output_buffer.clear()
++            if start >= 0:
++                self._add_text_to_buffer(data[start:])
+ 
+     def interrupt(self) -> bool:
+         """Send SIGINT to the PTY process group (fallback to signal-based interrupt)."""
+diff --git a/tests/tools/terminal/test_terminal_session.py b/tests/tools/terminal/test_terminal_session.py
+index 780f375b..29356649 100644
+--- a/tests/tools/terminal/test_terminal_session.py
++++ b/tests/tools/terminal/test_terminal_session.py
+@@ -43,6 +43,70 @@ terminal_types = ["tmux", "subprocess"]
+ parametrize_terminal_types = pytest.mark.parametrize("terminal_type", terminal_types)
+ 
+ 
++@pytest.mark.skipif(os.name == "nt", reason="requires a Unix PTY")
++def test_subprocess_clear_keeps_prompt_without_submitting_input(tmp_path, monkeypatch):
++    from openhands.tools.terminal.metadata import CmdOutputMetadata
++    from openhands.tools.terminal.terminal.subprocess_terminal import SubprocessTerminal
++
++    terminal = SubprocessTerminal(str(tmp_path))
++    terminal.initialize()
++    try:
++        writes = []
++        monkeypatch.setattr(terminal, "_write_pty", writes.append)
++        prompt = terminal.read_screen()
++        assert len(CmdOutputMetadata.matches_ps1_metadata(prompt)) == 1
++        with terminal.output_lock:
++            terminal.output_buffer.clear()
++            terminal._add_text_to_buffer(
++                ("discard me\n" + prompt).replace("\n", "\r\n")
++            )
++        terminal.clear_screen()
++        screen = terminal.read_screen()
++        assert "discard me" not in screen
++        assert len(CmdOutputMetadata.matches_ps1_metadata(screen)) == 1
++        with terminal.output_lock:
++            terminal.output_buffer.clear()
++        terminal.clear_screen()
++        assert writes == []
++    finally:
++        monkeypatch.undo()
++        terminal.close()
++
++
++@pytest.mark.skipif(os.name == "nt", reason="requires a Unix PTY")
++def test_subprocess_waits_for_child_exit(tmp_path):
++    from concurrent.futures import ThreadPoolExecutor
++
++    session = create_terminal_session(
++        work_dir=str(tmp_path), terminal_type="subprocess"
++    )
++    session.initialize()
++    release = tmp_path / "release"
++    try:
++        with ThreadPoolExecutor(max_workers=1) as executor:
++            result = executor.submit(
++                session.execute,
++                TerminalAction(
++                    command="sh -c 'echo $$ > child; "
++                    "while [ ! -e release ]; do sleep 0.02; done; exit 7'"
++                ),
++            )
++            try:
++                child = tmp_path / "child"
++                deadline = time.monotonic() + 5
++                while not (child.exists() and child.stat().st_size):
++                    assert time.monotonic() < deadline
++                    time.sleep(0.01)
++                os.kill(int(child.read_text()), 0)
++                with pytest.raises(TimeoutError):
++                    result.result(timeout=0.25)
++            finally:
++                release.touch()
++            assert result.result(timeout=5).exit_code == 7
++    finally:
++        session.close()
++
++
+ @parametrize_terminal_types
+ def test_session_initialization(terminal_type):
+     # Test with custom working directory

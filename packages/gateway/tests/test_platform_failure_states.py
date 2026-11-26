@@ -206,25 +206,7 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
 
 @pytest.mark.parametrize(
     "state",
-    [
-        pytest.param(
-            state,
-            id=state["code"],
-            marks=(
-                pytest.mark.xfail(
-                    strict=True,
-                    reason=(
-                        "OpenHands also records its rate-limit classification of the quota "
-                        "response, so every interface shows HW-AGENT-010 beside HW-AGENT-009"
-                    ),
-                )
-                if state["inference_failure"] == "quota"
-                else ()
-            ),
-        )
-        for state in _STATES
-        if "inference_failure" in state
-    ],
+    [pytest.param(state, id=state["code"]) for state in _STATES if "inference_failure" in state],
 )
 def test_inference_failures_show_the_same_diagnostic_in_every_interface(
     tmp_path: Path, fakes: RunningFakes, state: dict[str, str]

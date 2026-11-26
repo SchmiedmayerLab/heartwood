@@ -152,11 +152,9 @@ def test_budget_exhaustion_is_answered_with_the_diagnostic(small: Server) -> Non
 
     codes = small.wait(lambda events: error_codes(events[before:]))
 
-    # LiteLLM answers an exhausted key budget with HTTP 422 `budget_exceeded`, which its
-    # client raises as `BadRequestError`. The OpenHands SDK of the runtime lock maps that
-    # to `LLMBadRequestError` and classifies it as a configuration failure, so the
-    # gateway reports HW-AGENT-011, model configuration is invalid, for this budget.
-    assert "HW-AGENT-011" in codes, codes
+    # The exhausted inference key produces the quota diagnostic for this turn.
+    assert "HW-AGENT-009" in codes, codes
+    assert "HW-AGENT-011" not in codes, codes
 
 
 def test_settlement_records_the_spending_above_the_key_budget(

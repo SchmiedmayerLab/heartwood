@@ -643,7 +643,6 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
 Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
-The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
 Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
 Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
