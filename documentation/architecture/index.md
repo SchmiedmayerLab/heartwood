@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT
 Heartwood is a research agent system built around an OpenHands coding agent.
 A gateway owns project state, policy, action review, outside authorization, records, and audit; the OpenHands agent worker proposes and runs actions, either in the gateway process or inside an OpenShell sandbox; terminal, browser, and notebook interfaces render one gateway contract.
 Heartwood reuses OpenHands for the conversation loop and coding tools and does not maintain a parallel agent loop or tool implementation.
-[System Architecture](system.md) describes the components and the trust boundary between them.
+[System Architecture](system.md) describes the components and the trust boundary between them, and [Reference Platform](reference-platform.md) describes the Kubernetes platform that implements the platform side of the contract.
 
 ## In Scope
 

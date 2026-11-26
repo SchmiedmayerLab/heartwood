@@ -12,6 +12,7 @@ SPDX-License-Identifier: MIT
 
 This directory holds code of the Kubernetes reference platform, a deployment for synthetic and open data.
 It is kept apart from the Heartwood application packages under `packages/`.
+[Reference Platform](../documentation/architecture/reference-platform.md) describes its architecture, trust boundaries and design decisions.
 
 ## Layout
 
