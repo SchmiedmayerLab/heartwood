@@ -254,7 +254,7 @@ Deploy the verified reference `${image}@${digest}`, never the tag.
 
 ### Sandbox Gateway
 
-Heartwood provides a sandbox gateway build: the upstream OpenShell gateway at the revision recorded in `images/worker/candidate/gateway.json`, with the patches listed there, both the Docker and the Kubernetes compute drivers, and version `0.1.9+heartwood.3`, a local version that no upstream release uses.
+Heartwood provides a sandbox gateway build: the upstream OpenShell gateway at the revision recorded in `images/worker/candidate/gateway.json`, with the patches listed there, both the Docker and the Kubernetes compute drivers, and version `0.1.9+heartwood.4`, a local version that no upstream release uses.
 Native qualification runs against this build on both drivers, and revocation and cleanup claims apply to this build only.
 The patches, their purpose and the upstream change that allows their removal are listed in [Testing and Evidence](../architecture/testing.md#candidate-builds).
 
@@ -268,7 +268,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --gateway-tests --output gateway-build --cache gateway-cache
 ```
 
-The script verifies every source, patch and image input against its recorded digest, runs the gateway's deletion tests and the Kubernetes driver's tests, and writes `gateway-build-record.json`.
+The script verifies every source, patch and image input against its recorded digest, runs the gateway's deletion, request admission and image update tests and the Kubernetes driver's tests, and writes `gateway-build-record.json`.
 The record holds the purpose `deployable`, the version, the upstream source revision, the enabled driver features, the digests of the manifest and the build script, the binary digests and the image identifier.
 The image carries the labels `org.opencontainers.image.title=heartwood-sandbox-gateway`, `org.opencontainers.image.version` and `org.opencontainers.image.revision` with the same version and source revision.
 
@@ -330,11 +330,13 @@ It also needs a caller with a user identity, such as the mutual TLS client ident
 Otherwise every creation is refused before any work.
 Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000.
 A completed creation holds its slot until its replay window ends.
-A creation whose outcome the gateway did not record, such as a failed creation or a creation refused under a name confirmed absent, holds its slot for as long as the gateway's store keeps it, and OpenShell provides no operation that releases it.
+A failed creation, such as one refused under a name confirmed absent, is recorded with its status code and gateway reason and also holds its slot until its replay window ends; a repeated delivery within the window is refused with `FAILED_PRECONDITION` and reason `REQUEST_FAILED` and is not executed.
+The gateway records failed deletion, start, stop and update requests with a request identifier in the same way.
+A request whose outcome the gateway did not record, because the gateway stopped during the request or could not write the outcome, and a failed request of any other mutation hold their slot for as long as the gateway's store keeps it, and OpenShell provides no operation that releases it.
 The slots count every mutation with a request identifier from the same caller identity, also those of other clients that use the identity Heartwood uses at the sandbox gateway.
 When the slots are used up, the gateway refuses every such request with `RESOURCE_EXHAUSTED` before any work; it gives the same status in other cases before any work, such as while its admission workers are busy.
-Size the limit for the completed creations within the window plus every creation without a recorded outcome over the lifetime of the gateway's store.
-The reference platform sets `mutation_admission_limit_per_caller = 100000` in each session's sandbox gateway, because one researcher and project use one gateway and its store for the life of the session, and every creation without a recorded outcome stays counted.
+Size the limit for the creations within the window plus every request without a recorded outcome over the lifetime of the gateway's store.
+The reference platform sets `mutation_admission_limit_per_caller = 100000` in each session's sandbox gateway, because one researcher and project use one gateway and its store for the life of the session, and every request without a recorded outcome stays counted.
 An admission is a store row of under a kilobyte, so 100,000 rows fit well within the gateway's 1 GiB data volume.
 
 Some cases keep a name rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, contention on the record that outlasts the gateway's eight attempts, a store outage longer than the gateway's retries, an error on the deletion's second read, and a gateway crash between the record and its withdrawal.

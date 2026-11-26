@@ -515,7 +515,7 @@ The application's default lock installs patched OpenHands and OpenShell SDK whee
 `deploy/build-worker-candidate.py --bootstrap` builds them there from pinned upstream revisions, verified by the digest of their extracted source tree, and the reviewed patches in `images/worker/candidate/`, or verifies existing wheels against the digests in `sources.json`.
 The patches add the remote-event and configuration-admission hooks the trust boundary requires; the gateway refuses to construct a managed worker on an SDK without them.
 
-The OpenShell gateway is also built from pinned source with the deletion patches recorded in `images/worker/candidate/gateway.json`, as version `0.1.9+heartwood.3` with the purpose `deployable`; each patch makes the gateway report its behavior as a compute driver capability.
+The OpenShell gateway is also built from pinned source with the patches recorded in `images/worker/candidate/gateway.json`, as version `0.1.9+heartwood.4` with the purpose `deployable`; each deletion patch and the creation-after-absence patch makes the gateway report its behavior as a compute driver capability.
 The build contains the Docker and Kubernetes compute drivers, and each gateway configuration in this repository selects one with `compute_driver`.
 Native qualification and deployments use this [sandbox gateway build](../operate/platform-requirements.md#sandbox-gateway); a deployment's gateway is checked only by the capabilities it reports, and the operator compares it with the qualification record.
 
