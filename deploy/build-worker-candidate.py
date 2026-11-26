@@ -20,7 +20,7 @@ import urllib.request
 import zipfile
 import zlib
 from email.parser import Parser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -164,9 +164,12 @@ def _wheel_identity(path: Path) -> tuple[str, str]:
         # Core metadata names each bundled license file, such as LICENSE or LICENSE.md.
         licenses = entries[0].removesuffix("METADATA") + "licenses/"
         declared = metadata.get_all("License-File", [])
-        if not declared or any(
-            licenses + path not in wheel.namelist() or not wheel.read(licenses + path)
-            for path in declared
+        if not any(
+            PurePosixPath(file).name.upper().startswith(("LICENSE", "LICENCE", "COPYING"))
+            for file in declared
+        ) or any(
+            licenses + file not in wheel.namelist() or not wheel.read(licenses + file).strip()
+            for file in declared
         ):
             raise ValueError("Candidate wheel must preserve its upstream license")
     return name[0], version[0]

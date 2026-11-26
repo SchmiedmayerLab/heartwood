@@ -516,22 +516,42 @@ def test_changed_archive_cannot_execute_build_code(
     assert not (tmp_path / "wheels/build-record.json").exists()
 
 
-@pytest.mark.parametrize("condition", ["valid", "missing-license", "duplicate-identity"])
+@pytest.mark.parametrize(
+    ("condition", "declared", "files"),
+    [
+        ("valid", ["LICENSE"], {"LICENSE": "Synthetic test license"}),
+        ("valid", ["LICENSE.md"], {"LICENSE.md": "Synthetic test license"}),
+        ("valid", ["LICENSE", "NOTICE"], {"LICENSE": "License", "NOTICE": "Notice"}),
+        ("refused", ["LICENSE"], {}),
+        ("refused", ["LICENSE"], {"LICENSE": ""}),
+        ("refused", ["LICENSE"], {"LICENSE": " \n\t"}),
+        ("refused", [], {"LICENSE": "Synthetic test license"}),
+        ("refused", ["LICENSE", "COPYING"], {"LICENSE": "Synthetic test license"}),
+        ("refused", ["NOTICE"], {"NOTICE": "Synthetic test notice"}),
+        ("duplicate-identity", ["LICENSE"], {"LICENSE": "Synthetic test license"}),
+    ],
+)
 def test_wheel_identity_requires_preserved_license_and_unambiguous_metadata(
-    builder: ModuleType, tmp_path: Path, condition: str
+    builder: ModuleType,
+    tmp_path: Path,
+    condition: str,
+    declared: list[str],
+    files: dict[str, str],
 ) -> None:
     wheel = tmp_path / "synthetic.whl"
     metadata = "Name: synthetic\nVersion: 1.0+heartwood.1\n"
+    metadata += "".join(f"License-File: {name}\n" for name in declared)
     if condition == "duplicate-identity":
         metadata += "Name: substituted\n"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("synthetic.dist-info/METADATA", metadata)
-        if condition != "missing-license":
-            archive.writestr("synthetic.dist-info/licenses/LICENSE", "Synthetic test license")
+        for name, content in files.items():
+            archive.writestr(f"synthetic.dist-info/licenses/{name}", content)
     if condition == "valid":
         assert builder._wheel_identity(wheel) == ("synthetic", "1.0+heartwood.1")
     else:
-        with pytest.raises(ValueError, match="Candidate wheel"):
+        match = "identity" if condition == "duplicate-identity" else "upstream license"
+        with pytest.raises(ValueError, match=match):
             builder._wheel_identity(wheel)
 
 
