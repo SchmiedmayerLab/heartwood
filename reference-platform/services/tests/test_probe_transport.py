@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import test_project_data as probes
-from identity import private_file
+from identity import curl, private_file
 from kube import Cluster
 from test_estimates import Researcher
 
@@ -206,3 +206,18 @@ def test_expiry_wait_accounts_for_elapsed_probe_time(
     assert (first_status, second_status) == (200, 403)
     lifetime = int(parse_qs(urlsplit(before).query)["X-Amz-Expires"][0])
     sleeper.sleep.assert_called_once_with(max(0, lifetime + 1 - elapsed_seconds))
+
+
+def test_failed_probe_request_reports_curl_reason_without_its_url() -> None:
+    cluster = Mock(spec=Cluster)
+    cluster.kubectl.return_value = CompletedProcess(
+        [], 7, stdout="", stderr=f"curl: (7) Failed to connect to {_URL}: Connection refused\n"
+    )
+    with pytest.raises(AssertionError) as failure:
+        curl(cluster, "probe", _URL)
+    message = str(failure.value)
+    assert message == (
+        "Probe request failed with exit status 7: "
+        "curl: (7) Failed to connect to <url> Connection refused"
+    )
+    assert "synthetic-private-value" not in message

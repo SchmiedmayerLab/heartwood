@@ -295,7 +295,7 @@ class _CaseServer(Server):
 
     def registration(self) -> dict[str, Any] | None:
         status, user = self.browser.hub_api("GET", f"/users/{self.user}?include_stopped_servers=1")
-        assert status == 200
+        assert status == 200, status
         registered: dict[str, Any] | None = user["servers"].get(self.project)
         return registered
 
@@ -337,7 +337,7 @@ with sqlite3.connect(f'file:{db}?mode=ro', uri=True) as conn:
             f"/users/{self.user}/servers/{self.project}",
             {"profile": self.project, "test_owner": self.owner},
         )
-        assert status in {201, 202}
+        assert status in {201, 202}, status
         self.wait_started()
 
 

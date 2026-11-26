@@ -163,7 +163,9 @@ def curl(
     except subprocess.TimeoutExpired:
         raise AssertionError("Probe request timed out") from None
     if result.returncode:
-        raise AssertionError(f"Probe request failed with exit status {result.returncode}")
+        # curl can name the request URL, which may carry a signature or token.
+        reason = re.sub(r"\S+://\S+", "<url>", result.stderr).strip()[-300:]
+        raise AssertionError(f"Probe request failed with exit status {result.returncode}: {reason}")
     return result.stdout
 
 

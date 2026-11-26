@@ -88,7 +88,7 @@ class Browser:
         if status == 302:
             # Keycloak already holds this browser's sign-in and returns at once.
             return redirect
-        assert status == 200
+        assert status == 200, status
         form = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page)
         if form is None:
             raise AssertionError("Missing login form")
@@ -108,16 +108,16 @@ class Browser:
             text_input=urlencode({"username": self.username, "password": password}),
         )
         status_text, _, callback = output.rpartition("\n")[2].partition(" ")
-        assert status_text == "302"
+        assert status_text == "302", status_text
         return callback
 
     def sign_in_to_hub(self) -> None:
         """Sign in at the Hub through Keycloak."""
         status, location, _ = self.get("/hub/oauth_login")
-        assert status == 302
+        assert status == 302, status
         callback = self.keycloak(location)
         status, _, _ = self.get(callback)
-        assert status == 302
+        assert status == 302, status
 
     def spawn(self, researcher: str, project: str) -> tuple[int, str]:
         """Start the named server of a project with the spawn form; return the answer.
@@ -178,9 +178,9 @@ class Browser:
     def sign_in_to_gateway(self, base: str) -> tuple[int, str, str]:
         """Sign in at a gateway behind the proxy; return the gateway's callback answer."""
         status, location, _ = self.get(f"{base}/")
-        assert status in {302, 303, 307}
+        assert status in {302, 303, 307}, status
         status, location, _ = self.get(location)
-        assert status in {302, 303, 307}
+        assert status in {302, 303, 307}, status
         expected = project_url(base) + "/oauth_callback"
         assert parse_qs(urlsplit(location).query).get("redirect_uri") == [expected]
         callback = self.keycloak(location)
@@ -190,10 +190,10 @@ class Browser:
     def launch(self, base: str) -> str:
         """Sign in at a gateway and exchange the launch token for a capability."""
         status, location, _ = self.sign_in_to_gateway(base)
-        assert status in {302, 303}
+        assert status in {302, 303}, status
         token = parse_qs(urlsplit(location).fragment)["launch"][0]
         status, answer = self.api(base, "POST", "/launch", None, {"token": token})
-        assert status == 200
+        assert status == 200, status
         capability = answer["capability"]
         if not isinstance(capability, str):
             raise AssertionError("Invalid gateway capability response")
@@ -293,7 +293,7 @@ class Server:
 
     def start(self) -> None:
         status, _ = self.browser.spawn(self.user, self.project)
-        assert status == 302
+        assert status == 302, status
         self.wait_started()
 
     def wait_started(self) -> None:
@@ -376,11 +376,11 @@ class Server:
         status, catalog = self.api(
             "POST", "/settings/models/catalog", {"connection_id": route, "refresh": True}
         )
-        assert status == 200
+        assert status == 200, status
         status, _ = self.api(
             "POST", "/settings/models/connect", {"connection_id": route, "model_id": model}
         )
-        assert status == 200
+        assert status == 200, status
         self.create_conversation()
         if not isinstance(catalog, dict):
             raise AssertionError("Invalid model catalog response")
@@ -388,7 +388,7 @@ class Server:
 
     def create_conversation(self) -> None:
         status, created = self.api("POST", "/sessions", {"title": "Model route"})
-        assert status == 201
+        assert status == 201, status
         self.conversation = created["session_id"]
 
     def command(self, kind: str, payload: dict[str, Any]) -> None:
@@ -402,12 +402,12 @@ class Server:
         }
         # A command can start the session's worker before it answers.
         status, _ = self.api("POST", f"/sessions/{self.conversation}/commands", body, max_time=600)
-        assert status == 200
+        assert status == 200, status
 
     def snapshot(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Return the conversation's events and the gateway's projection of them."""
         status, answer = self.api("GET", f"/sessions/{self.conversation}/events")
-        assert status == 200
+        assert status == 200, status
         return answer["events"], answer["projection"]
 
     def events(self) -> list[dict[str, Any]]:
