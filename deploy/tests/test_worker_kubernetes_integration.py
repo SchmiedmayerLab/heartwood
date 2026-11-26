@@ -694,7 +694,11 @@ def _policy_probe(
             if phase in {"Succeeded", "Failed"}:
                 break
             time.sleep(1)
-        assert phase == "Succeeded", phase
+        # A pod that never ran names the reason in its conditions, such as Unschedulable.
+        assert phase == "Succeeded", (
+            phase,
+            fixture.outside("get", "pod", name, "--output=jsonpath={.status.conditions}"),
+        )
         return fixture.outside("logs", name).strip()
     finally:
         fixture.outside("delete", "pod", name, "--wait")

@@ -308,8 +308,8 @@ def images(arguments: argparse.Namespace) -> None:
     )
 
 
-def _pod(name: str, image: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
-    """A pod of the controller image that waits for commands."""
+def _pod(name: str, image: str, cpu: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
+    """A pod of the controller image that waits for commands and requests ``cpu``."""
     container: dict[str, Any] = {
         "name": "controller",
         "image": image,
@@ -319,7 +319,7 @@ def _pod(name: str, image: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
         # system stays writable.
         "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
         "resources": {
-            "requests": {"cpu": "500m", "memory": "1Gi"},
+            "requests": {"cpu": cpu, "memory": "1Gi"},
             "limits": {"memory": "3Gi"},
         },
         "volumeMounts": spec.pop("volumeMounts", []),
@@ -643,6 +643,7 @@ def _fixture_objects(cluster: Cluster, launched: dict[str, Any], built: dict[str
         _pod(
             _CONTROLLER,
             built["image_references"]["controller"],
+            "500m",
             serviceAccountName=launched["gateway_service_account"],
             automountServiceAccountToken=True,
             # The session label admits this pod to the session's sandbox gateway.
@@ -816,8 +817,10 @@ def run(arguments: argparse.Namespace) -> None:
             "delete", "--namespace", _SESSIONS, "--ignore-not-found", "--wait",
             f"pod/{_CONTROLLER}", f"pod/{_LAUNCHER}",
         )  # fmt: skip
+        # The launcher only sends the launch and deletion requests. The cases share the
+        # single node with the platform chart and need its CPU for their pods.
         cluster.apply(
-            _pod(_LAUNCHER, built["image_references"]["controller"]),
+            _pod(_LAUNCHER, built["image_references"]["controller"], "50m"),
         )
         cluster.kubectl(
             "wait", "--namespace", _SESSIONS, "--for=condition=Ready", "--timeout=300s",
