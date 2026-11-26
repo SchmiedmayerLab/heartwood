@@ -161,8 +161,13 @@ def _wheel_identity(path: Path) -> tuple[str, str]:
         name, version = metadata.get_all("Name", []), metadata.get_all("Version", [])
         if len(name) != 1 or len(version) != 1:
             raise ValueError("Candidate wheel identity is missing or ambiguous")
-        license_path = entries[0].removesuffix("METADATA") + "licenses/LICENSE"
-        if license_path not in wheel.namelist() or not wheel.read(license_path):
+        # Core metadata names each bundled license file, such as LICENSE or LICENSE.md.
+        licenses = entries[0].removesuffix("METADATA") + "licenses/"
+        declared = metadata.get_all("License-File", [])
+        if not declared or any(
+            licenses + path not in wheel.namelist() or not wheel.read(licenses + path)
+            for path in declared
+        ):
             raise ValueError("Candidate wheel must preserve its upstream license")
     return name[0], version[0]
 
