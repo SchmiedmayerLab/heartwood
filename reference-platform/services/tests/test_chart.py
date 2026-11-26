@@ -871,6 +871,19 @@ def test_a_settlement_waits_longer_than_litellm_writes_the_spending() -> None:
     )
     assert result.returncode != 0
     assert "inference.settleWaitSeconds must exceed inference.spendWriteSeconds" in result.stderr
+    # The smallest wait above the bound renders.
+    accepted = subprocess.run(
+        [
+            *_TEMPLATE,
+            "--values",
+            str(_CHART / "values-kind.yaml"),
+            "--set-json",
+            "inference.settleWaitSeconds=6.5",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert accepted.returncode == 0, accepted.stderr
 
 
 def test_litellm_accepts_only_the_control_service_supervisors_and_gateways() -> None:

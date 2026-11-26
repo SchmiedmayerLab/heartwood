@@ -227,7 +227,9 @@ inference:
   # also trusts the public roots of its image, which hosted models need.
   trustPublicRoots: false
   # How often LiteLLM writes the spending of keys to its database, in seconds; LiteLLM
-  # adds an offset of up to five seconds that it chooses at its start.
+  # adds an offset of up to five seconds that it chooses at its start. The same interval
+  # drives LiteLLM's other periodic database jobs, so a low value is meant for test
+  # clusters.
   spendWriteSeconds: 10
   # How long the control service waits for LiteLLM to record the spending of a key's
   # last requests before it reads the spending to settle or rotate the key. It must
