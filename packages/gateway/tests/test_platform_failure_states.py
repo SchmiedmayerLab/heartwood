@@ -59,7 +59,7 @@ from heartwood.gateway.platform_fakes import (
 from heartwood.notebook import NotebookSession, build_view_model, build_widget_spec
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
-from packages.gateway.tests.test_platform_operations import _CPU, SignIn, platform
+from packages.gateway.tests.platform_operation_fixtures import CPU, SignIn, job_platform
 
 _ROOT = Path(__file__).resolve().parents[3]
 _STATES = json.loads(
@@ -191,7 +191,10 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
     table = contract.split("### Failure States", 1)[1].split("\n\n", 2)[1]
 
     assert set(re.findall(r"HW-[A-Z]+-\d{3}", table)) == {state["code"] for state in _STATES}
-    # Each surface below has a test that shows its states in every interface.
+    # Each surface below has a test that shows its states in every interface, except
+    # the gateway-response states HW-INGRESS-002 and HW-INGRESS-003: they refuse HTTP
+    # requests, which only the browser sends, so their tests check the HTTP refusal.
+    # HW-INGRESS-004 and HW-INGRESS-005 also refuse platform calls, shown everywhere.
     # Model discovery states are tested in test_platform_model_connections.py,
     # planning states in test_platform_planning.py and operation states in
     # test_platform_operations.py.
@@ -365,8 +368,8 @@ def test_identity_refusals_of_a_platform_call_show_the_same_diagnostic_in_every_
     tmp_path: Path, state: dict[str, str]
 ) -> None:
     sign_in = SignIn()
-    with platform(tmp_path, sign_in=sign_in) as service:
-        record = service.call("create_task", _CPU)
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        record = service.call("create_task", CPU)
         # The sign-in ends, or the provider goes down, before the researcher approves.
         sign_in.state = "ended" if state["code"] == "HW-INGRESS-004" else "provider-unavailable"
         approval = SessionCommand(
