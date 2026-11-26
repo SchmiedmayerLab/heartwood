@@ -1188,23 +1188,26 @@ def reader_ca_policy(cluster: Cluster, tmp_path_factory: pytest.TempPathFactory)
     A release without a mounted dataset has neither, so the test applies the policy that
     the chart renders for one and removes what it created afterwards.
     """
-    created = []
-    if cluster.kubectl("get", f"namespace/{_MOUNTS}").returncode != 0:
-        cluster.apply(_namespace(_MOUNTS, {}))
-        created.append(f"namespace/{_MOUNTS}")
-    if cluster.kubectl("get", f"mutatingadmissionpolicy/{_READER_CA}").returncode != 0:
-        policy = [
-            item
-            for item in _render_mounted(tmp_path_factory.mktemp("mounted"))
-            if item["kind"].startswith("MutatingAdmissionPolicy")
-            and item["metadata"]["name"] == _READER_CA
-        ]
-        assert len(policy) == 2
-        cluster.apply(*policy)
-        created += [f"{item['kind'].lower()}/{_READER_CA}" for item in policy]
-    yield
-    for name in reversed(created):
-        cluster.kubectl("delete", "--ignore-not-found", "--wait=false", name)
+    policy = [
+        item
+        for item in _render_mounted(tmp_path_factory.mktemp("mounted"))
+        if item["kind"].startswith("MutatingAdmissionPolicy")
+        and item["metadata"]["name"] == _READER_CA
+    ]
+    assert len(policy) == 2
+    created: list[str] = []
+    try:
+        # Create each object, so that only objects this test created are removed.
+        for document in (_namespace(_MOUNTS, {}), *policy):
+            result = cluster.kubectl("create", "--filename", "-", document=document)
+            if result.returncode == 0:
+                created.append(f"{document['kind'].lower()}/{document['metadata']['name']}")
+            else:
+                assert "AlreadyExists" in result.stderr, result.stderr
+        yield
+    finally:
+        for name in reversed(created):
+            cluster.kubectl("delete", "--ignore-not-found", "--wait=false", name)
 
 
 def _reader_pod(image: str, labels: dict[str, str], containers: int = 1) -> dict[str, Any]:
