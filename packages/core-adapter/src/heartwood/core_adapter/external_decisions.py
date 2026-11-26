@@ -81,7 +81,13 @@ def propose_external_action_locked(
     ):
         raise ExternalActionError("worker tool has no trusted outside service binding")
     policy = adapter.policy_sha256
-    request = ExternalActionRequest.model_validate(adapter.prepare(tool_name, arguments))
+    try:
+        prepared = adapter.prepare(tool_name, arguments)
+    except ExternalActionError as error:
+        if error.code is not None:
+            _record_pending_refusal(service, source_event_id, error)
+        raise
+    request = ExternalActionRequest.model_validate(prepared)
     if request.tool_name != tool_name:
         raise ExternalActionError("service request changed the proposed tool")
     if request.target_operation_id is not None:
@@ -99,6 +105,37 @@ def propose_external_action_locked(
     _check_external_authority(service, proposal)
     event = _record_external(service, ExternalActionRecord(phase="proposed", proposal=proposal))
     return (event,) if closed is None else (closed, event)
+
+
+def _record_pending_refusal(
+    service: SessionService, source_event_id: str, error: ExternalActionError
+) -> None:
+    """Record once per change why a worker call has no review, such as a missing sign-in.
+
+    The call is proposed again on a later read; a refusal with the same code since its
+    last review record is not recorded again.
+    """
+    for event in reversed(service.replay_events()):
+        if event.kind == EventKind.EXTERNAL_ACTION_RECORDED:
+            record = ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+            if record.proposal.source_event_id == source_event_id:
+                break
+        elif (
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("pending_call") == source_event_id
+        ):
+            if event.payload.get("code") == error.code:
+                return
+            break
+    service._record_event(
+        EventKind.ERROR_RECORDED,
+        {
+            "code": error.code,
+            "reason": error.detail,
+            "pending_call": source_event_id,
+            "affects_lifecycle": False,
+        },
+    )
 
 
 def propose_external_result_locked(

@@ -1158,15 +1158,21 @@ def _reduce_error_recorded(reduction: _SessionReduction, event: SessionEvent) ->
         reason=_string(event.payload.get("reason")),
         code=error_code,
     )
+    # A worker call that no review could open for yet; it answers no command.
+    pending_call = "pending_call" in event.payload
     _append_message(
         reduction.conversation,
         event,
         role="trace",
         label="System",
-        content="The task could not be completed",
+        content=(
+            "A research service call cannot be reviewed yet"
+            if pending_call
+            else "The task could not be completed"
+        ),
         detail=error_message,
     )
-    if reduction.command_outcome is not None:
+    if reduction.command_outcome is not None and not pending_call:
         reduction.command_outcome = reduction.command_outcome.model_copy(
             update={
                 "status": "rejected",

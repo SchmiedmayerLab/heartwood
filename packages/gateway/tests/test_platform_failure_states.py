@@ -401,6 +401,36 @@ def test_identity_refusals_of_a_platform_call_show_the_same_diagnostic_in_every_
 
 @pytest.mark.parametrize(
     "state",
+    [
+        pytest.param(item, id=item["code"])
+        for item in _STATES
+        if item["surface"] == "gateway-response" and item["code"] in _IDENTITY_CODES
+    ],
+)
+def test_a_platform_call_without_review_shows_its_identity_refusal_in_every_interface(
+    tmp_path: Path, state: dict[str, str]
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        sign_in.state = "ended" if state["code"] == "HW-INGRESS-004" else "provider-unavailable"
+        # The platform cannot describe the call, so no review opens; reads repeat nothing.
+        assert service.attempt("create_task", CPU) is None
+        service.advance()
+        projection = project_session(
+            service.session.replay_events(), session_id=service.session.store.session_id
+        )
+
+    _assert_every_interface_shows(projection, state["diagnostic"])
+    # One message for the call, however often the session is read.
+    assert [
+        message.detail
+        for message in projection.conversation
+        if state["code"] in (message.detail or "")
+    ] == [state["diagnostic"]]
+
+
+@pytest.mark.parametrize(
+    "state",
     [pytest.param(item, id=item["code"]) for item in _STATES if item["surface"] == "setup-refusal"],
 )
 def test_capability_not_offered_shows_the_same_diagnostic_in_every_interface(

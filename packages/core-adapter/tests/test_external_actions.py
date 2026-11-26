@@ -119,6 +119,7 @@ class Platform:
         self.after_submit: Callable[[], None] = lambda: None
         self.check_hook: Callable[[], None] = lambda: None
         self.status: Literal["running", "completed", "unknown"] = "completed"
+        self.prepare_refusal: ExternalActionError | None = None
 
     def prepare_result(self, record: ExternalActionRecord) -> str:
         assert record.observation is not None
@@ -143,6 +144,8 @@ class Platform:
 
     def prepare(self, tool_name: str, arguments: dict[str, JsonValue]) -> ExternalActionRequest:
         assert arguments == {"analysis": "synthetic"}
+        if self.prepare_refusal is not None:
+            raise self.prepare_refusal
         return ExternalActionRequest(
             service_id="synthetic-analysis",
             tool_name=tool_name,
@@ -1383,6 +1386,50 @@ def test_expired_review_is_closed_and_the_same_proposal_reviewed_afresh(setup: S
     assert decision is not None
     assert decision.command_id == approved.command_id
     assert decision.proposal_sha256 == fresh.proposal.sha256
+
+
+def test_a_review_refused_by_its_adapter_records_the_expiry_and_its_reason_once(
+    setup: Setup,
+) -> None:
+    service, worker, platform = setup
+    expired = propose(service, worker)
+    source = expired.proposal.source_event_id
+    expire(service)
+    emitted: list[SessionEvent] = []
+    service._event_sink = emitted.extend
+    platform.prepare_refusal = ExternalActionError("Sign in again.", code="HW-INGRESS-004")
+
+    for _ in range(3):
+        with pytest.raises(ExternalActionError, match="HW-INGRESS-004"):
+            service.propose_external_action(source)
+    platform.prepare_refusal = ExternalActionError("Retry later.", code="HW-INGRESS-005")
+    with pytest.raises(ExternalActionError, match="HW-INGRESS-005"):
+        service.propose_external_action(source)
+
+    # Subscribers receive the expiry and each change of reason, which answers no command.
+    assert [event.kind for event in emitted] == [
+        EventKind.EXTERNAL_ACTION_RECORDED,
+        EventKind.ERROR_RECORDED,
+        EventKind.ERROR_RECORDED,
+    ]
+    assert [
+        (
+            event.payload["code"],
+            event.payload["pending_call"],
+            event.payload["affects_lifecycle"],
+        )
+        for event in emitted[1:]
+    ] == [("HW-INGRESS-004", source, False), ("HW-INGRESS-005", source, False)]
+    assert [item.phase for item in external_action_records(service.replay_events()).values()] == [
+        "expired"
+    ]
+
+    platform.prepare_refusal = None
+    fresh = ExternalActionRecord.model_validate_json(
+        json.dumps(service.propose_external_action(source).payload["record"])
+    )
+    service.handle(command(service, fresh))
+    assert platform.submissions == [(b"synthetic input",)]
 
 
 def test_expired_result_review_is_closed_and_the_result_reviewed_afresh(setup: Setup) -> None:
