@@ -564,7 +564,8 @@ Every planning tool returns the overview as it stands after the call.
 
 Each call is an [outside operation](#outside-operation-admission) of the service `heartwood-planning`.
 The researcher reviews it before the gateway runs it, and its result reaches the model only through a separate result release.
-A prediction for another launch context, or arguments the tool does not define, are refused before review.
+A call the gateway refuses, such as a prediction for another launch context or arguments the tool does not define, opens a review of the refusal that names the reason.
+A refusal records nothing and contacts no service; once the researcher approves it and releases its result, the agent receives the reason as a failed call.
 A refused record, such as an estimate for an unrecorded revision, is reported as a failed call with the reason.
 The result leaves out reviewed proposals, decisions and the launch context's billing and authority references, and holds at most 48 KiB.
 A larger overview keeps only the latest revision of each plan, and then no revisions, with a limitation that says so; service status, budgets and outcomes remain, and the call fails only when they alone exceed the limit.
@@ -823,6 +824,7 @@ Their tools carry the four required annotations: submission and cancellation are
 The gateway connects to research services as an MCP client, with OpenHands' public `MCPClient` over Streamable HTTP.
 The agent receives no MCP configuration and no credential.
 A session's worker sees each enabled tool as a fixed client tool, and a call to it becomes an [outside operation](#outside-operation-admission).
+The `summary` and `security_risk` fields that OpenHands adds to every client tool call are left out of the reviewed request unless the tool declares them; the same holds for the planning tools.
 
 ```mermaid
 sequenceDiagram

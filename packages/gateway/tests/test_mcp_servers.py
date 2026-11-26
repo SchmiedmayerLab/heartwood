@@ -70,12 +70,17 @@ from heartwood.gateway._mcp_policy import (
     mcp_destinations_from_mapping,
     token_authentication,
 )
-from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
+from heartwood.gateway._mcp_servers import (
+    McpOutsideAdapter,
+    _tool_arguments,
+    advance_outside_calls,
+)
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.gateway.platform_fakes import FakeTokenIssuer, serve
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
 from heartwood.schemas import (
+    JsonValue,
     McpServerAddRequest,
     McpServerEnabledRequest,
     McpServerTestRequest,
@@ -969,6 +974,26 @@ def test_a_denied_call_sends_nothing(tmp_path: Path) -> None:
             advance_outside_calls(session, adapter)
             assert len(_records(session)) == 1
             assert service.catalog.calls == []
+
+
+def test_the_sdk_fields_of_a_call_stay_out_of_the_reviewed_request(tmp_path: Path) -> None:
+    """OpenHands adds summary and security_risk to every client tool call it records."""
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            worker.call(tool, {"term": "synthetic", "summary": "Search", "security_risk": "LOW"})
+            advance_outside_calls(session, adapter)
+            (record,) = _records(session)
+            assert record.phase == "proposed"
+            assert json.loads(record.proposal.request.request_json) == {"term": "synthetic"}
+            _decide(session, record, CommandKind.APPROVE)
+            assert service.catalog.calls == ["synthetic"]
+
+
+def test_a_tool_that_declares_an_sdk_field_keeps_it() -> None:
+    arguments: dict[str, JsonValue] = {"summary": "Ticket title", "security_risk": "LOW"}
+    assert _tool_arguments(arguments, {"summary"}) == {"summary": "Ticket title"}
 
 
 def test_tools_outside_the_session_binding_and_gateway_fields_are_refused(tmp_path: Path) -> None:

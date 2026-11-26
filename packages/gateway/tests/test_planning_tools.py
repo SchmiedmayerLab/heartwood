@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import time
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -26,21 +27,27 @@ from openhands.sdk import LocalConversation
 from openhands.sdk.conversation import BaseConversation
 from openhands.sdk.event import ActionEvent, ObservationEvent
 from openhands.sdk.event import Event as OpenHandsEvent
-from openhands.sdk.llm import Message, MessageToolCall, TextContent
+from openhands.sdk.llm import LLMStreamChunk, Message, MessageToolCall, TextContent
 from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
-from openhands.sdk.tool import register_client_tools
+from openhands.sdk.tool import ClientToolSpec, register_client_tools
 from openhands.sdk.tool.client_tool import extract_client_tool_specs
 from pydantic import AnyHttpUrl
 
-from heartwood.core_adapter import SessionService
+from heartwood.core_adapter import PendingActionGroup, SessionService
 from heartwood.core_adapter.external_actions import ExternalActionError, ExternalActionRecord
 from heartwood.core_adapter.external_results import external_result_records
 from heartwood.core_adapter.worker_attempts import WorkerRuntimeBinding
-from heartwood.gateway import PlanningDiscovery, ProjectContext, SessionGateway
+from heartwood.gateway import (
+    OpenHandsSdkBackend,
+    PlanningDiscovery,
+    ProjectContext,
+    SessionGateway,
+)
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
-from heartwood.gateway._openhands_sdk import _agent_context, _tool_call
+from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
+from heartwood.gateway._openhands_sdk import _agent_context, _security_configuration, _tool_call
 from heartwood.gateway._platform_planning import (
     AGENT_RESULT_BYTES,
     ESTIMATE_AGENT_TOOL,
@@ -64,7 +71,8 @@ from heartwood.schemas import (
     PolicyProfile,
     WorkloadPrediction,
 )
-from heartwood.session import CommandKind
+from heartwood.schemas.planning import PlanningEstimateRequest
+from heartwood.session import CommandKind, SessionCommand
 from packages.gateway.tests.test_mcp_servers import (
     _CONTROL_PLANE,
     Platform,
@@ -308,7 +316,15 @@ def test_the_overview_reports_a_service_that_offers_only_budgets(
     assert estimated["result"]["services"]["estimates"] == "not-offered"
     assert estimated["result"]["plans"][0]["revisions"][0]["estimates"] == []
     # The launch context's billing and authority references stay out of the agent's view.
-    assert "billing_attribution_ref" not in json.dumps(view)
+    shown = json.dumps(overview)
+    for value in (
+        _LAUNCH.billing_attribution_ref,
+        _LAUNCH.authority_ref,
+        _LAUNCH.policy_ref,
+        _LAUNCH.project_id,
+        _LAUNCH.platform_id,
+    ):
+        assert value is None or f'"{value}"' not in shown
 
 
 def test_agent_records_appear_in_the_researcher_projection(
@@ -346,22 +362,87 @@ def test_planning_outcomes_reach_the_agent_as_every_interface_shows_them(
     assert overview["result"]["services"]["budgets"] == "unavailable"
 
 
-def test_a_prediction_for_another_launch_context_is_refused(
-    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+@pytest.mark.parametrize(
+    ("tool", "arguments", "reason"),
+    [
+        (
+            PREDICTION_AGENT_TOOL,
+            _record(
+                WorkloadPrediction.model_validate_json(
+                    _prediction(1)
+                    .model_dump_json()
+                    .replace(_LAUNCH.project_context_id, "launch-synthetic-2")
+                )
+            ),
+            "The prediction belongs to another platform project context",
+        ),
+        (
+            PREDICTION_AGENT_TOOL,
+            {"prediction": {"schema_version": "heartwood.workload-prediction.v1"}},
+            "The arguments do not match the planning tool",
+        ),
+        (
+            ESTIMATE_AGENT_TOOL,
+            {"prediction": {"record_id": "cohort-prediction", "revision": 0}},
+            "The arguments do not match the planning tool",
+        ),
+        (
+            OVERVIEW_AGENT_TOOL,
+            {"project_id": "other-project"},
+            "The arguments do not match the planning tool",
+        ),
+    ],
+)
+def test_a_refused_call_reaches_the_agent_through_review_and_records_nothing(
+    tmp_path: Path,
+    fakes: RunningFakes,
+    clock: _Clock,
+    tool: str,
+    arguments: dict[str, Any],
+    reason: str,
 ) -> None:
     gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, _client(fakes), clock))
-    other = WorkloadPrediction.model_validate_json(
-        _prediction(1).model_dump_json().replace(_LAUNCH.project_context_id, "launch-synthetic-2")
-    )
     with _session(tmp_path, gateway) as (session, worker, adapter):
-        with pytest.raises(ExternalActionError, match="another platform project context"):
-            adapter.prepare(PREDICTION_AGENT_TOOL, _record(other))
-        with pytest.raises(ExternalActionError):
-            adapter.prepare(OVERVIEW_AGENT_TOOL, {"project_id": "other-project"})
-        worker.call(PREDICTION_AGENT_TOOL, _record(other))
-        advance_outside_calls(session, adapter)
-        assert _records(session) == []
-        assert gateway.planning().plans == ()
+        record = _propose(session, worker, adapter, tool, arguments)
+        # The researcher sees the refusal and its reason before anything reaches the model.
+        assert record.phase == "proposed"
+        assert record.proposal.request.summary == f"Refuse {tool}: {reason}"
+        assert json.loads(record.proposal.request.request_json) == {"refusal": reason}
+        _decide(session, record, CommandKind.APPROVE)
+        advance_outside_calls(session, adapter, clock=_later)
+        (release,) = external_result_records(session.replay_events()).values()
+        refused = json.loads(release.proposal.content_json)
+        projection = gateway.planning()
+
+    assert refused["status"] == "failed"
+    assert refused["limitations"] == [reason]
+    assert projection.plans == ()
+    services = projection.services
+    # Nothing contacted the platform: discovery never ran.
+    assert services is not None
+    assert services.budgets == "unchecked"
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        (OVERVIEW_AGENT_TOOL, {}),
+        (PREDICTION_AGENT_TOOL, _record(_prediction(1))),
+        (ESTIMATE_AGENT_TOOL, _estimate(_prediction(1))),
+    ],
+)
+def test_the_sdk_fields_of_a_call_stay_out_of_the_reviewed_request(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock, tool: str, arguments: dict[str, Any]
+) -> None:
+    gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, _client(fakes), clock))
+    with _session(tmp_path, gateway) as (_session_service, _worker, adapter):
+        plain = adapter.prepare(tool, arguments)
+        called = adapter.prepare(
+            tool, {**arguments, "summary": "Plan the run", "security_risk": "LOW"}
+        )
+
+    assert not plain.summary.startswith("Refuse")
+    assert called == plain
 
 
 def test_a_refused_record_is_reported_to_the_agent(
@@ -442,6 +523,29 @@ def test_a_call_with_an_unknown_outcome_is_reconciled_without_running_again(
         assert observed.status == "failed"
         assert observed.limitations == ("The prediction revision was not recorded",)
         assert plans == ()
+
+
+def test_a_lost_estimate_says_whether_the_journal_holds_one(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+) -> None:
+    gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, _client(fakes), clock))
+    planning = gateway.platform_planning
+    assert planning is not None
+    request = json.dumps(_estimate(_prediction(1)))
+    try:
+        gateway.record_plan_prediction(_prediction(1))
+        before = planning.agent_outcome(ESTIMATE_AGENT_TOOL, request, operation_id="lost-1")
+        gateway.refresh_planning()
+        gateway.request_plan_estimate(
+            PlanningEstimateRequest(prediction=_prediction(1).prediction, scope="plan")
+        )
+        after = planning.agent_outcome(ESTIMATE_AGENT_TOOL, request, operation_id="lost-1")
+    finally:
+        gateway.stop()
+
+    assert before.status == after.status == "completed"
+    assert "holds no estimate for this revision and scope" in before.limitations[0]
+    assert "holds an estimate for this revision and scope" in after.limitations[0]
 
 
 def test_a_planning_call_needs_its_launch_context_and_an_unexpired_review(
@@ -589,7 +693,9 @@ def test_an_openhands_agent_calls_a_planning_tool_as_a_reviewed_operation(
                                 MessageToolCall(
                                     id="call-overview",
                                     name=OVERVIEW_AGENT_TOOL,
-                                    arguments=json.dumps({"summary": "Check planning"}),
+                                    arguments=json.dumps(
+                                        {"summary": "Check planning", "security_risk": "LOW"}
+                                    ),
                                     origin="completion",
                                 )
                             ],
@@ -616,15 +722,151 @@ def test_an_openhands_agent_calls_a_planning_tool_as_a_reviewed_operation(
         assert observation.observation.text == "Tool call dispatched to client."
         assert _budgets(gateway) == "unchecked"
 
-        # OpenHands adds its summary field; the gateway leaves it out of the reviewed request.
+        # OpenHands keeps its own fields in the call; the reviewed request leaves them out.
         call = _tool_call(action)
-        assert call.arguments == {"summary": "Check planning"}
+        assert call.arguments == {"summary": "Check planning", "security_risk": "LOW"}
         record = _propose(session, worker, adapter, call.tool_name, dict(call.arguments))
         assert record.phase == "proposed"
         assert record.proposal.request.tool_name == OVERVIEW_AGENT_TOOL
         assert record.proposal.request.request_json == "{}"
         _decide(session, record, CommandKind.APPROVE)
         assert _budgets(gateway) == "available"
+
+
+def test_the_openhands_backend_proposes_planning_calls_the_adapter_reviews(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+) -> None:
+    """Heartwood's OpenHands backend turns model calls into the arguments the adapter binds."""
+    gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, _client(fakes), clock))
+    sdk_fields = {"summary": "Plan the cohort run", "security_risk": "LOW"}
+    calls = {
+        OVERVIEW_AGENT_TOOL: {**sdk_fields},
+        PREDICTION_AGENT_TOOL: {**_record(_prediction(1)), **sdk_fields},
+    }
+    with _session(tmp_path, gateway) as (session, worker, adapter):
+        backend_session = _backend_session(
+            tmp_path / "backend",
+            list(adapter.client_tools),
+            [
+                Message(
+                    role="assistant",
+                    content=[TextContent(text="")],
+                    tool_calls=[
+                        MessageToolCall(
+                            id=f"call-{name}",
+                            name=name,
+                            arguments=json.dumps(arguments),
+                            origin="completion",
+                        )
+                        for name, arguments in calls.items()
+                    ],
+                ),
+                Message(role="assistant", content=[TextContent(text="Asked.")]),
+            ],
+        )
+        try:
+            backend_session.handle(
+                SessionCommand(
+                    command_id="turn-1",
+                    session_id="backend-session",
+                    kind=CommandKind.CHAT,
+                    actor_id="researcher",
+                    created_at="2026-07-01T00:00:00Z",
+                    payload={"prompt": "Check planning and record the prediction."},
+                )
+            )
+            group = _pending_group(backend_session)
+        finally:
+            backend_session.close()
+        proposed = {action.tool_name: dict(action.arguments) for action in group.actions}
+        assert proposed == calls
+
+        for name in calls:
+            record = _propose(session, worker, adapter, name, proposed[name])
+            assert record.phase == "proposed"
+            assert not {"summary", "security_risk"} & set(
+                json.loads(record.proposal.request.request_json)
+            )
+            _decide(session, record, CommandKind.APPROVE)
+            assert _records(session)[-1].observation is not None
+        projection = gateway.planning()
+
+    assert projection.plans[0].revisions[0].overview.prediction == _prediction(1)
+    assert projection.services is not None
+    assert projection.services.budgets == "available"
+
+
+def _backend_session(
+    root: Path, specs: list[ClientToolSpec], script: list[Message | Exception]
+) -> SessionService:
+    """Run Heartwood's OpenHands backend with the planning tools and a scripted model."""
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True)
+    persistence = root / "openhands"
+
+    def factory(
+        callback: Callable[[OpenHandsEvent], None],
+        token_callback: Callable[[LLMStreamChunk], None],
+    ) -> BaseConversation:
+        conversation_id = uuid.uuid4()
+        conversation: BaseConversation = LocalConversation(
+            agent=OpenHandsAgentSettings(
+                llm=TestLLM.from_messages(script),
+                tools=register_client_tools(specs),
+                agent_context=_agent_context([]),
+                enable_classify_and_switch_llm_tool=False,
+                tool_concurrency_limit=1,
+            ).create_agent(),
+            workspace=workspace,
+            persistence_dir=persistence,
+            conversation_id=conversation_id,
+            profile_store_dir=persistence / "profiles",
+            file_store=ContentMinimizedLocalFileStore(
+                LocalConversation.get_persistence_dir(persistence, conversation_id)
+            ),
+            callbacks=[callback],
+            token_callbacks=[token_callback],
+            visualizer=None,
+            delete_on_close=False,
+        )
+        # The same analyzers and confirm-every-action policy as Heartwood's backend.
+        analyzer, policy = _security_configuration()
+        conversation.set_security_analyzer(analyzer)
+        conversation.set_confirmation_policy(policy)
+        return conversation
+
+    backend = OpenHandsSdkBackend(
+        profile=ModelProfile(
+            profile_id="heartwood",
+            model="openai/local-model",
+            base_url="http://127.0.0.1:8765/v1",
+            policy_endpoint="http://127.0.0.1:8765/v1/chat/completions",
+            credential_kind="none",
+        ),
+        workspace=workspace,
+        persistence_dir=persistence,
+        conversation_key="planning-tools",
+        env={},
+        conversation_factory=factory,
+    )
+    return SessionService.local_default(
+        root / "sessions",
+        session_id="backend-session",
+        backend=backend,
+        env={},
+        clock=lambda: "2026-07-01T00:00:00Z",
+    )
+
+
+def _pending_group(service: SessionService) -> PendingActionGroup:
+    backend = cast(OpenHandsSdkBackend, service.backend)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        group = backend.pending_action_group(session_id="backend-session")
+        if group is not None:
+            return group
+        time.sleep(0.02)
+    pytest.fail("OpenHands did not request confirmation")
 
 
 def _budgets(gateway: SessionGateway) -> str:

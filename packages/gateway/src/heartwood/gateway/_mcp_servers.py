@@ -76,7 +76,6 @@ from heartwood.gateway._platform_operations import (
 from heartwood.gateway._platform_planning import (
     AGENT_RESULT_BYTES,
     PLANNING_SERVICE_ID,
-    PlanningRecordError,
     PlanningStateError,
 )
 from heartwood.schemas import JsonValue, PlatformOperationObservation, PlatformOperationProposal
@@ -791,15 +790,17 @@ class McpOutsideAdapter:
         """Bind the worker's exact arguments to the server.
 
         A submission to an operation service also asks the service to describe it, which
-        has no effect at the service, and records the estimate it refers to. A planning
-        call is checked against the launch context and contacts nothing.
+        has no effect at the service, and records the estimate it refers to. The fields
+        OpenHands adds to every call are left out unless the tool declares them. A planning
+        call is checked against the launch context and contacts nothing; a refused one
+        opens a review of its refusal.
         """
         planning = self._planner(tool_name)
         if planning is not None:
-            try:
-                summary, request_json = planning.agent_request(tool_name, arguments)
-            except PlanningRecordError as error:
-                raise ExternalActionError(str(error)) from None
+            spec = self._planning_tools[tool_name]
+            summary, request_json = planning.agent_request(
+                tool_name, _tool_arguments(arguments, set(spec.parameters["properties"]))
+            )
             return ExternalActionRequest(
                 service_id=PLANNING_SERVICE_ID,
                 tool_name=tool_name,
@@ -811,6 +812,7 @@ class McpOutsideAdapter:
         bound = self._tool(tool_name)
         schema = worker_parameters(bound.tool.parsed)
         properties = set(schema["properties"])
+        arguments = _tool_arguments(arguments, properties)
         if (
             GATEWAY_FIELDS & set(arguments)
             or not set(arguments) <= properties
@@ -1033,6 +1035,17 @@ class McpOutsideAdapter:
     ) -> PlatformOperationObservation:
         content = call_structured(client, bound.destination, name, arguments)
         return PlatformOperationObservation.model_validate_json(json.dumps(content))
+
+
+# Fields OpenHands adds to every client tool's schema and keeps in the call's arguments.
+_SDK_FIELDS = frozenset({"summary", "security_risk"})
+
+
+def _tool_arguments(arguments: dict[str, JsonValue], declared: set[str]) -> dict[str, JsonValue]:
+    """Return a call's arguments without the SDK's fields, unless the tool declares them."""
+    return {
+        key: value for key, value in arguments.items() if key in declared or key not in _SDK_FIELDS
+    }
 
 
 def _target(value: JsonValue | None) -> UUID:

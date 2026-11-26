@@ -99,8 +99,8 @@ PREDICTION_AGENT_TOOL = "record_plan_prediction"
 PLANNING_SERVICE_ID = "heartwood-planning"
 # The largest planning result released to an agent, as canonical JSON.
 AGENT_RESULT_BYTES = 48 * 1024
-# Fields OpenHands adds to every tool call; they are not tool arguments.
-_SDK_FIELDS = frozenset({"summary", "security_risk"})
+# The request of a call refused before it runs; no planning tool takes this argument.
+_REFUSAL = "refusal"
 _TIMEOUT_SECONDS = 15.0
 _MAX_RESULT_BYTES = 256 * 1024
 _KINDS: dict[str, type[BaseModel]] = {
@@ -761,9 +761,22 @@ class PlatformPlanning:
     def agent_request(self, tool_name: str, arguments: dict[str, JsonValue]) -> tuple[str, str]:
         """Check an agent's planning call and return its review summary and exact request.
 
-        Nothing is recorded or sent. A prediction for another launch context is refused.
+        Nothing is recorded or sent. A call this state refuses, such as a prediction for
+        another launch context or arguments the tool does not define, becomes a refusal:
+        its review names the reason, and once released the agent receives that reason.
         """
-        values = {key: value for key, value in arguments.items() if key not in _SDK_FIELDS}
+        try:
+            summary, content = self._agent_request(tool_name, arguments)
+            return summary, canonical_request(content)
+        except PlanningRecordError as error:
+            reason = str(error)
+        except ValueError:
+            reason = "The planning call is invalid or exceeds the request size limit"
+        return f"Refuse {tool_name}: {reason}"[:512], canonical_request(
+            json.dumps({_REFUSAL: reason})
+        )
+
+    def _agent_request(self, tool_name: str, values: dict[str, JsonValue]) -> tuple[str, str]:
         if tool_name == OVERVIEW_AGENT_TOOL and not values:
             return "Read the platform planning overview", "{}"
         if tool_name == PREDICTION_AGENT_TOOL and set(values) == {"prediction"}:
@@ -773,39 +786,36 @@ class PlatformPlanning:
                     "The prediction belongs to another platform project context"
                 )
             reference = prediction.prediction
-            content = json.dumps({"prediction": prediction.model_dump(mode="json")})
-            summary = f"Record workload prediction {reference.record_id} revision"
-        elif tool_name == ESTIMATE_AGENT_TOOL:
+            return (
+                f"Record workload prediction {reference.record_id} revision {reference.revision}"
+            )[:512], json.dumps({"prediction": prediction.model_dump(mode="json")})
+        if tool_name == ESTIMATE_AGENT_TOOL:
             request = cast(PlanningEstimateRequest, _parsed(PlanningEstimateRequest, values))
             reference = request.prediction
-            content = request.model_dump_json()
-            summary = f"Request a platform estimate for prediction {reference.record_id} revision"
-        else:
-            raise PlanningRecordError("The arguments do not match the planning tool")
-        try:
-            request_json = canonical_request(content)
-        except ValueError:
-            raise PlanningRecordError(
-                "The planning call is invalid or exceeds the request size limit"
-            ) from None
-        return f"{summary} {reference.revision}"[:512], request_json
+            return (
+                f"Request a platform estimate for prediction {reference.record_id} "
+                f"revision {reference.revision}"
+            )[:512], request.model_dump_json()
+        raise PlanningRecordError("The arguments do not match the planning tool")
 
     def agent_call(
         self, tool_name: str, request_json: str, *, operation_id: str
     ) -> PlatformOperationObservation:
         """Run a reviewed planning call through the same methods every interface uses.
 
-        The result is the planning overview afterwards. A refused record or a journal that
-        needs recovery is reported as a failed call with the reason.
+        The result is the planning overview afterwards. A refusal, a refused record or a
+        journal that needs recovery is reported as a failed call with the reason; a
+        refusal records and contacts nothing.
         """
+        request = json.loads(request_json)
+        if _REFUSAL in request:
+            return self._agent_failure(tool_name, operation_id, str(request[_REFUSAL]))
         try:
             if tool_name == OVERVIEW_AGENT_TOOL:
                 self.refresh()
             elif tool_name == PREDICTION_AGENT_TOOL:
                 self.record_prediction(
-                    WorkloadPrediction.model_validate_json(
-                        json.dumps(json.loads(request_json)["prediction"])
-                    )
+                    WorkloadPrediction.model_validate_json(json.dumps(request["prediction"]))
                 )
             elif tool_name == ESTIMATE_AGENT_TOOL:
                 self.request_estimate(PlanningEstimateRequest.model_validate_json(request_json))
@@ -872,27 +882,38 @@ class PlatformPlanning:
     ) -> PlatformOperationObservation:
         """Report a call whose outcome was not recorded, without running it again.
 
-        A prediction counts as recorded only when the journal holds that exact revision.
+        A prediction counts as recorded only when the journal holds that exact revision;
+        for an estimate the result says whether the journal holds one for the revision.
         """
-        if tool_name == PREDICTION_AGENT_TOOL:
-            try:
+        request = json.loads(request_json)
+        if _REFUSAL in request:
+            return self._agent_failure(tool_name, operation_id, str(request[_REFUSAL]))
+        note = "The outcome of this call was not observed; this is the current planning overview."
+        try:
+            if tool_name == PREDICTION_AGENT_TOOL:
                 prediction = WorkloadPrediction.model_validate_json(
-                    json.dumps(json.loads(request_json)["prediction"])
+                    json.dumps(request["prediction"])
                 )
-                recorded = _predictions(self._entries()).get(_key(prediction.prediction))
-            except PlanningStateError as error:
-                return self._agent_failure(tool_name, operation_id, str(error))
-            if recorded != prediction:
-                return self._agent_failure(
-                    tool_name, operation_id, "The prediction revision was not recorded"
+                if _predictions(self._entries()).get(_key(prediction.prediction)) != prediction:
+                    return self._agent_failure(
+                        tool_name, operation_id, "The prediction revision was not recorded"
+                    )
+            elif tool_name == ESTIMATE_AGENT_TOOL:
+                estimate = PlanningEstimateRequest.model_validate_json(request_json)
+                held = any(
+                    _key(item.prediction) == _key(estimate.prediction)
+                    and item.scope == estimate.scope
+                    for item in _of(self._entries(), PlatformEstimate)
                 )
-        return self.agent_observation(
-            tool_name,
-            operation_id=operation_id,
-            limitation=(
-                "The outcome of this call was not observed; this is the current planning overview."
-            ),
-        )
+                note = (
+                    "The outcome of this call was not observed. The journal "
+                    + ("holds an" if held else "holds no")
+                    + " estimate for this revision and scope; this is the current planning "
+                    "overview."
+                )
+        except PlanningStateError as error:
+            return self._agent_failure(tool_name, operation_id, str(error))
+        return self.agent_observation(tool_name, operation_id=operation_id, limitation=note)
 
     def _agent_failure(
         self, tool_name: str, operation_id: str, reason: str
