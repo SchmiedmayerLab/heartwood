@@ -438,6 +438,8 @@ While the tool cannot connect to the session's OpenShell gateway, as right after
 LiteLLM refuses a request beyond a key's budget with HTTP 422 and the error type `budget_exceeded`, and a model outside the key's list with HTTP 403 and the error type `key_model_access_denied`.
 
 Deleting a session settles its key: the control service sets the key's budget to its recorded spending, which blocks it, waits `inference.settleWaitSeconds` for LiteLLM to record the spending of the last requests, reads the spending until it stops changing, records it with the spending of earlier keys of the session as what the session incurred, and deletes the keys.
+LiteLLM writes the spending every `inference.spendWriteSeconds` plus up to five seconds, and `inference.settleWaitSeconds` must exceed that.
+The same interval drives LiteLLM's other periodic database jobs, so a low value is meant for test clusters.
 The recorded amount can exceed the key's budget by up to one request.
 When the spending does not stop changing, the deletion fails and is repeated.
 A session whose deletion settled its key and then failed is not launched again until the deletion completes.

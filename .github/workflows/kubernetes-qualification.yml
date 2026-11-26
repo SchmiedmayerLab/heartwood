@@ -177,8 +177,9 @@ jobs:
         run: >-
           python3 deploy/qualification_evidence.py
           test-results/kubernetes-qualification/worker --commit "${GITHUB_SHA}"
+      # Also when the job reaches its time limit, which cancels it.
       - name: Export cluster logs
-        if: failure()
+        if: failure() || cancelled()
         run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood
       - name: Retain the cluster evidence
         if: always()

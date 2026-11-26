@@ -44,7 +44,11 @@ from the token prices of the model's runtime profile in syntheticPrices.
 {{- $info := merge $costs (dict "max_input_tokens" $model.maxInputTokens "max_output_tokens" $model.maxOutputTokens) -}}
 {{- $models = append $models (dict "model_name" $model.name "litellm_params" $parameters "model_info" $info) -}}
 {{- end -}}
-{{- $general := dict "master_key" "os.environ/LITELLM_MASTER_KEY" "database_url" "os.environ/DATABASE_URL" "store_model_in_db" false -}}
+{{- /* LiteLLM writes the spending of keys every proxy_batch_write_at seconds plus an offset of up to five seconds that it chooses at its start; a settlement must wait longer. */ -}}
+{{- if le (float64 .Values.inference.settleWaitSeconds) (float64 (add .Values.inference.spendWriteSeconds 5)) -}}
+{{- fail "inference.settleWaitSeconds must exceed inference.spendWriteSeconds by more than five seconds" -}}
+{{- end -}}
+{{- $general := dict "master_key" "os.environ/LITELLM_MASTER_KEY" "database_url" "os.environ/DATABASE_URL" "store_model_in_db" false "proxy_batch_write_at" .Values.inference.spendWriteSeconds -}}
 {{- $settings := dict "telemetry" false "ssl_verify" "/etc/litellm/trust/ca.crt" -}}
 {{- /* Costs in fixed-point form, which YAML reads as numbers; Go writes 5e-07, which it reads as text. */ -}}
 {{- regexReplaceAll "(_cost_per_token): [\"']([0-9.]+)[\"']" (dict "model_list" $models "general_settings" $general "litellm_settings" $settings | toYaml) "${1}: ${2}" -}}
