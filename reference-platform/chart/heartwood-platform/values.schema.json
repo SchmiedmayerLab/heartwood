@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Values of the Heartwood reference platform chart",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "images",
+    "projects",
+    "postgresql",
+    "keycloak",
+    "versitygw",
+    "sessions",
+    "control"
+  ],
+  "$defs": {
+    "image": {
+      "description": "An image reference pinned by digest.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$"
+    },
+    "reference": {
+      "type": "string",
+      "pattern": "^\\S{1,512}$"
+    }
+  },
+  "properties": {
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "postgresql",
+        "keycloak",
+        "versitygw",
+        "platformServices",
+        "openshellGateway"
+      ],
+      "properties": {
+        "postgresql": {
+          "$ref": "#/$defs/image"
+        },
+        "keycloak": {
+          "$ref": "#/$defs/image"
+        },
+        "versitygw": {
+          "$ref": "#/$defs/image"
+        },
+        "platformServices": {
+          "$ref": "#/$defs/image"
+        },
+        "openshellGateway": {
+          "$ref": "#/$defs/image"
+        }
+      }
+    },
+    "storageClassName": {
+      "type": "string"
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "billingAttributionRef",
+          "policyRef"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "billingAttributionRef": {
+            "$ref": "#/$defs/reference"
+          },
+          "policyRef": {
+            "$ref": "#/$defs/reference"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9-]{1,64}$"
+            }
+          }
+        }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storage"
+      ],
+      "properties": {
+        "storage": {
+          "type": "string"
+        }
+      }
+    },
+    "keycloak": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^(https?://[^/]+)?$"
+        }
+      }
+    },
+    "versitygw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storage"
+      ],
+      "properties": {
+        "storage": {
+          "type": "string"
+        }
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace",
+        "stagingImage",
+        "attemptStorageClass",
+        "apiServer",
+        "quota",
+        "containerDefaults",
+        "containerDefaultRequests"
+      ],
+      "properties": {
+        "namespace": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/identifier"
+            },
+            {
+              "not": {
+                "pattern": "^(heartwood-platform$|hw-s-)"
+              }
+            }
+          ]
+        },
+        "stagingImage": {
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "$ref": "#/$defs/image"
+            }
+          ]
+        },
+        "attemptStorageClass": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provisioner"
+          ],
+          "properties": {
+            "provisioner": {
+              "type": "string"
+            },
+            "parameters": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "apiServer": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "cidr",
+              "port"
+            ],
+            "properties": {
+              "cidr": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F:.]+/[0-9]{1,3}$"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              }
+            }
+          }
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "containerDefaults": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "containerDefaultRequests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platformId",
+        "storage",
+        "serviceCallers",
+        "redirectUriTemplate"
+      ],
+      "properties": {
+        "platformId": {
+          "$ref": "#/$defs/reference"
+        },
+        "storage": {
+          "type": "string"
+        },
+        "serviceCallers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
+          }
+        },
+        "redirectUriTemplate": {
+          "type": "string",
+          "pattern": "^https?://[^{}\\s]+/[^\\s]*\\{subject\\}[^\\s]*\\{project\\}[^\\s]*$"
+        }
+      }
+    }
+  }
+}

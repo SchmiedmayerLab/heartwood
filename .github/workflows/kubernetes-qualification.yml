@@ -54,35 +54,64 @@ jobs:
     needs: scope
     if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       KIND_VERSION: v0.33.0
       KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
       KUBECTL_VERSION: v1.37.0
       KUBECTL_SHA256: 6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f
+      HELM_VERSION: v4.3.2
+      HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
           submodules: true
-      - name: Install kind and kubectl
+      - name: Install kind, kubectl and Helm
         run: |
           mkdir -p "${RUNNER_TEMP}/bin"
           curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/bin/kind" \
             "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
           curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/bin/kubectl" \
             "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl --fail --silent --show-error --location --retry 3 --output "${RUNNER_TEMP}/helm.tar.gz" \
+            "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
           printf '%s  %s\n' "${KIND_SHA256}" "${RUNNER_TEMP}/bin/kind" \
-            "${KUBECTL_SHA256}" "${RUNNER_TEMP}/bin/kubectl" | sha256sum --check
+            "${KUBECTL_SHA256}" "${RUNNER_TEMP}/bin/kubectl" \
+            "${HELM_SHA256}" "${RUNNER_TEMP}/helm.tar.gz" | sha256sum --check
+          tar --extract --gzip --file "${RUNNER_TEMP}/helm.tar.gz" --directory "${RUNNER_TEMP}/bin" \
+            --strip-components 1 linux-amd64/helm
           chmod +x "${RUNNER_TEMP}/bin/kind" "${RUNNER_TEMP}/bin/kubectl"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.13.7"
+          enable-cache: true
       - name: Create the kind cluster with Calico and Agent Sandbox
         run: bash reference-platform/cluster/create-cluster.sh heartwood
       - name: Require network policy enforcement
         run: >-
           bash reference-platform/cluster/network-policy-controls.sh heartwood
           test-results/kubernetes-qualification
+      - name: Build the platform services image and push it to the cluster registry
+        run: |
+          docker build --file reference-platform/services/Dockerfile \
+            --tag heartwood-platform-services:candidate .
+          image="$(bash reference-platform/cluster/push-image.sh heartwood \
+            heartwood-platform-services:candidate)"
+          echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
+      - name: Install the platform chart
+        run: >-
+          bash reference-platform/cluster/install-chart.sh heartwood
+          --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
+      - name: Test the installed chart
+        working-directory: reference-platform/services
+        run: |
+          uv sync --locked
+          uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
+            --junitxml ../../test-results/kubernetes-qualification/platform-chart.xml
       - name: Export cluster logs
         if: failure()
         run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood

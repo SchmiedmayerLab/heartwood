@@ -5,9 +5,14 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Deletes a kind cluster that create-cluster.sh created.
+# Deletes a kind cluster that create-cluster.sh created, and its local registry.
 # Usage: delete-cluster.sh NAME
 
 set -euo pipefail
 
-kind delete cluster --name "${1:?cluster name is required}"
+name="${1:?cluster name is required}"
+
+kind delete cluster --name "${name}"
+if docker container inspect "${name}-registry" >/dev/null 2>&1; then
+  docker rm --force --volumes "${name}-registry" >/dev/null
+fi

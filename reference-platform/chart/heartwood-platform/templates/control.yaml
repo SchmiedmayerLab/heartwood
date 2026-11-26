@@ -1,0 +1,161 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- define "heartwood.controlConfiguration" -}}
+{{- $projects := list -}}
+{{- range .Values.projects -}}
+{{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list)) -}}
+{{- end -}}
+{{- $keycloak := dict "url" "http://keycloak:8080" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
+{{- /* Without configured addresses, the Service address and the endpoints of the API server are read from the cluster. */ -}}
+{{- $apiServer := .Values.sessions.apiServer -}}
+{{- if not $apiServer -}}
+{{- $service := lookup "v1" "Service" "default" "kubernetes" -}}
+{{- if $service -}}
+{{- $apiServer = append $apiServer (dict "cidr" (include "heartwood.hostCidr" $service.spec.clusterIP) "port" 443) -}}
+{{- end -}}
+{{- $slice := lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "kubernetes" -}}
+{{- if $slice -}}
+{{- range $endpoint := $slice.endpoints -}}
+{{- range $address := $endpoint.addresses -}}
+{{- $apiServer = append $apiServer (dict "cidr" (include "heartwood.hostCidr" $address) "port" (index $slice.ports 0).port) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $apiServer -}}
+{{- fail "sessions.apiServer is empty and the API server addresses cannot be read from the cluster" -}}
+{{- end -}}
+{{- $sessions := dict "control_namespace" .Release.Namespace "control_account" "heartwood-control" "gateway_namespace" .Values.sessions.namespace "openshell_objects_file" "/etc/heartwood-control/openshell/openshell-session.json" "openshell_gateway_image" .Values.images.openshellGateway "api_server" $apiServer "quota" .Values.sessions.quota "container_defaults" .Values.sessions.containerDefaults "container_default_requests" .Values.sessions.containerDefaultRequests -}}
+{{- dict "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" .Values.control.redirectUriTemplate "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- end }}
+# The registry and the settings of the control service. It holds no credential.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  configuration.json: |
+    {{- include "heartwood.controlConfiguration" . | nindent 4 }}
+---
+# The OpenShell objects that the control service applies in each session namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-control-openshell
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  openshell-session.json: |
+    {{- .Files.Get "files/openshell-session.json" | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: heartwood-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# One replica: the registry is one SQLite database, and updates of a Keycloak client
+# are serialized inside the process.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: heartwood-control
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  serviceName: heartwood-control
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 8 }}
+      annotations:
+        checksum/configuration: {{ include "heartwood.controlConfiguration" . | sha256sum }}
+        checksum/openshell: {{ .Files.Get "files/openshell-session.json" | sha256sum }}
+    spec:
+      serviceAccountName: heartwood-control
+      # The service reviews the tokens of its callers and provisions session namespaces
+      # through the Kubernetes API.
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      containers:
+        - name: control
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.control, /etc/heartwood-control/configuration.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: configuration
+              mountPath: /etc/heartwood-control
+              readOnly: true
+            - name: keycloak
+              mountPath: /etc/heartwood-control/keycloak
+              readOnly: true
+            - name: openshell
+              mountPath: /etc/heartwood-control/openshell
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/heartwood-control
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: configuration
+          configMap:
+            name: heartwood-control
+        - name: keycloak
+          secret:
+            secretName: heartwood-control-keycloak
+        - name: openshell
+          configMap:
+            name: heartwood-control-openshell
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "heartwood.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.control.storage }}

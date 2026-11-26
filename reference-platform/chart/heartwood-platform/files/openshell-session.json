@@ -1,0 +1,582 @@
+{
+  "apiVersion": "v1",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "data": {
+        "gateway.toml": "\n[openshell]\nversion = 2\n[openshell.drivers.kubernetes]\nallow_driver_config = true\nallowed_pod_labels = [\"heartwood.project\", \"heartwood.attempt\", \"heartwood.role\"]\nclient_tls_secret_name = \"openshell-client-tls\"\ndefault_image = \"heartwood.invalid/no-default-sandbox-image@sha256:0000000000000000000000000000000000000000000000000000000000000000\"\ngateway_id = \"openshell\"\ngrpc_endpoint = \"https://openshell.hw-s-placeholder.svc.cluster.local:8080\"\nnamespace = \"hw-s-placeholder\"\nsa_token_ttl_secs = 3600\nsandbox_gid = 10001\nsandbox_runtime = { boundary_port = 5500 }\nsandbox_runtime_image = \"ghcr.io/nvidia/openshell/sandbox@sha256:e57d07cd6cc1fc314b80368d6b51ec6fbf825fb62cd8f081312941180846866f\"\nsandbox_runtime_image_pull_policy = \"if_not_present\"\nsandbox_uid = 10001\nservice_account_name = \"openshell-sandbox\"\nsupervisor_image = \"ghcr.io/nvidia/openshell/supervisor@sha256:f1ec231b5dbe5b6a40c33acb2ac847995aabb959a56134ef6d7d7aa4f43199d3\"\nsupervisor_image_pull_policy = \"if_not_present\"\nworkspace_mode = \"shared\"\n[openshell.drivers.kubernetes.managed_ssh_ingress]\nenabled = true\ngateway_namespace = \"hw-s-placeholder\"\ngateway_pod_selector = { \"app.kubernetes.io/instance\" = \"openshell\", \"app.kubernetes.io/name\" = \"openshell\" }\n[openshell.drivers.kubernetes.resource_admission]\nenabled = true\n[openshell.gateway]\nbind_address = \"0.0.0.0:8080\"\ncompute_driver = \"kubernetes\"\ndisable_tls = false\nenable_loopback_service_http = true\nenable_websocket_tunnel = false\nhealth_bind_address = \"0.0.0.0:8081\"\nlog_level = \"info\"\nmetrics_bind_address = \"0.0.0.0:9090\"\nname = \"openshell\"\npolicy_validation_failure_mode = \"fail_closed\"\n[openshell.gateway.credential_storage]\nkey_encryption_key_env = \"OPENSHELL_GATEWAY_CREDENTIAL_KEY_ENCRYPTION_KEY\"\n[openshell.gateway.gateway_jwt]\ngateway_id = \"openshell\"\nkid_path = \"/etc/openshell-jwt/kid\"\npublic_key_path = \"/etc/openshell-jwt/public.pem\"\nsigning_key_path = \"/etc/openshell-jwt/signing.pem\"\nttl_secs = 3600\n[openshell.gateway.tls]\ncert_path = \"/etc/openshell-tls/server/tls.crt\"\nclient_ca_path = \"/etc/openshell-tls/client-ca/ca.crt\"\nkey_path = \"/etc/openshell-tls/server/tls.key\"\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell-config",
+        "namespace": "hw-s-placeholder"
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell-certgen",
+        "namespace": "hw-s-placeholder"
+      },
+      "spec": {
+        "activeDeadlineSeconds": 150,
+        "backoffLimit": 3,
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/component": "certgen",
+              "app.kubernetes.io/instance": "openshell",
+              "app.kubernetes.io/name": "openshell-certgen"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "args": [
+                  "generate-certs",
+                  "--server-secret-name=openshell-server-tls",
+                  "--client-secret-name=openshell-client-tls",
+                  "--jwt-secret-name=openshell-jwt-keys",
+                  "--server-san=openshell",
+                  "--server-san=openshell.hw-s-placeholder.svc",
+                  "--server-san=openshell.hw-s-placeholder.svc.cluster.local",
+                  "--server-san=localhost",
+                  "--server-san=openshell.localhost",
+                  "--server-san=*.openshell.localhost",
+                  "--server-san=host.docker.internal",
+                  "--server-san=host.containers.internal",
+                  "--server-san=127.0.0.1"
+                ],
+                "command": [
+                  "/usr/local/bin/openshell-gateway"
+                ],
+                "env": [
+                  {
+                    "name": "POD_NAMESPACE",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.namespace"
+                      }
+                    }
+                  }
+                ],
+                "image": "heartwood.invalid/openshell-gateway:placeholder",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "certgen",
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsNonRoot": true,
+                  "seccompProfile": {
+                    "type": "RuntimeDefault"
+                  }
+                }
+              }
+            ],
+            "restartPolicy": "OnFailure",
+            "serviceAccountName": "openshell-certgen"
+          }
+        },
+        "ttlSecondsAfterFinished": 300
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell-sandbox-ssh",
+        "namespace": "hw-s-placeholder"
+      },
+      "spec": {
+        "ingress": [
+          {
+            "from": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "hw-s-placeholder"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app.kubernetes.io/instance": "openshell",
+                    "app.kubernetes.io/name": "openshell"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "port": 2222,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        ],
+        "podSelector": {
+          "matchLabels": {
+            "openshell.ai/managed-by": "openshell"
+          }
+        },
+        "policyTypes": [
+          "Ingress"
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell",
+        "namespace": "hw-s-placeholder"
+      },
+      "spec": {
+        "ports": [
+          {
+            "appProtocol": "grpc",
+            "name": "grpc",
+            "port": 8080,
+            "protocol": "TCP",
+            "targetPort": "grpc"
+          },
+          {
+            "name": "metrics",
+            "port": 9090,
+            "protocol": "TCP",
+            "targetPort": "metrics"
+          }
+        ],
+        "selector": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/name": "openshell"
+        },
+        "type": "ClusterIP"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell-peer",
+        "namespace": "hw-s-placeholder"
+      },
+      "spec": {
+        "clusterIP": "None",
+        "ports": [
+          {
+            "appProtocol": "grpc",
+            "name": "grpc",
+            "port": 8080,
+            "protocol": "TCP",
+            "targetPort": "grpc"
+          }
+        ],
+        "publishNotReadyAddresses": true,
+        "selector": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/name": "openshell"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell",
+        "namespace": "hw-s-placeholder"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell-certgen",
+        "namespace": "hw-s-placeholder"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell-sandbox",
+        "namespace": "hw-s-placeholder"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/instance": "openshell",
+          "app.kubernetes.io/managed-by": "Helm",
+          "app.kubernetes.io/name": "openshell",
+          "app.kubernetes.io/version": "0.1.9",
+          "helm.sh/chart": "helm-chart-0.1.9"
+        },
+        "name": "openshell",
+        "namespace": "hw-s-placeholder"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app.kubernetes.io/instance": "openshell",
+            "app.kubernetes.io/name": "openshell"
+          }
+        },
+        "serviceName": "openshell-peer",
+        "template": {
+          "metadata": {
+            "annotations": {
+              "checksum/gateway-config": "33ecd25af1f79fccda80449ceeb9e6054cdfa3a49212377c785af12ec3024c96"
+            },
+            "labels": {
+              "app.kubernetes.io/instance": "openshell",
+              "app.kubernetes.io/managed-by": "Helm",
+              "app.kubernetes.io/name": "openshell",
+              "app.kubernetes.io/version": "0.1.9",
+              "helm.sh/chart": "helm-chart-0.1.9"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "args": [
+                  "--config",
+                  "/etc/openshell/gateway.toml",
+                  "--db-url",
+                  "sqlite:/var/openshell/openshell.db"
+                ],
+                "env": [
+                  {
+                    "name": "OPENSHELL_REPLICA_ID",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.name"
+                      }
+                    }
+                  },
+                  {
+                    "name": "OPENSHELL_POD_NAME",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.name"
+                      }
+                    }
+                  },
+                  {
+                    "name": "OPENSHELL_POD_NAMESPACE",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.namespace"
+                      }
+                    }
+                  },
+                  {
+                    "name": "OPENSHELL_SERVICE_ACCOUNT_NAME",
+                    "value": "openshell"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_SERVICE_NAME",
+                    "value": "openshell-peer"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_TOKEN_AUDIENCE",
+                    "value": "openshell-gateway-peer"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_SERVICE_ACCOUNT_TOKEN_FILE",
+                    "value": "/var/run/secrets/openshell-peer/token"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_POD_LABELS",
+                    "value": "app.kubernetes.io/name=openshell,app.kubernetes.io/instance=openshell"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_TLS_SERVER_NAME",
+                    "value": "openshell.hw-s-placeholder.svc.cluster.local"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_TLS_CA_FILE",
+                    "value": "/etc/openshell-tls/server/ca.crt"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_TLS_CERT_FILE",
+                    "value": "/etc/openshell-tls/peer-client/tls.crt"
+                  },
+                  {
+                    "name": "OPENSHELL_PEER_TLS_KEY_FILE",
+                    "value": "/etc/openshell-tls/peer-client/tls.key"
+                  },
+                  {
+                    "name": "OPENSHELL_GATEWAY_CREDENTIAL_KEY_ENCRYPTION_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "key-encryption-key",
+                        "name": "openshell-kek"
+                      }
+                    }
+                  },
+                  {
+                    "name": "XDG_STATE_HOME",
+                    "value": "/var/lib/openshell-state"
+                  },
+                  {
+                    "name": "OPENSHELL_TELEMETRY_ENABLED",
+                    "value": "false"
+                  }
+                ],
+                "image": "heartwood.invalid/openshell-gateway:placeholder",
+                "imagePullPolicy": "IfNotPresent",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": "health"
+                  },
+                  "initialDelaySeconds": 2,
+                  "periodSeconds": 5,
+                  "timeoutSeconds": 1
+                },
+                "name": "openshell-gateway",
+                "ports": [
+                  {
+                    "containerPort": 8080,
+                    "name": "grpc",
+                    "protocol": "TCP"
+                  },
+                  {
+                    "containerPort": 8081,
+                    "name": "health",
+                    "protocol": "TCP"
+                  },
+                  {
+                    "containerPort": 9090,
+                    "name": "metrics",
+                    "protocol": "TCP"
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": "health"
+                  },
+                  "initialDelaySeconds": 1,
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 1
+                },
+                "resources": {},
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsNonRoot": true,
+                  "runAsUser": 1000,
+                  "seccompProfile": {
+                    "type": "RuntimeDefault"
+                  }
+                },
+                "startupProbe": {
+                  "failureThreshold": 30,
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": "health"
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 1
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/var/openshell",
+                    "name": "openshell-data"
+                  },
+                  {
+                    "mountPath": "/etc/openshell/gateway.toml",
+                    "name": "gateway-config",
+                    "readOnly": true,
+                    "subPath": "gateway.toml"
+                  },
+                  {
+                    "mountPath": "/etc/openshell-jwt",
+                    "name": "sandbox-jwt",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/var/run/secrets/openshell-peer",
+                    "name": "gateway-peer-token",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/etc/openshell-tls/server",
+                    "name": "tls-cert",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/etc/openshell-tls/peer-client",
+                    "name": "peer-client-tls",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/etc/openshell-tls/client-ca",
+                    "name": "tls-client-ca",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/var/lib/openshell-state",
+                    "name": "gateway-state"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "fsGroup": 1000
+            },
+            "serviceAccountName": "openshell",
+            "terminationGracePeriodSeconds": 30,
+            "volumes": [
+              {
+                "configMap": {
+                  "name": "openshell-config"
+                },
+                "name": "gateway-config"
+              },
+              {
+                "name": "sandbox-jwt",
+                "secret": {
+                  "defaultMode": 256,
+                  "secretName": "openshell-jwt-keys"
+                }
+              },
+              {
+                "name": "gateway-peer-token",
+                "projected": {
+                  "defaultMode": 256,
+                  "sources": [
+                    {
+                      "serviceAccountToken": {
+                        "audience": "openshell-gateway-peer",
+                        "expirationSeconds": 3600,
+                        "path": "token"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "tls-cert",
+                "secret": {
+                  "secretName": "openshell-server-tls"
+                }
+              },
+              {
+                "name": "peer-client-tls",
+                "secret": {
+                  "secretName": "openshell-client-tls"
+                }
+              },
+              {
+                "name": "tls-client-ca",
+                "secret": {
+                  "items": [
+                    {
+                      "key": "ca.crt",
+                      "path": "ca.crt"
+                    }
+                  ],
+                  "secretName": "openshell-server-tls"
+                }
+              },
+              {
+                "emptyDir": {},
+                "name": "gateway-state"
+              }
+            ]
+          }
+        },
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "openshell-data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "1Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "kind": "List"
+}

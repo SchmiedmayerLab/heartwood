@@ -1,0 +1,130 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  postgres-password: {{ include "heartwood.credential" (dict "context" . "name" "postgresql" "key" "postgres-password") }}
+  keycloak-password: {{ include "heartwood.credential" (dict "context" . "name" "postgresql" "key" "keycloak-password") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  # Runs once, when the data directory is created. Each component gets its own role and database.
+  10-databases.sh: |
+    set -eu
+    psql --set ON_ERROR_STOP=1 --username postgres --set password="${KEYCLOAK_PASSWORD}" <<'SQL'
+    CREATE ROLE keycloak LOGIN PASSWORD :'password';
+    CREATE DATABASE keycloak OWNER keycloak;
+    SQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "postgresql") | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  serviceName: postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "postgresql") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "postgresql") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 999 | nindent 8 }}
+      containers:
+        - name: postgresql
+          image: {{ .Values.images.postgresql }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: postgres-password
+            - name: KEYCLOAK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: keycloak-password
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, --username, postgres, --host, 127.0.0.1]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: init
+          configMap:
+            name: postgresql-init
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- include "heartwood.storageClass" . | nindent 8 }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.storage }}

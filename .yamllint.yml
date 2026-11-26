@@ -8,6 +8,10 @@
 
 extends: default
 
+# Helm templates are not YAML until they are rendered.
+ignore:
+  - reference-platform/chart/heartwood-platform/templates/
+
 rules:
   line-length:
     max: 150

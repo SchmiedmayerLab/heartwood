@@ -9,6 +9,11 @@
 # which overlaps Docker Desktop's DNS address.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+# Lets create-cluster.sh declare the cluster's local registry to containerd.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 networking:
   disableDefaultCNI: true
   podSubnet: 10.244.0.0/16

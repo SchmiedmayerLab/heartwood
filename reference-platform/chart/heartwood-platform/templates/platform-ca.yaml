@@ -1,0 +1,47 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+The platform certificate authority. Helm creates the key and the certificate at the
+first installation, and an existing Secret keeps them. The certificate carries the CA
+basic constraint, the certificate signing key usage and a subject key identifier.
+*/ -}}
+{{- $certificate := "" -}}
+{{- $key := "" -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "platform-ca" -}}
+{{- if $existing -}}
+{{- $certificate = index $existing.data "tls.crt" | b64dec -}}
+{{- $key = index $existing.data "tls.key" | b64dec -}}
+{{- else -}}
+{{- $ca := genCA "Heartwood Platform CA" 3650 -}}
+{{- $certificate = $ca.Cert -}}
+{{- $key = $ca.Key -}}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: platform-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $certificate | b64enc }}
+  tls.key: {{ $key | b64enc }}
+---
+# The certificate without the key, for components that verify platform certificates.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- $certificate | nindent 4 }}

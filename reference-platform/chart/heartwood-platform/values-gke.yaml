@@ -10,6 +10,13 @@
 # GKE's default Persistent Disk CSI storage class.
 storageClassName: standard-rwo
 
+# Attempt volumes on Persistent Disk.
+sessions:
+  attemptStorageClass:
+    provisioner: pd.csi.storage.gke.io
+    parameters:
+      type: pd-balanced
+
 # Placement of GPU pods on the spot NVIDIA L4 node pool, whose nodes carry the taint
 # nvidia.com/gpu=present:NoSchedule.
 gpu:

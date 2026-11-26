@@ -15,7 +15,14 @@ description = "Platform services of the Heartwood Kubernetes reference platform.
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Stanford University and the project authors" }]
-dependencies = ["heartwood-schemas"]
+dependencies = [
+    "heartwood-schemas",
+    "pydantic>=2.12",
+    "httpx>=0.28.1",
+    "pyjwt[crypto]>=2.15",
+    "starlette>=1.10",
+    "uvicorn>=0.54",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -35,6 +42,8 @@ dev = [
     "ruff>=0.16.1",
     "mypy>=2.3.0",
     "pytest>=9.1.1",
+    "pyyaml>=6.0.3",
+    "types-pyyaml>=6.0.12.20261111",
 ]
 
 [tool.mypy]
@@ -42,9 +51,11 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-files = ["src", "tests", "../tools"]
+files = ["src", "tests", "../tools", "../tests"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 testpaths = ["tests"]
+# Lets the tests import their helper modules.
+pythonpath = ["tests", "../tests/cluster"]

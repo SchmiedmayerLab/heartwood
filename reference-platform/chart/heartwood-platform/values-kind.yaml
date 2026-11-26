@@ -1,0 +1,32 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Chart values for the kind cluster that reference-platform/cluster creates.
+
+# The members are the subject identifiers of two synthetic researchers.
+projects:
+  - id: demo
+    billingAttributionRef: synthetic-grant-demo
+    policyRef: synthetic-policy-1
+    members:
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002
+  - id: other
+    billingAttributionRef: synthetic-grant-other
+    policyRef: synthetic-policy-1
+    members:
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+
+images:
+  # The published OpenShell 0.1.9 gateway, as a stand-in for the gateway that
+  # images/worker/candidate/gateway.json builds with its recorded patches.
+  openshellGateway: ghcr.io/nvidia/openshell/gateway:0.1.9@sha256:1fd9e1e807990e66c9486a28d3ce9d649fd7528df48d0e830d2de2148b52dfe5
+
+sessions:
+  # Stand-in for the worker image, which is not published by digest.
+  stagingImage: registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+  attemptStorageClass:
+    provisioner: rancher.io/local-path

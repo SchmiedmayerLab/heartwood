@@ -1,0 +1,47 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- /*
+Keeps the Services of session namespaces inside the cluster network. The fixed
+ClusterRoles let the OpenShell gateway and the control service create Services there,
+and a Service with an external address would redirect the traffic of other pods to
+that address into the session.
+*/ -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-session-services
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: heartwood.platform/session
+          operator: Exists
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+  validations:
+    - expression: >-
+        (!has(object.spec.type) || object.spec.type == 'ClusterIP')
+        && (!has(object.spec.externalIPs) || object.spec.externalIPs.size() == 0)
+      message: a Service in a session namespace has the type ClusterIP and no external address
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-session-services
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-session-services
+  validationActions: [Deny]

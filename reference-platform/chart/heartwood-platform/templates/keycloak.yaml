@@ -1,0 +1,234 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-bootstrap-admin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  username: {{ "bootstrap-admin" | b64enc }}
+  password: {{ include "heartwood.credential" (dict "context" . "name" "keycloak-bootstrap-admin" "key" "password") }}
+---
+# Secret of the Keycloak client heartwood-control. Keycloak reads it into the realm
+# import, and the control service authenticates with it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: heartwood-control-keycloak
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  client-secret: {{ include "heartwood.credential" (dict "context" . "name" "heartwood-control-keycloak" "key" "client-secret") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  heartwood-realm.json: |
+    {{- include "heartwood.realm" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 8 }}
+      annotations:
+        checksum/realm: {{ include "heartwood.realm" . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 1000 | nindent 8 }}
+      containers:
+        - name: keycloak
+          image: {{ .Values.images.keycloak }}
+          # The realm is imported when it does not exist. An existing realm is left unchanged.
+          args: [start, --import-realm]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://postgresql:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgresql
+                  key: keycloak-password
+            - name: KC_HOSTNAME
+              value: {{ include "heartwood.keycloakUrl" . | quote }}
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_CACHE
+              value: local
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-bootstrap-admin
+                  key: username
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-bootstrap-admin
+                  key: password
+            # Referenced by the realm import.
+            - name: HEARTWOOD_CONTROL_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: heartwood-control-keycloak
+                  key: client-secret
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              memory: 1536Mi
+          volumeMounts:
+            - name: realm
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+      volumes:
+        - name: realm
+          configMap:
+            name: keycloak-realm
+---
+# Disables the temporary administrator that Keycloak creates at its first start.
+# The realm import needs no administrator, and the account stays disabled across restarts.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "keycloak-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 1000 | nindent 8 }}
+      containers:
+        - name: disable-bootstrap-administrator
+          image: {{ .Values.images.keycloak }}
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          command: [/bin/bash, -c]
+          args:
+            - |
+              set -u
+              kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm.config; }
+              for attempt in $(seq 1 60); do
+                if output="$(kcadm config credentials --server http://keycloak:8080 \
+                  --realm master --user "${ADMIN_USERNAME}" 2>&1)"; then
+                  id="$(kcadm get users --target-realm master --query "username=${ADMIN_USERNAME}" \
+                    --query exact=true --fields id --format csv --noquotes)" || exit 1
+                  kcadm update "users/${id}" --target-realm master --set enabled=false || exit 1
+                  echo "The bootstrap administrator is disabled."
+                  exit 0
+                fi
+                if [[ "${output}" == *"Account disabled"* ]]; then
+                  echo "The bootstrap administrator is already disabled."
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "${output}" >&2
+              exit 1
+          env:
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-bootstrap-admin
+                  key: username
+            # kcadm.sh reads the password from this variable.
+            - name: KC_CLI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-bootstrap-admin
+                  key: password
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

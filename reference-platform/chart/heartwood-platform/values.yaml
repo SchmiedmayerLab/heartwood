@@ -1,0 +1,89 @@
+# This source file is part of the Heartwood open-source project
+#
+# SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+#
+# SPDX-License-Identifier: MIT
+
+# Values of the Heartwood reference platform chart.
+# Install the release into the namespace heartwood-platform.
+
+# Container images, each pinned by the digest of its multi-platform index.
+images:
+  postgresql: docker.io/library/postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+  keycloak: quay.io/keycloak/keycloak:26.8.2@sha256:7e66a96e4739239070aeaf72e4c5decf0f7f682cfc725b9f7ea2b336eaba38b3
+  versitygw: ghcr.io/versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316
+  # Image of the platform services, built from reference-platform/services/Dockerfile.
+  # It has no default: set it to a reference by digest at installation.
+  platformServices: ""
+  # Image of the OpenShell gateway of each session, with the Kubernetes driver.
+  # It has no default: set it to a reference by digest.
+  openshellGateway: ""
+
+# StorageClass of the platform's own volumes. Empty selects the cluster default.
+storageClassName: ""
+
+# Synthetic projects of the registry. Each project gets an object store bucket and a
+# Keycloak client scope project-<id> that the command line client can request.
+# members lists the Keycloak subject identifiers of the researchers of a project.
+projects: []
+#  - id: demo
+#    billingAttributionRef: synthetic-grant-demo
+#    policyRef: synthetic-policy-1
+#    members: []
+
+control:
+  # Identifier of this platform in launch contexts.
+  platformId: heartwood-reference-platform
+  storage: 1Gi
+  # Service accounts that may list projects and launch sessions for researchers.
+  serviceCallers:
+    - system:serviceaccount:heartwood-sessions:hub
+  # Redirect URI of the gateway of one researcher and project.
+  redirectUriTemplate: "http://proxy-public.heartwood-sessions.svc.cluster.local/user/{subject}/{project}/oauth_callback"
+
+postgresql:
+  storage: 2Gi
+
+keycloak:
+  # Public URL of Keycloak and the base of every token issuer.
+  # Empty selects the in-cluster Service URL.
+  url: ""
+
+versitygw:
+  storage: 5Gi
+
+sessions:
+  # Namespace of the Hub and the Heartwood gateway pods.
+  namespace: heartwood-sessions
+  # Image of the staging pods that a Heartwood gateway may create, by digest.
+  stagingImage: ""
+  # Addresses under which pods reach the Kubernetes API server, as a list of
+  # {cidr, port}. Session namespaces deny egress by default, and the OpenShell gateway
+  # may reach these. Empty reads the addresses from the cluster at installation.
+  apiServer: []
+  # ResourceQuota of one session namespace.
+  quota:
+    requests.cpu: "6"
+    requests.memory: 12Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "20"
+    persistentvolumeclaims: "20"
+    requests.storage: 40Gi
+  # Limits and requests of containers that declare none, such as the OpenShell
+  # gateway and supervisors. The quota admits only pods with limits.
+  containerDefaults:
+    cpu: 500m
+    memory: 512Mi
+  containerDefaultRequests:
+    cpu: 100m
+    memory: 128Mi
+  # StorageClass of the attempt volumes that a Heartwood gateway may create.
+  attemptStorageClass:
+    provisioner: ""
+    parameters: {}
+
+# Placement of GPU pods. Set per cluster.
+gpu:
+  nodeSelector: {}
+  tolerations: []
