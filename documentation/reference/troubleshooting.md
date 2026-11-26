@@ -603,15 +603,18 @@ An access token signed with an algorithm other than RS256 or ES256, or without a
 Operators compare the manifest's [`[identity]` table](configuration.md#identity) with the provider's client: issuer, client identifier, secret, subject and the redirect URI `<public origin><base path>/oauth_callback`.
 
 A research service that takes an exchanged token reports this code while no sign-in is live, and when the provider refuses a token for that service.
-`heartwood services` and the browser show it when such a service is tested or added, and the terminal, browser and notebook show it when it refuses an approval of one of the service's operations; the review stays open.
-Sign in at the gateway again and approve the operation again; operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
+Test and add such a service in the signed-in browser; `heartwood services` has no sign-in and reports this code for every such service.
+When this code refuses an approval of one of the service's operations, the terminal, browser and notebook show it and the review stays open.
+Sign in at the gateway again and approve the operation again; a review is valid for five minutes, and after it expires the gateway proposes the same call again for a new approval.
+Operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
 
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
 
 The gateway could not reach the identity provider, or the provider answered with a document the gateway cannot use.
 Status `503` means the request to the provider failed or timed out; status `502` means the provider answered with an error or an unusable document.
 Retry when the provider is reachable.
-A research service that takes an exchanged token reports this code when the gateway cannot obtain its token, and an approval of one of its operations is refused with it in the terminal, browser and notebook; the review stays open.
+A research service that takes an exchanged token reports this code when the gateway cannot obtain its token, and an approval of one of its operations is refused with it in the terminal, browser and notebook.
+The review stays open; approve it again once the provider is reachable, or approve the new review the gateway proposes after the first one expires.
 
 Operators check that `provider_url` is reachable from the gateway, that `ca_file` holds the authority of the provider's certificate, and that the discovery document's `issuer` equals the configured `issuer`.
 The discovery document's authorization, token and key endpoints must lie on the origin of `issuer` or of `provider_url`.
