@@ -1679,3 +1679,299 @@ def test_a_failing_missing_or_oversized_tool_answer_is_refused(
     with pytest.raises(WorkerAttemptError, match="requires reconciliation"):
         admission.inspect_worker(_SANDBOX_ID)
     assert len((root / "calls.jsonl").read_text().splitlines()) == 3
+
+
+_CLAIM_UID = "6f1b8c2e-4d3a-4b5c-9e8f-0a1b2c3d4e5f"
+_CONTENT = "e" * 64
+
+
+def _project_data(**changes: object) -> dict[str, object]:
+    return {
+        "claim_name": "hw-project-data-eeeeeeeeeeeeeeee",
+        "claim_uid": _CLAIM_UID,
+        "project": "demo",
+        "content_sha256": _CONTENT,
+        "mount_path": "/data",
+        **changes,
+    }
+
+
+@pytest.fixture
+def data_admission(tmp_path: Path) -> KubernetesWorkerAdmission:
+    return KubernetesWorkerAdmission(_settings(tmp_path, project_data=_project_data()), _intent())
+
+
+def _with_project_data(admission: KubernetesWorkerAdmission) -> Objects:
+    """The sandbox with the declared claim attached, as the driver attaches it."""
+    objects = _objects(admission)
+    spec = _workload(objects)["spec"]
+    spec["volumes"].insert(
+        2,
+        {
+            "name": "project-data",
+            "persistentVolumeClaim": {
+                "claimName": "hw-project-data-eeeeeeeeeeeeeeee",
+                "readOnly": True,
+            },
+        },
+    )
+    spec["containers"][0]["volumeMounts"].insert(
+        2, {"mountPath": "/data", "name": "project-data", "readOnly": True}
+    )
+    objects["persistentvolumeclaim/hw-project-data-eeeeeeeeeeeeeeee"] = {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "annotations": {"heartwood.platform/content-sha256": _CONTENT},
+            "labels": {
+                "heartwood.platform/project": "demo",
+                "heartwood.platform/role": "project-data",
+                "heartwood.platform/session": "0123456789abcdef",
+                "openshell.ai/sandbox-attachable": "true",
+                "openshell.ai/sandbox-attachable-workspace": "hw",
+            },
+            "name": "hw-project-data-eeeeeeeeeeeeeeee",
+            "namespace": _NAMESPACE,
+            "uid": _CLAIM_UID,
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "storageClassName": "heartwood-project-data",
+            "volumeName": "pvc-1",
+        },
+        "status": {"phase": "Bound"},
+    }
+    return objects
+
+
+def test_a_declared_project_data_volume_is_admitted_and_recorded(
+    data_admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _with_project_data(data_admission)
+    _serve(data_admission, monkeypatch, objects)
+    data_admission.inspect_worker(_SANDBOX_ID)
+    assert data_admission.record is not None
+    assert data_admission.record["project_data"] == {
+        "claim_name": "hw-project-data-eeeeeeeeeeeeeeee",
+        "claim_uid": _CLAIM_UID,
+        "project": "demo",
+        "content_sha256": _CONTENT,
+        "access_modes": ["ReadWriteOnce"],
+    }
+
+
+def test_without_a_declaration_a_project_data_volume_is_refused(
+    admission: KubernetesWorkerAdmission,
+    data_admission: KubernetesWorkerAdmission,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    objects = _with_project_data(data_admission)
+    # The same sandbox seen by an attempt whose manifest declares no project data.
+    for name in ("pod/", "networkpolicy", "namespace/"):
+        for key in [key for key in objects if key.startswith(name)]:
+            objects[key.replace(data_admission.pod_name, admission.pod_name)] = objects.pop(key)
+    workload = _workload(objects)
+    workload["metadata"]["labels"].update(admission.labels)
+    workload["metadata"]["name"] = admission.pod_name
+    workload["metadata"]["ownerReferences"][0]["name"] = admission.pod_name
+    for volume in workload["spec"]["volumes"]:
+        claim = volume.get("persistentVolumeClaim", {})
+        for mount in ("inputs", "skills"):
+            if volume["name"] == mount:
+                claim["claimName"] = admission.names[mount]
+        if volume["name"] == "workspace":
+            claim["claimName"] = "workspace-" + admission.pod_name
+    for item in objects.values():
+        for owner in item["metadata"].get("ownerReferences", []):
+            owner["name"] = admission.pod_name
+    _serve(admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match="volume that admission does not list"):
+        admission.inspect_worker(_SANDBOX_ID)
+
+
+_CLAIM_KEY = "persistentvolumeclaim/hw-project-data-eeeeeeeeeeeeeeee"
+
+
+@pytest.mark.parametrize(
+    ("target", "path", "value", "refusal"),
+    [
+        # The claim belongs to another project.
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "heartwood.platform/project"),
+            "other",
+            "another project",
+        ),
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "heartwood.platform/project"),
+            _DELETE,
+            "another project",
+        ),
+        # Another claim under the declared name, other content or another workspace.
+        (
+            _CLAIM_KEY,
+            ("metadata", "uid"),
+            "6f1b8c2e-0000-4b5c-9e8f-0a1b2c3d4e5f",
+            "its declaration",
+        ),
+        (
+            _CLAIM_KEY,
+            ("metadata", "annotations", "heartwood.platform/content-sha256"),
+            "f" * 64,
+            "its declaration",
+        ),
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "openshell.ai/sandbox-attachable-workspace"),
+            "other",
+            "its declaration",
+        ),
+        (
+            _CLAIM_KEY,
+            ("spec", "dataSource"),
+            {"kind": "PersistentVolumeClaim", "name": "x"},
+            "its declaration",
+        ),
+        (
+            _CLAIM_KEY,
+            ("spec", "dataSourceRef"),
+            {"kind": "PersistentVolumeClaim", "name": "x"},
+            "its declaration",
+        ),
+        # A claim that the platform has not made attachable after its copy.
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "openshell.ai/sandbox-attachable"),
+            _DELETE,
+            "its declaration",
+        ),
+        (
+            _CLAIM_KEY,
+            ("metadata", "labels", "openshell.ai/sandbox-attachable"),
+            "false",
+            "its declaration",
+        ),
+        # The volume or its mount is writable.
+        (
+            "pod/hw--",
+            ("spec", "volumes", 2, "persistentVolumeClaim", "readOnly"),
+            False,
+            "read-only at its declared path",
+        ),
+        (
+            "pod/hw--",
+            ("spec", "volumes", 2, "persistentVolumeClaim", "readOnly"),
+            _DELETE,
+            "read-only at its declared path",
+        ),
+        (
+            "pod/hw--",
+            ("spec", "containers", 0, "volumeMounts", 2, "readOnly"),
+            False,
+            "read-only at its declared path",
+        ),
+        (
+            "pod/hw--",
+            ("spec", "containers", 0, "volumeMounts", 2, "readOnly"),
+            _DELETE,
+            "read-only at its declared path",
+        ),
+        # The volume is mounted at an undeclared path, or names another claim.
+        (
+            "pod/hw--",
+            ("spec", "containers", 0, "volumeMounts", 2, "mountPath"),
+            "/project",
+            "read-only at its declared path",
+        ),
+        (
+            "pod/hw--",
+            ("spec", "containers", 0, "volumeMounts", 2, "mountPath"),
+            "/data/sub",
+            "read-only at its declared path",
+        ),
+        (
+            "pod/hw--",
+            ("spec", "volumes", 2, "persistentVolumeClaim", "claimName"),
+            "hw-project-data-other",
+            "read-only at its declared path",
+        ),
+    ],
+)
+def test_project_data_out_of_its_declaration_is_refused(
+    data_admission: KubernetesWorkerAdmission,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    path: tuple[Any, ...],
+    value: object,
+    refusal: str,
+) -> None:
+    objects = _with_project_data(data_admission)
+    _change(_named(objects, target), path, value)
+    _serve(data_admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match=refusal):
+        data_admission.inspect_worker(_SANDBOX_ID)
+    assert data_admission.record is not None
+
+
+def test_a_second_mount_of_the_project_data_volume_is_refused(
+    data_admission: KubernetesWorkerAdmission, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    objects = _with_project_data(data_admission)
+    mounts = _workload(objects)["spec"]["containers"][0]["volumeMounts"]
+    mounts.append({"mountPath": "/elsewhere", "name": "project-data", "readOnly": True})
+    _serve(data_admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match="read-only at its declared path"):
+        data_admission.inspect_worker(_SANDBOX_ID)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["data", "/", "/data/../etc", "/datasets", "/usr", "/etc/ssl", "/inputs", "/workspace/data"],
+)
+def test_project_data_is_mounted_at_the_images_mount_point(tmp_path: Path, path: str) -> None:
+    # Elsewhere a volume could shadow part of the image whose digest admission pins.
+    with pytest.raises(ValueError, match="mounted at /data"):
+        _settings(tmp_path, project_data=_project_data(mount_path=path))
+    assert _settings(tmp_path, project_data=_project_data(mount_path="/data/cohort")).project_data
+
+
+def test_the_driver_configuration_attaches_the_project_data_read_only(tmp_path: Path) -> None:
+    from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes
+
+    volumes = KubernetesWorkerVolumes(_settings(tmp_path, project_data=_project_data()), _intent())
+    config = volumes.driver_config()
+    assert config["volumes"][-1] == {
+        "name": "project-data",
+        "persistent_volume_claim": {
+            "claim_name": "hw-project-data-eeeeeeeeeeeeeeee",
+            "read_only": True,
+        },
+    }
+    assert config["containers"]["agent"]["volume_mounts"][-1] == {
+        "name": "project-data",
+        "mount_path": "/data",
+        "read_only": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("volume", "path", "refusal"),
+    [
+        ("project-data", "/data", "read-only at its declared path"),
+        ("inputs", "/inputs", "projection mount is not read-only"),
+    ],
+)
+def test_a_read_only_claim_mounted_in_an_init_container_is_refused(
+    data_admission: KubernetesWorkerAdmission,
+    monkeypatch: pytest.MonkeyPatch,
+    volume: str,
+    path: str,
+    refusal: str,
+) -> None:
+    objects = _with_project_data(data_admission)
+    init = _workload(objects)["spec"]["initContainers"][1]
+    init["volumeMounts"].append({"mountPath": path, "name": volume, "readOnly": True})
+    _serve(data_admission, monkeypatch, objects)
+    with pytest.raises(WorkerAttemptError, match=refusal):
+        data_admission.inspect_worker(_SANDBOX_ID)

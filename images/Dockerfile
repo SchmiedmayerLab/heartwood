@@ -221,6 +221,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 RUN install -d --mode=0755 /etc/heartwood
 COPY --chmod=0444 images/worker/config.json /etc/heartwood/worker.json
+# The mount point of a platform's read-only project data. A sandbox policy may list it
+# whether or not a volume is attached, because a listed path must exist.
+RUN install -d --mode=0755 /data
 
 WORKDIR /workspace
 USER heartwood

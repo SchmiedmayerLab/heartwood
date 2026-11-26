@@ -23,6 +23,7 @@ from heartwood_platform.control.hosted import (
     sandbox_digests,
 )
 from heartwood_platform.control.inference import RouteModel
+from heartwood_platform.control.project_data import ProjectDataVolume
 
 from heartwood.schemas import PlatformLaunchContext
 
@@ -35,6 +36,7 @@ _OBJECTS = (
 )
 HOSTED: dict[str, Any] = {
     "control_url": "https://heartwood-control.heartwood-platform.svc.cluster.local:8443",
+    "data_url": "https://heartwood-data.heartwood-platform.svc.cluster.local:8443",
     "worker": {
         "image": "registry.example.test:5000/heartwood-worker:candidate@sha256:" + "2" * 64,
         "policy": {"version": 1, "process": {"runAsUser": "10001"}},
@@ -68,7 +70,9 @@ _LAUNCH = PlatformLaunchContext(
 
 
 def _files(
-    session: str = "abc123", subject: str = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
+    session: str = "abc123",
+    subject: str = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001",
+    project_data: ProjectDataVolume | None = None,
 ) -> dict[str, str]:
     supervisor, sandbox = sandbox_digests(_OBJECTS.read_text(encoding="utf-8"))
     gateway = HostedGateway(
@@ -84,6 +88,7 @@ def _files(
         client_id="hw-proj-demo",
         namespace=f"hw-s-{session}",
         launch_context=_LAUNCH,
+        project_data=project_data,
     )
 
 
@@ -113,6 +118,7 @@ def test_manifest_binds_the_researcher_the_session_worker_and_the_planning_servi
         == hashlib.sha256(files["worker-policy.json"].encode()).hexdigest()
     )
     assert worker["inputs"] == {"schema_version": "heartwood.worker-inputs.v1", "files": []}
+    assert "project_data" not in worker
     # The worker calls the route's model through LiteLLM, and the policy allows only that.
     endpoint = "https://litellm.heartwood-platform.svc.cluster.local:4000/v1"
     assert (worker["profile_id"], worker["model"]) == ("platform-route", "openai/synthetic-coder")
@@ -213,3 +219,39 @@ def test_the_manifest_writer_escapes_what_toml_requires() -> None:
     parsed = tomllib.loads(_table("", {"text": value, "list": [value, "plain"]}))
 
     assert parsed == {"text": value, "list": [value, "plain"]}
+
+
+def test_the_manifest_declares_the_sessions_project_data_volume() -> None:
+    volume = ProjectDataVolume(
+        claim_name="hw-project-data-0123456789abcdef",
+        claim_uid="6f1b8c2e-4d3a-4b5c-9e8f-0a1b2c3d4e5f",
+        content_sha256="e" * 64,
+        mount_path="/data",
+        objects=3,
+    )
+    manifest = tomllib.loads(_files(project_data=volume)["deployment.toml"])
+    assert manifest["worker"]["workspace"] == "research"
+    # The project comes from the launch context, which the registry wrote.
+    assert manifest["worker"]["project_data"] == {
+        "claim_name": "hw-project-data-0123456789abcdef",
+        "claim_uid": "6f1b8c2e-4d3a-4b5c-9e8f-0a1b2c3d4e5f",
+        "project": "demo",
+        "content_sha256": "e" * 64,
+        "mount_path": "/data",
+    }
+
+
+def test_the_manifest_offers_the_data_catalog_with_an_exchanged_token() -> None:
+    manifest = tomllib.loads(_files()["deployment.toml"])
+    assert manifest["mcp_destinations"] == [
+        {
+            "service_id": "heartwood-data",
+            "origin": "https://heartwood-data.heartwood-platform.svc.cluster.local:8443",
+            "tools": ["list_datasets", "list_objects", "resolve_object"],
+            "max_result_bytes": 32768,
+            "observation_tool": "get_operation",
+            "private_address": True,
+            "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
+            "token_exchange": {"scope": "svc-data", "audience": "heartwood-data"},
+        }
+    ]

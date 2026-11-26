@@ -17,6 +17,12 @@ projects:
     budgets:
       inference: "5"
       compute: "50"
+    datasets:
+      - id: synthetic-cohort
+        name: Synthetic cohort
+        description: Synthetic participants and their blood pressure and heart rate at two visits.
+        created: "2026-11-01T00:00:00Z"
+        files: [README.md, participants.csv, measurements.csv]
   - id: other
     billingAttributionRef: synthetic-grant-other
     policyRef: synthetic-policy-1
@@ -24,6 +30,12 @@ projects:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
     budgets:
       inference: "1.5"
+    datasets:
+      - id: synthetic-panel
+        name: Synthetic household panel
+        description: Synthetic households with their region and size.
+        created: "2026-11-01T00:00:00Z"
+        files: [panel.csv]
   # A session in this project reserves its whole budget, which ends the session key's
   # budget after two requests to the synthetic model.
   - id: small

@@ -199,10 +199,13 @@ def _application(
     deployment: OpenShellWorkerDeployment | None = None,
     action_review_modes: tuple[ActionReviewMode, ...] = ("review-all",),
     project: ProjectContext | None = None,
+    **gateway: Any,  # noqa: ANN401
 ) -> SessionGateway:
     """Compose a managed gateway; cases review every worker action unless they widen the ceiling.
 
     An existing project is reopened as a restarted gateway would, reconciling its attempts.
+    ``gateway`` passes further settings, such as research service destinations, to the
+    gateway.
     """
     restarted = project is not None
     if project is None:
@@ -240,6 +243,7 @@ def _application(
         external_actions_factory=external_actions_factory,
         checkpoint_evidence_factory=fixture.bind_records(project) if retain_checkpoints else None,
         env={},
+        **gateway,
     )
     fixture.applications.append(application)
     profile = ModelProfile(

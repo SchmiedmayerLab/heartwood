@@ -37,7 +37,8 @@ from heartwood.gateway.worker_inputs import WorkerInputManifest
 from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes
 from heartwood.gateway.worker_native import _NativeWorkerAttempt
 
-WORKSPACE = "hw"
+# The workspace of hosted gateways, whose sandboxes the session's project data volume names.
+WORKSPACE = "research"
 WORKER_PODS = "worker-pods.json"
 LAUNCH_FAILURES = "launch-failures.log"
 _ACCOUNT = Path("/var/run/secrets/kubernetes.io/serviceaccount")
@@ -213,10 +214,13 @@ class KubernetesFixture:
         for item in listed:
             metadata = item["metadata"]
             labels = metadata.get("labels") or {}
-            # The session's own sandbox gateway and its volume are no worker objects.
-            if labels.get("app.kubernetes.io/instance") == "openshell" or metadata[
-                "name"
-            ].startswith("openshell-data-"):
+            # The session's own sandbox gateway and its volume, and the project data volume
+            # the platform filled for the session, are no worker objects.
+            if (
+                labels.get("app.kubernetes.io/instance") == "openshell"
+                or metadata["name"].startswith("openshell-data-")
+                or labels.get("heartwood.platform/role") == "project-data"
+            ):
                 continue
             name = f"{item['kind']}/{metadata['name']}"
             if attempt_id is None or attempt_id in json.dumps(item):
@@ -279,6 +283,7 @@ class KubernetesFixture:
                     "/opt",
                     "/inputs",
                     "/skills",
+                    "/data",
                 ],
                 read_write=[
                     "/tmp",

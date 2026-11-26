@@ -63,9 +63,12 @@ SPDX-License-Identifier: MIT
 {{- $handling := dict "destination" $route.dataHandling.destination "retention_authority" $route.dataHandling.retentionAuthority "route" $route.dataHandling.route -}}
 {{- $modelRoute := dict "profile_id" $route.profileId "model" $workerModel "endpoint" (printf "%s/v1/chat/completions" $litellm) "provider" $route.provider "placeholder_env" $route.placeholderEnv "binaries" $route.binaries "data_handling" $handling -}}
 {{- $inference := dict "session_reservation" .Values.control.inference.sessionReservation "litellm_url" $litellm "master_key_file" "/etc/heartwood-control/litellm/master-key" "models" $routeModels "settle_wait_seconds" .Values.inference.settleWaitSeconds "openshell_cli" "/usr/local/bin/openshell" -}}
-{{- $hosted := dict "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
+{{- $hosted := dict "data_url" (printf "https://heartwood-data.%s.svc.cluster.local:8443" .Release.Namespace) "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
 {{- $redirect := printf "%s/user/{researcher}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
-{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- /* Project data volumes are attached to the sandboxes of the hosted gateways' workspace, research. */ -}}
+{{- $store := include "heartwood.selector" (dict "context" . "component" "versitygw") | fromYaml -}}
+{{- $projectData := dict "data_url" (printf "https://heartwood-data.%s.svc.cluster.local:8443" .Release.Namespace) "token_file" "/var/run/secrets/heartwood/data/token" "copy_image" .Values.images.platformServices "storage_class" "heartwood-project-data" "workspace" "research" "mount_path" "/data" "object_store_namespace" .Release.Namespace "object_store_labels" $store "object_store_port" 7070 -}}
+{{- dict "project_data" $projectData "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "context_callers" (list (printf "system:serviceaccount:%s:heartwood-data" .Release.Namespace)) "redirect_uri_template" $redirect "researcher_id_key_file" "/etc/heartwood-control/researcher-ids/key" "inference" $inference "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The key under which hosted gateways derive the actor that records name for a
 # researcher. Losing it breaks the link between earlier and later records of the same
@@ -224,6 +227,9 @@ spec:
               mountPath: /var/lib/heartwood-control
             - name: tmp
               mountPath: /tmp
+            - name: data-token
+              mountPath: /var/run/secrets/heartwood/data
+              readOnly: true
       volumes:
         - name: configuration
           configMap:
@@ -267,6 +273,14 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 16Mi
+        # The control service's token for the data service, which plans project data volumes.
+        - name: data-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: heartwood-data
+                  expirationSeconds: 3600
+                  path: token
   volumeClaimTemplates:
     - metadata:
         name: data

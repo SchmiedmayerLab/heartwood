@@ -13,6 +13,7 @@ the gateway, pod admission, staging into volume claims and deletion through the 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -20,6 +21,7 @@ import shutil
 import ssl
 import threading
 import time
+import tomllib
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
@@ -1119,7 +1121,9 @@ def test_kubernetes_staging_name_workspace_creates_no_pod(
 
 
 def _refused_launch(
-    fixture: KubernetesFixture, method: str, **deployment: str
+    fixture: KubernetesFixture,
+    method: str,
+    **deployment: Any,  # noqa: ANN401
 ) -> tuple[SessionService, str, list[str]]:
     """Run one launch that the adapter must refuse, and return why it did."""
     refusals: list[str] = []
@@ -1451,3 +1455,522 @@ def test_kubernetes_migrated_project_serves_through_the_operator_manifest(
     infrastructure: KubernetesFixture,
 ) -> None:
     lifecycle.test_native_migrated_project_serves_through_the_operator_manifest(infrastructure)
+
+
+# The session's project data volume, as the control service declared it to the gateway.
+_LAUNCH = Path("/qualification/gateway/launch.json")
+_DATA_MARKER = "Synthetic project data check."
+# Lists every file of the volume with its size and checksum, then tries three writes.
+_DATA_PROBE = """import hashlib,json,os
+from pathlib import Path
+root=Path('/data')
+files={p.relative_to(root).as_posix():[p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()]
+ for p in sorted(root.rglob('*')) if p.is_file()}
+writes={}
+for name,write in (('new-file',lambda:(root/'written').write_text('x')),
+ ('existing-file',lambda:open(next(p for p in root.rglob('*') if p.is_file()),'a').close()),
+ ('new-directory',lambda:(root/'directory').mkdir())):
+    try:
+        write();writes[name]='written'
+    except OSError as error:
+        writes[name]=os.strerror(error.errno)
+print(json.dumps({'files':files,'writes':writes}))
+"""
+
+
+def _project_data() -> dict[str, str]:
+    """The declaration of the hosted gateway's manifest, which the reply to the launch matches."""
+    manifest = tomllib.loads(Path("/qualification/gateway/deployment.toml").read_text())
+    declared = dict(manifest["worker"]["project_data"])
+    launch = json.loads(_LAUNCH.read_text())
+    volume = launch["project_data"]
+    assert declared == {
+        "claim_name": volume["claim_name"],
+        "claim_uid": volume["claim_uid"],
+        "project": launch["project"],
+        "content_sha256": volume["content_sha256"],
+        "mount_path": volume["mount_path"],
+    }
+    return declared
+
+
+def _content_sha256(files: dict[str, list[Any]]) -> str:
+    """The platform's content digest of a volume: identifier, path, size and checksum."""
+    manifest = sorted(
+        (
+            {"id": path.replace("/", ".", 1), "path": path, "size": size, "sha256": sha256}
+            for path, (size, sha256) in files.items()
+        ),
+        key=lambda item: str(item["path"]),
+    )
+    return hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def test_kubernetes_project_data_is_read_only_at_its_declared_path(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """The worker reads the platform's copy of the project data, and every write fails."""
+    fixture = infrastructure
+    declared = _project_data()
+    fixture.provider.scripts[_DATA_MARKER] = [
+        ("terminal", {"command": "wc -l /data/synthetic-cohort/participants.csv"}),
+        ("finish", {"message": "Synthetic project data read."}),
+    ]
+    settings = fixture.deployment(WorkerInputManifest(files=()), project_data=declared)
+    application = native._application(fixture, deployment=settings)
+    service = application._service("composition")
+    try:
+        native._submit(application, CommandKind.CHAT, {"prompt": _DATA_MARKER})
+        attempt_id, worker = lifecycle._worker(application)
+        attempt = service.worker_attempt()
+        assert attempt is not None
+        input_identity = attempt.intent.input_manifest_sha256
+        lifecycle._approve(application, lifecycle._pending(application, tool="terminal"))
+        lifecycle._settle(application)
+        (execution,) = lifecycle._executions(application)
+        assert execution["exit_code"] == 0, execution
+        observation = fixture.exec(worker, [PYTHON, "-I", "-B", "-c", _DATA_PROBE])
+        assert observation.exit_code == 0, observation.stderr
+        observed = json.loads(observation.stdout)
+        # The bytes the worker reads are the content the platform declared.
+        assert observed["files"]
+        assert _content_sha256(observed["files"]) == declared["content_sha256"]
+        # A new file and directory fail on the read-only mount, whose root every user may
+        # write to on a writable volume; an existing file belongs to the copy's user.
+        writes = observed["writes"]
+        assert writes["new-file"] == writes["new-directory"] == "Read-only file system"
+        assert writes["existing-file"] in {"Read-only file system", "Permission denied"}
+        (record,) = json.loads((fixture.output / WORKER_PODS).read_text())
+        admitted = record["admission"]["project_data"]
+        assert {key: admitted[key] for key in ("claim_name", "claim_uid", "project")} == {
+            key: declared[key] for key in ("claim_name", "claim_uid", "project")
+        }
+        assert admitted["content_sha256"] == declared["content_sha256"]
+        (pod,) = [
+            item
+            for item in json.loads(fixture.outside("get", "pods", "--output=json"))["items"]
+            if item["metadata"]["name"] == f"{WORKSPACE}--{worker}"
+        ]
+        (volume,) = [item for item in pod["spec"]["volumes"] if item["name"] == "project-data"]
+        mounts = [
+            mount
+            for container in pod["spec"]["containers"] + pod["spec"]["initContainers"]
+            for mount in container.get("volumeMounts", [])
+            if mount["name"] == "project-data"
+        ]
+    finally:
+        native._stop(application)
+    _settled(service, "revoked")
+    # The claim stays for the next worker of the session.
+    claim = json.loads(
+        fixture.outside("get", "persistentvolumeclaim", declared["claim_name"], "--output=json")
+    )
+    assert claim["metadata"]["uid"] == declared["claim_uid"]
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-project-data.v1",
+            "attempt_id": attempt_id,
+            "declared": declared,
+            "admission": admitted,
+            "volume": volume,
+            "mounts": mounts,
+            "worker_files": observed["files"],
+            "worker_writes": observed["writes"],
+            "input_manifest_sha256": input_identity,
+        },
+    )
+
+
+def _attached(change: str) -> Any:  # noqa: ANN401
+    """The adapter's driver configuration with the project data attached otherwise."""
+    original = KubernetesWorkerVolumes.driver_config
+
+    def changed(volumes: KubernetesWorkerVolumes) -> dict[str, Any]:
+        config = original(volumes)
+        for item in config["volumes"]:
+            if item["name"] == "project-data" and change == "writable-volume":
+                item["persistent_volume_claim"]["read_only"] = False
+        # The sandbox gateway itself refuses a writable mount of a read-only volume.
+        for mount in config["containers"]["agent"]["volume_mounts"]:
+            if mount["name"] == "project-data" and change == "undeclared-path":
+                mount["mount_path"] = "/data/elsewhere"
+        return config
+
+    return changed
+
+
+@pytest.mark.parametrize("change", ["writable-volume", "another-project", "undeclared-path"])
+def test_kubernetes_admission_refuses_project_data_out_of_its_declaration(
+    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    fixture = infrastructure
+    declared = _project_data()
+    if change == "another-project":
+        declared["project"] = "other"
+        refusal = "native project data volume belongs to another project"
+    else:
+        monkeypatch.setattr(KubernetesWorkerVolumes, "driver_config", _attached(change))
+        refusal = "native project data volume is not mounted read-only at its declared path"
+    service, attempt_id, refusals = _refused_launch(
+        fixture, "inspect_worker", project_data=declared
+    )
+    assert refusals == [refusal]
+    _settled(service, "revoked")
+    (record,) = json.loads((fixture.output / WORKER_PODS).read_text())
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-admission-project-data.v1",
+            "change": change,
+            "attempt_id": attempt_id,
+            "refusal": refusals[0],
+            "declared": declared,
+            "admission": record["admission"],
+            "objects_after_revocation": fixture.objects(),
+            "provider_requests": 0,
+        },
+    )
+
+
+_KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood"
+_DATA_ORIGIN = "https://heartwood-data.heartwood-platform.svc.cluster.local:8443"
+_CONTROL_ORIGIN = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
+_CATALOG_MARKER = "Synthetic catalog research task."
+_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
+_ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
+
+
+class _Researcher:
+    """The session's researcher, signed in at the project client, and the token exchange.
+
+    It stands in for the hosted gateway's browser sign-in: the researcher signs in with
+    the authorization code flow, and each call exchanges the sign-in for one service's
+    scope and audience, with the project client's secret, as the gateway does.
+    """
+
+    def __init__(self, private: Path) -> None:
+        import httpx
+
+        launch = json.loads(_LAUNCH.read_text())
+        self.client_id = launch["client_id"]
+        self.redirect_uri = launch["redirect_uri"]
+        self.secret = Path("/qualification/gateway/keycloak-client-secret").read_text().strip()
+        self.ca_file = private / "platform-ca.crt"
+        self.ca_file.write_bytes(Path("/qualification/gateway/platform-ca.crt").read_bytes())
+        self.ca_file.chmod(0o600)
+        self.http = httpx.Client(
+            verify=ssl.create_default_context(cafile=str(self.ca_file)), timeout=30
+        )
+        self.exchanged: list[tuple[str, str]] = []
+        self._sign_in()
+
+    def _token(self, form: dict[str, str]) -> dict[str, Any]:
+        response = self.http.post(
+            f"{_KEYCLOAK}/protocol/openid-connect/token",
+            data=form,
+            auth=(self.client_id, self.secret),
+        )
+        response.raise_for_status()
+        answer = response.json()
+        assert isinstance(answer, dict)
+        return answer
+
+    def _sign_in(self) -> None:
+        import html
+        import re
+        import secrets as random
+        from urllib.parse import parse_qs, urlsplit
+
+        state = random.token_urlsafe(16)
+        page = self.http.get(
+            f"{_KEYCLOAK}/protocol/openid-connect/auth",
+            params={
+                "response_type": "code",
+                "client_id": self.client_id,
+                "redirect_uri": self.redirect_uri,
+                "scope": "openid",
+                "state": state,
+            },
+        )
+        form = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page.text)
+        assert form is not None, page.text[:400]
+        password = Path("/qualification/fixture/researcher-password").read_text().strip()
+        answer = self.http.post(
+            html.unescape(form.group(1)),
+            data={"username": "researcher-one", "password": password},
+            follow_redirects=False,
+        )
+        location = answer.headers.get("location", "")
+        assert location.startswith(self.redirect_uri), answer.status_code
+        returned = parse_qs(urlsplit(location).query)
+        assert returned["state"] == [state]
+        self.tokens = self._token(
+            {
+                "grant_type": "authorization_code",
+                "code": returned["code"][0],
+                "redirect_uri": self.redirect_uri,
+            }
+        )
+        self.expires = time.monotonic() + float(self.tokens["expires_in"])
+
+    def __call__(self, scope: str, audience: str) -> str:
+        if time.monotonic() > self.expires - 60:
+            self.tokens = self._token(
+                {"grant_type": "refresh_token", "refresh_token": self.tokens["refresh_token"]}
+            )
+            self.expires = time.monotonic() + float(self.tokens["expires_in"])
+        exchanged = self._token(
+            {
+                "grant_type": _EXCHANGE,
+                "subject_token": self.tokens["access_token"],
+                "subject_token_type": _ACCESS_TOKEN,
+                "requested_token_type": _ACCESS_TOKEN,
+                "scope": scope,
+                "audience": audience,
+            }
+        )
+        self.exchanged.append((scope, audience))
+        token = exchanged["access_token"]
+        assert isinstance(token, str)
+        return token
+
+
+def _until(application: Any, found: Any, what: str, timeout: float = 180) -> Any:  # noqa: ANN401
+    """Reconcile the session until ``found`` returns a value."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        application.wait_for_session_idle(session_id="composition", timeout=1)
+        value = found(application._service("composition"))
+        if value:
+            return value
+        time.sleep(1)
+    raise AssertionError(f"No {what} within {timeout} seconds")
+
+
+def _reviewed_call(
+    application: Any,  # noqa: ANN401
+    tool: str,
+    received: list[str],
+) -> dict[str, Any]:
+    """Approve the worker's call, its outside operation and the release of its result.
+
+    ``received`` holds what reached the model; the result records how many requests the
+    model had made before its result was released.
+    """
+    from heartwood.core_adapter.external_actions import external_action_records
+    from heartwood.core_adapter.external_results import external_result_records
+
+    lifecycle._approve(application, lifecycle._pending(application, tool=tool))
+    lifecycle._settle(application)
+    record = _until(
+        application,
+        lambda service: next(
+            (
+                item
+                for item in external_action_records(service.replay_events()).values()
+                if item.phase == "proposed" and item.proposal.request.tool_name == tool
+            ),
+            None,
+        ),
+        "outside review",
+    )
+    request = json.loads(record.proposal.request.request_json)
+    lifecycle._approve(application, record.proposal.group_id)
+    observed = _until(
+        application,
+        lambda service: (
+            item
+            if (
+                item := external_action_records(service.replay_events())[
+                    record.proposal.operation_id
+                ]
+            ).terminal
+            else None
+        ),
+        "observation",
+    )
+    release = _until(
+        application,
+        lambda service: next(
+            (
+                item
+                for item in external_result_records(service.replay_events()).values()
+                if item.proposal.operation_id == record.proposal.operation_id
+                and item.phase == "proposed"
+            ),
+            None,
+        ),
+        "result release review",
+    )
+    before = len(received)
+    lifecycle._approve(application, release.proposal.group_id)
+    assert observed.observation is not None
+    operation = observed.observation.operation
+    return {
+        "tool": tool,
+        "operation_id": str(record.proposal.operation_id),
+        "request": request,
+        "status": operation.status,
+        "project_context_id": operation.project_context_id,
+        "result": operation.result,
+        "limitations": list(operation.limitations),
+        "service_id": operation.service_id,
+        "requests_before_release": before,
+    }
+
+
+def test_kubernetes_data_catalog_research_task(infrastructure: KubernetesFixture) -> None:
+    """A synthetic research task lists, resolves and reads a dataset through the catalog."""
+    from heartwood.gateway._mcp_policy import McpDestination, TokenExchange
+    from heartwood.gateway._platform_planning import (
+        HostedPlanningClient,
+        PlanningDeployment,
+        PlatformPlanningBinding,
+    )
+    from heartwood.schemas import (
+        McpServerAddRequest,
+        McpServerEnabledRequest,
+        McpServerTestRequest,
+        McpServerToolsRequest,
+        McpToolChoice,
+        PlatformLaunchContext,
+    )
+
+    fixture = infrastructure
+    researcher = _Researcher(fixture.private)
+    launch = json.loads(_LAUNCH.read_text())
+    context = PlatformLaunchContext.model_validate_json(json.dumps(launch["launch_context"]))
+    context_file = fixture.private / "launch-context.json"
+    context_file.write_text(context.model_dump_json())
+    context_file.chmod(0o600)
+    destination = McpDestination(
+        service_id="heartwood-data",
+        origin=_DATA_ORIGIN,
+        tools=("list_datasets", "list_objects", "resolve_object"),
+        max_result_bytes=32768,
+        observation_tool="get_operation",
+        private_address=True,
+        ca_file=researcher.ca_file,
+        token_exchange=TokenExchange(scope="svc-data", audience="heartwood-data"),
+    )
+    planning = PlatformPlanningBinding(
+        context,
+        HostedPlanningClient(
+            PlanningDeployment(
+                url=f"{_CONTROL_ORIGIN}/mcp",
+                ca_file=researcher.ca_file,
+                private_address=True,
+                token_exchange=TokenExchange(scope="svc-control", audience="heartwood-control"),
+                launch_context_file=context_file,
+            ),
+            researcher,
+            project_id=context.project_id,
+        ),
+    )
+    settings = fixture.deployment(WorkerInputManifest(files=()), project_data=_project_data())
+    application = native._application(
+        fixture,
+        deployment=settings,
+        mcp_destinations=(destination,),
+        service_tokens=researcher,
+        platform_planning=planning,
+    )
+    try:
+        application.add_mcp_server(
+            McpServerAddRequest(
+                server_id="catalog", label="Project data catalog", url=f"{_DATA_ORIGIN}/mcp"
+            )
+        )
+        tested = application.test_mcp_server("catalog", McpServerTestRequest())
+        digests = {tool["name"]: tool["sha256"] for tool in tested["tools"]}
+        application.select_mcp_tools(
+            "catalog",
+            McpServerToolsRequest(
+                tools=[
+                    McpToolChoice(name=name, sha256=digests[name])
+                    for name in ("list_datasets", "list_objects", "resolve_object")
+                ]
+            ),
+        )
+        application.set_mcp_server_enabled("catalog", McpServerEnabledRequest(enabled=True))
+        # Enabled tools reach the sessions that start afterwards.
+        service = application._service("composition")
+        names = {
+            name: f"catalog__{name}_{digests[name][:8]}"
+            for name in ("list_datasets", "list_objects", "resolve_object")
+        }
+        finish = ("finish", {"message": "Waiting for the reviewed catalog result."})
+        fixture.provider.scripts[_CATALOG_MARKER] = [
+            (names["list_datasets"], {}),
+            finish,
+            (names["list_objects"], {"dataset_id": "synthetic-cohort"}),
+            finish,
+            (names["resolve_object"], {"object_id": "synthetic-cohort.participants.csv"}),
+            finish,
+            # An object of the researcher's other project, which the catalog denies.
+            (names["resolve_object"], {"object_id": "synthetic-panel.panel.csv"}),
+            finish,
+            ("terminal", {"command": "head -n 3 /data/synthetic-cohort/participants.csv"}),
+            ("finish", {"message": "Synthetic catalog task completed."}),
+        ]
+        native._submit(application, CommandKind.CHAT, {"prompt": _CATALOG_MARKER})
+        attempt_id, worker = lifecycle._worker(application)
+        received = fixture.provider.received
+        listed = _reviewed_call(application, names["list_datasets"], received)
+        objects = _reviewed_call(application, names["list_objects"], received)
+        resolved = _reviewed_call(application, names["resolve_object"], received)
+        refused = _reviewed_call(application, names["resolve_object"], received)
+        lifecycle._approve(application, lifecycle._pending(application, tool="terminal"))
+        lifecycle._settle(application)
+        executions = lifecycle._executions(application)
+        read = fixture.exec(worker, ["head", "-n", "3", "/data/synthetic-cohort/participants.csv"])
+    finally:
+        native._stop(application)
+    _settled(service, "revoked")
+    calls = [listed, objects, resolved, refused]
+    for call in calls:
+        assert call["service_id"] == "heartwood-data"
+        assert call["project_context_id"] == context.project_context_id
+    # The catalog listed the project's dataset, its objects with the worker's data paths,
+    # and resolved one object.
+    assert listed["status"] == "completed"
+    (dataset,) = listed["result"]["datasets"]
+    assert dataset["id"] == "synthetic-cohort"
+    assert "synthetic-panel" not in json.dumps(listed["result"])
+    paths = {item["path"] for item in objects["result"]["objects"]}
+    assert "/data/synthetic-cohort/participants.csv" in paths
+    found = resolved["result"]["object"]
+    assert found["path"] == "/data/synthetic-cohort/participants.csv"
+    # The object of the other project is denied, with no result.
+    assert refused["status"] == "denied"
+    assert refused["result"] is None
+    assert refused["limitations"] == ["The project has no object with this identifier."]
+    # Each answer reached the model only after the review of its release: a value only
+    # that answer holds is absent from every earlier request and present afterwards.
+    markers = [
+        (listed, dataset["description"]),
+        (objects, "/data/synthetic-cohort/measurements.csv"),
+        (resolved, found["self_uri"]),
+        (refused, refused["limitations"][0]),
+    ]
+    for call, marker in markers:
+        before = call["requests_before_release"]
+        assert not any(marker in request for request in received[:before]), marker
+        assert any(marker in request for request in received[before:]), marker
+    assert [item["exit_code"] for item in executions][-1] == 0
+    assert read.exit_code == 0
+    assert str(read.stdout).startswith("participant_id,")
+    assert set(researcher.exchanged) >= {("svc-data", "heartwood-data")}
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-data-catalog.v1",
+            "attempt_id": attempt_id,
+            "calls": calls,
+            "worker_read": str(read.stdout),
+            "exchanged_audiences": sorted({audience for _, audience in researcher.exchanged}),
+        },
+    )

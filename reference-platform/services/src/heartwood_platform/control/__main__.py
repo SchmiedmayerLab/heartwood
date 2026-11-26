@@ -43,6 +43,7 @@ from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.litellm import LiteLLM
 from heartwood_platform.control.openshell import OpenShellProviders, ProviderRoute
 from heartwood_platform.control.prices import PriceSheet
+from heartwood_platform.control.project_data import ProjectData, ProjectDataSettings
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.researchers import Subject, read_key, researcher_id
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
@@ -143,6 +144,8 @@ class Settings(_Settings):
     service_callers: frozenset[str]
     # Service accounts of platform operators, which may rotate project client secrets.
     operator_callers: frozenset[str] = frozenset()
+    # Service accounts of platform services that read researchers' launch contexts.
+    context_callers: frozenset[str] = frozenset()
     # Contains ``{researcher}`` and ``{project}``; the researcher is a researcher identifier.
     redirect_uri_template: str
     # The key of the researcher identifiers in paths, Hub user names and redirect URIs.
@@ -156,6 +159,8 @@ class Settings(_Settings):
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
     inference: InferenceSettings
+    # How project data volumes are filled; without it, sessions get none.
+    project_data: ProjectDataSettings | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -167,6 +172,10 @@ class Settings(_Settings):
             raise ValueError("model names must be unique")
         if self.hosted.model_route.model not in names:
             raise ValueError("the worker's model is not a model of the route")
+        if self.project_data is not None and self.project_data.workspace != WORKER_WORKSPACE:
+            raise ValueError(
+                f"project data volumes are attached to the workspace {WORKER_WORKSPACE}"
+            )
         try:
             headroom = request_headroom(route_models(self), self.synthetic_prices)
         except InferenceSetupError as error:
@@ -293,6 +302,19 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         sandbox=sandbox,
         models=route_models(settings),
     )
+    project_data = (
+        None
+        if settings.project_data is None
+        else ProjectData(
+            kubernetes,
+            settings.project_data,
+            # The data service serves HTTPS with a certificate of the platform CA.
+            httpx.Client(
+                timeout=30,
+                verify=ssl.create_default_context(cafile=namespaces.platform_ca_file),
+            ),
+        )
+    )
     researcher_key = read_key(settings.researcher_id_key_file).encode()
     issuer = settings.keycloak.issuer
     launches = LaunchService(
@@ -306,6 +328,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         ledger=ledger,
         session_reservation=Decimal(settings.inference.session_reservation),
         inference=_inference(settings, settings.sessions.platform_ca_file),
+        project_data=project_data,
     )
     return create_app(
         launches,
@@ -317,6 +340,9 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             kubernetes.review_token, settings.audience, settings.operator_callers
         )
         if settings.operator_callers
+        else None,
+        contexts=ServiceTokens(kubernetes.review_token, settings.audience, settings.context_callers)
+        if settings.context_callers
         else None,
     )
 

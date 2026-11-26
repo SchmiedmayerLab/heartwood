@@ -8,7 +8,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import posixpath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, ClassVar, Literal, Self
 from urllib.parse import urlsplit
 
@@ -96,6 +97,37 @@ class OpenShellWorkerDeployment(_WorkerSettings):
         return self
 
 
+# The worker image's mount point of project data. A volume elsewhere could shadow part of
+# the image, whose digest admission pins.
+PROJECT_DATA_ROOT = PurePosixPath("/data")
+
+
+class KubernetesProjectData(BaseModel):
+    """A platform-declared, read-only volume of the project's data.
+
+    The platform fills the claim before the gateway starts and names it here with the
+    identity the cluster gave it, the project it belongs to and the digest of its content.
+    """
+
+    model_config = _CONFIG
+
+    claim_name: _Name
+    claim_uid: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    # The platform's project, which the claim's `heartwood.platform/project` label names.
+    project: _Name
+    content_sha256: Digest
+    mount_path: PurePosixPath
+
+    @model_validator(mode="after")
+    def _mount_elsewhere(self) -> Self:
+        path = self.mount_path
+        if str(path) != posixpath.normpath(str(path)) or not path.is_relative_to(PROJECT_DATA_ROOT):
+            raise ValueError("Project data must be mounted at /data or a canonical path below it")
+        return self
+
+
 class KubernetesWorkerDeployment(_WorkerSettings):
     """A Kubernetes deployment: sandboxes run as pods in one namespace of one cluster."""
 
@@ -123,6 +155,7 @@ class KubernetesWorkerDeployment(_WorkerSettings):
     # runtime that the workload pod's first init container installs.
     supervisor_image_digest: ImageDigest
     sandbox_image_digest: ImageDigest
+    project_data: KubernetesProjectData | None = None
 
     @model_validator(mode="after")
     def _explicit_kubernetes(self) -> Self:

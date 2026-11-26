@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 Text = Annotated[str, Field(min_length=1, pattern=r"\S")]
 Revision = Annotated[int, Field(ge=1)]
@@ -439,6 +439,18 @@ class PlatformOperationObservation(_PlanningRecord):
     ]
     platform_record_ref: Text
     limitations: tuple[Text, ...] = ()
+    # What a completed read-only operation returned, such as a catalog listing. It reaches a
+    # model only through a reviewed result release, within the destination's size limit.
+    result: dict[str, JsonValue] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def completed_result(self) -> Self:
+        """Only a completed operation reports what it returned."""
+        if self.result is not None and self.status != "completed":
+            raise ValueError("only a completed operation carries a result")
+        return self
 
 
 class PlatformOperationProposal(_PlanningRecord):

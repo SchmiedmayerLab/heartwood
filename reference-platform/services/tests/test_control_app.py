@@ -45,6 +45,7 @@ from test_hosted import HOSTED
 from heartwood.schemas import PlatformLaunchContext
 
 _HUB = {"Authorization": "Bearer hub-token"}
+_DATA = "system:serviceaccount:heartwood-platform:heartwood-data"
 _ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
 _BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
 _NOW = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
@@ -106,6 +107,11 @@ class Platform:
         self.key = SigningKey()
         self.keycloak = FakeKeycloak()
         self.reviews = TokenReviews()
+        self.reviews.tokens["data-token"] = {
+            "authenticated": True,
+            "audiences": [AUDIENCE],
+            "user": {"username": _DATA},
+        }
         self.registry = Registry(directory / "control.sqlite3")
         self.registry.synchronize(
             [
@@ -164,6 +170,7 @@ class Platform:
                 self.ledger,
                 clock=lambda: _NOW,
                 operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
+                contexts=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({_DATA})),
             )
         )
 
@@ -219,6 +226,7 @@ def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
         "kube_system_uid": "uid-0",
         "gateway_service_account": f"hw-gw-{launch['session']}",
         "openshell_endpoint": f"https://openshell.hw-s-{launch['session']}.svc.cluster.local:8080",
+        "project_data": None,
     }
     assert context == PlatformLaunchContext(
         project_context_id=str(launch["session"]),
@@ -368,7 +376,9 @@ def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -
     assert platform.launch(_BOB, "demo")["session"] != first["session"]
 
 
-def test_keycloak_failure_is_reported_as_an_unavailable_component(platform: Platform) -> None:
+def test_keycloak_failure_is_reported_as_an_unavailable_component(
+    platform: Platform, caplog: pytest.LogCaptureFixture
+) -> None:
     platform.keycloak.secret = "rotated"
 
     response = platform.client.put(
@@ -377,6 +387,11 @@ def test_keycloak_failure_is_reported_as_an_unavailable_component(platform: Plat
 
     assert response.status_code == 502
     assert response.json() == {"error": "a platform component is unavailable"}
+    # The log names the request that failed and its status, so the component is known.
+    (logged,) = (message for message in caplog.messages if "component failed" in message)
+    assert "POST" in logged
+    assert "keycloak.example.test/realms/heartwood/protocol/openid-connect/token" in logged
+    assert "answered 401" in logged
 
 
 def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: Path) -> None:
@@ -707,3 +722,46 @@ def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> 
 
     with pytest.raises(NotAMemberError):
         launches.subject_of(shared)
+
+
+def test_the_data_service_reads_the_launch_context_of_a_members_session(
+    platform: Platform,
+) -> None:
+    launch = platform.launch(_BOB, "demo")
+
+    def read(subject: str, project: str, token: str) -> Any:  # noqa: ANN401
+        return platform.client.post(
+            f"/v1/projects/{project}/launch-context",
+            json={"subject": subject},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    found = read(_BOB, "demo", "data-token")
+    assert found.status_code == 200
+    # Only the identity of the launch context, without its billing binding.
+    assert found.json() == {"project_context_id": launch["session"]}
+    assert read(_ALICE, "demo", "data-token").status_code == 404
+    assert read(_BOB, "other", "data-token").status_code == 403
+    # The spawner, operators and researchers do not read launch contexts this way.
+    for token in ("hub-token", "operator-token", "unknown"):
+        assert read(_BOB, "demo", token).status_code == 401
+    # The subject is a valid subject in the body, and the body stays small.
+    for body in ({"subject": " padded"}, {"subject": _BOB, "project": "demo"}, {}):
+        response = platform.client.post(
+            "/v1/projects/demo/launch-context",
+            json=body,
+            headers={"Authorization": "Bearer data-token"},
+        )
+        assert response.status_code == 422
+    large = platform.client.post(
+        "/v1/projects/demo/launch-context",
+        content=b"x" * 5000,
+        headers={"Authorization": "Bearer data-token"},
+    )
+    assert large.status_code == 413
+    assert (
+        platform.client.get(
+            "/v1/projects/demo/launch-context", headers={"Authorization": "Bearer data-token"}
+        ).status_code
+        == 405
+    )

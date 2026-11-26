@@ -119,6 +119,11 @@ EXPECTED_CASES = {
             "test_kubernetes_worker_container_is_never_restarted",
             "test_kubernetes_new_worker_image_and_rotated_credential_after_restart",
             "test_kubernetes_migrated_project_serves_through_the_operator_manifest",
+            "test_kubernetes_project_data_is_read_only_at_its_declared_path",
+            "test_kubernetes_admission_refuses_project_data_out_of_its_declaration[writable-volume]",
+            "test_kubernetes_admission_refuses_project_data_out_of_its_declaration[another-project]",
+            "test_kubernetes_admission_refuses_project_data_out_of_its_declaration[undeclared-path]",
+            "test_kubernetes_data_catalog_research_task",
         )
     ),
 }

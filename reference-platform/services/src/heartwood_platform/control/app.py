@@ -23,6 +23,7 @@ from typing import Annotated
 import httpx
 from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -41,7 +42,7 @@ from heartwood_platform.control.openshell import ProviderError
 from heartwood_platform.control.planning import MCP_PATH, UNAVAILABLE, create_planning_app
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import NotAMemberError
-from heartwood_platform.control.researchers import RESEARCHER_ID_PATTERN
+from heartwood_platform.control.researchers import RESEARCHER_ID_PATTERN, Subject
 from heartwood_platform.control.sessions import SessionError
 
 # Researcher identifiers and projects become part of redirect URIs and object names.
@@ -52,6 +53,16 @@ ProjectId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9]([a-z0-9-]{0,30}
 _LOGGER = logging.getLogger(__name__)
 _RESEARCHER = TypeAdapter(ResearcherId)
 _PROJECT_ID = TypeAdapter(ProjectId)
+# A launch context request names one subject of at most 255 characters.
+_CONTEXT_REQUEST_BYTES = 4096
+
+
+class ContextRequest(BaseModel):
+    """The researcher whose launch context a platform service reads."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    subject: Subject
 
 
 class LaunchRequest(BaseModel):
@@ -82,11 +93,14 @@ def create_app(
     ledger: Ledger,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     operators: ServiceTokens | None = None,
+    contexts: ServiceTokens | None = None,
 ) -> Starlette:
     """Build the application around the launch service, the prices and the verifiers.
 
     ``operators`` accepts the platform operators' service accounts, which may rotate
-    project client secrets; without it nobody may.
+    project client secrets; without it nobody may. ``contexts`` accepts the platform
+    services that read the launch context of a researcher and project, such as the data
+    service for its operation observations.
     """
 
     def handled(endpoint: Callable[[Request], Response]) -> Callable[[Request], Response]:
@@ -110,9 +124,19 @@ def create_app(
             except (httpx.HTTPError, InferenceGatewayError, ProviderError) as error:
                 # Keycloak, the Kubernetes API, LiteLLM or an OpenShell gateway did not
                 # answer as expected.
-                _LOGGER.warning("a platform component failed: %s", type(error).__name__)
-                if not isinstance(error, httpx.HTTPError):
-                    _LOGGER.warning("%s", error)
+                if isinstance(error, httpx.HTTPStatusError):
+                    # The path names the component and the object; the query is left out.
+                    _LOGGER.warning(
+                        "a platform component failed: %s %s%s answered %d",
+                        error.request.method,
+                        error.request.url.host,
+                        error.request.url.path,
+                        error.response.status_code,
+                    )
+                else:
+                    _LOGGER.warning("a platform component failed: %s", type(error).__name__)
+                    if not isinstance(error, httpx.HTTPError):
+                        _LOGGER.warning("%s", error)
                 return _error(502, UNAVAILABLE)
             except InferenceSetupError as error:
                 return _error(409, str(error))
@@ -187,6 +211,25 @@ def create_app(
         context = launches.context(researcher.subject, researcher.project)
         return JSONResponse(context.model_dump(mode="json"))
 
+    def service_context(request: Request, body: bytes) -> Response:
+        if contexts is None:
+            raise AuthenticationError("no service may read launch contexts")
+        contexts.verify(_bearer(request))
+        project = _PROJECT_ID.validate_python(request.path_params["project"])
+        read = ContextRequest.model_validate_json(body)
+        context = launches.context(read.subject, project)
+        # A service needs the identity of the session's launch context, and no billing data.
+        return JSONResponse({"project_context_id": context.project_context_id})
+
+    async def read_service_context(request: Request) -> Response:
+        # The subject travels in the body, so that no subject appears in a URL.
+        body = b""
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > _CONTEXT_REQUEST_BYTES:
+                return _error(413, "request too large")
+        return await run_in_threadpool(handled(lambda _: service_context(request, body)), request)
+
     planning = create_planning_app(launches, researchers, prices, ledger, clock)
     launch_path = "/v1/researchers/{researcher}/projects/{project}/launch"
     return Starlette(
@@ -202,6 +245,11 @@ def create_app(
                 methods=["POST"],
             ),
             Route("/v1/launch-context", handled(launch_context)),
+            Route(
+                "/v1/projects/{project}/launch-context",
+                read_service_context,
+                methods=["POST"],
+            ),
             Route(MCP_PATH, planning),
         ],
         lifespan=planning.lifespan,
