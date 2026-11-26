@@ -14,11 +14,14 @@ have no dry run and act on probe pods.
 from __future__ import annotations
 
 import copy
+import json
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from kube import CONTROL, Cluster
+from test_chart_data import _render_mounted
 
 _SESSION = "policytest"
 _NAMESPACE = f"hw-s-{_SESSION}"
@@ -1171,3 +1174,120 @@ def test_staging_names_are_left_to_the_gateway_accounts(
         except AssertionError as error:
             failures.append(f"{name}: {error}")
     assert failures == []
+
+
+_READER_CA = "heartwood-dataset-reader-ca"
+_MOUNTS = "mount-s3"
+_TRUST_BUNDLE = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+
+
+@pytest.fixture(scope="module")
+def reader_ca_policy(cluster: Cluster, tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """The chart's CA policy for Mountpoint pods and the namespace mount-s3.
+
+    A release without a mounted dataset has neither, so the test applies the policy that
+    the chart renders for one and removes what it created afterwards.
+    """
+    created = []
+    if cluster.kubectl("get", f"namespace/{_MOUNTS}").returncode != 0:
+        cluster.apply(_namespace(_MOUNTS, {}))
+        created.append(f"namespace/{_MOUNTS}")
+    if cluster.kubectl("get", f"mutatingadmissionpolicy/{_READER_CA}").returncode != 0:
+        policy = [
+            item
+            for item in _render_mounted(tmp_path_factory.mktemp("mounted"))
+            if item["kind"].startswith("MutatingAdmissionPolicy")
+            and item["metadata"]["name"] == _READER_CA
+        ]
+        assert len(policy) == 2
+        cluster.apply(*policy)
+        created += [f"{item['kind'].lower()}/{_READER_CA}" for item in policy]
+    yield
+    for name in reversed(created):
+        cluster.kubectl("delete", "--ignore-not-found", "--wait=false", name)
+
+
+def _reader_pod(image: str, labels: dict[str, str], containers: int = 1) -> dict[str, Any]:
+    container = {
+        "name": "mountpoint",
+        "image": image,
+        "args": ["pause"],
+        "volumeMounts": [{"name": "cache", "mountPath": "/cache"}],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"]},
+        },
+    }
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": "hw-reader-case", "namespace": _MOUNTS, "labels": labels},
+        "spec": {
+            "automountServiceAccountToken": False,
+            # The driver creates mount-s3 with the restricted Pod Security Standard.
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 10002,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {**container, "name": f"mountpoint-{index}"} for index in range(containers)
+            ],
+            "volumes": [{"name": "cache", "emptyDir": {}}],
+        },
+    }
+
+
+def _created(cluster: Cluster, pod: dict[str, Any]) -> dict[str, Any]:
+    """Return the pod as the API server admits it, without creating it."""
+    arguments = ["create", "--dry-run=server", "--output=json", "--filename", "-"]
+    result = cluster.kubectl(*arguments, document=pod)
+    assert result.returncode == 0, result.stderr
+    spec: dict[str, Any] = json.loads(result.stdout)["spec"]
+    return spec
+
+
+def _ca_mounts(spec: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    volumes = [item for item in spec.get("volumes", []) if item["name"] == "heartwood-platform-ca"]
+    mounts = [
+        mount
+        for container in spec["containers"]
+        for mount in container.get("volumeMounts", [])
+        if mount["name"] == "heartwood-platform-ca"
+    ]
+    return volumes, mounts
+
+
+@pytest.mark.usefixtures("reader_ca_policy")
+def test_dataset_reader_pods_receive_the_platform_ca_as_their_trust_bundle(
+    cluster: Cluster, probe_image: str
+) -> None:
+    reader = _reader_pod(probe_image, {"heartwood.platform/role": "dataset-reader"})
+    # The binding takes effect shortly after it is created, and the namespace receives its
+    # default ServiceAccount shortly after it is created.
+    deadline = time.monotonic() + 60
+    while True:
+        arguments = ["create", "--dry-run=server", "--output=json", "--filename", "-"]
+        result = cluster.kubectl(*arguments, document=reader)
+        if result.returncode == 0 and _ca_mounts(json.loads(result.stdout)["spec"])[0]:
+            break
+        assert time.monotonic() < deadline, result.stderr or result.stdout
+        time.sleep(2)
+    spec = _created(cluster, reader)
+    volumes, mounts = _ca_mounts(spec)
+    (volume,) = volumes
+    assert volume["configMap"]["name"] == "platform-ca"
+    (mount,) = mounts
+    assert mount["readOnly"] is True
+    assert mount["subPath"] == "ca.crt"
+    assert mount["mountPath"] == _TRUST_BUNDLE
+    # The pod's own volume and mount stay in place.
+    assert spec["volumes"][0]["name"] == "cache"
+    assert spec["containers"][0]["volumeMounts"][0]["name"] == "cache"
+    # Pods without the label and pods with more than one container are left unchanged.
+    for pod in (
+        _reader_pod(probe_image, {}),
+        _reader_pod(probe_image, {"heartwood.platform/role": "other"}),
+        _reader_pod(probe_image, {"heartwood.platform/role": "dataset-reader"}, containers=2),
+    ):
+        assert _ca_mounts(_created(cluster, pod)) == ([], [])

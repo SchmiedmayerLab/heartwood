@@ -342,9 +342,6 @@ def test_mounted_dataset_grant_reaches_control_admission_and_store(tmp_path: Pat
     assert "s3:PutObject" in seal["Action"]
 
 
-_TRUST_BUNDLE = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
-
-
 def test_mount_readers_trust_the_platform_ca_alone(tmp_path: Path) -> None:
     objects = _render_mounted(tmp_path)
     authority = base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"])
@@ -390,15 +387,14 @@ def test_only_dataset_reader_pods_receive_the_platform_ca_at_creation(tmp_path: 
     assert constraints["namespaceSelector"] == store["namespaceSelector"]
     assert constraints["objectSelector"] == store["podSelector"]
     assert store["podSelector"] == {"matchLabels": {"heartwood.platform/role": "dataset-reader"}}
-    variables = {item["name"]: item["expression"] for item in spec["variables"]}
-    assert "configMap: Object.spec.volumes.configMap{name: 'platform-ca'}" in variables["volume"]
-    for field in ("readOnly: true", "subPath: 'ca.crt'", f"mountPath: '{_TRUST_BUNDLE}'"):
-        assert field in variables["mount"]
+    assert spec["matchConditions"] == [
+        {"name": "one-container", "expression": "object.spec.containers.size() == 1"}
+    ]
+    assert spec["reinvocationPolicy"] == "Never"
+    # Variables cannot construct the Object types that the patch adds.
+    assert "variables" not in spec
     (mutation,) = spec["mutations"]
     assert mutation["patchType"] == "JSONPatch"
-    expression = mutation["jsonPatch"]["expression"]
-    assert "value: variables.volume" in expression
-    assert "value: variables.mount" in expression
     binding = _named(objects, "MutatingAdmissionPolicyBinding", "heartwood-dataset-reader-ca")
     assert binding["spec"] == {"policyName": "heartwood-dataset-reader-ca"}
 

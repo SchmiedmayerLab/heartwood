@@ -210,7 +210,8 @@ The chart admits these Mountpoint pods from the platform-managed `mount-s3` name
 The store presents a certificate of the platform CA, and `mount-s3` starts with a cleared environment and reads only its image's trust bundle `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`, so CA environment variables do not reach it.
 The chart therefore writes the platform CA to the ConfigMap `platform-ca` in `mount-s3`, and its MutatingAdmissionPolicy `heartwood-dataset-reader-ca` mounts that certificate read-only over the trust bundle of each labeled single-container Mountpoint pod at creation.
 These pods trust only the platform CA, so a driver installation that labels its pods this way serves only the platform's dataset volumes.
-The chart needs the `admissionregistration.k8s.io/v1` MutatingAdmissionPolicy API and the `mount-s3` namespace when a project has a mounted dataset, and the installation fails without them.
+A Mountpoint pod created before a CA rotation keeps the previous certificate until the driver recreates it.
+When a project has a mounted dataset, the chart needs Kubernetes 1.36 or later, which serves the `admissionregistration.k8s.io/v1` MutatingAdmissionPolicy API, and an existing `mount-s3` namespace; the installation fails without either.
 
 The launch API selects the project's configured version for members. An optional `dataset=<id>@<version>` query parameter requires that exact selection. A session receives the version at `/data` through a read-only claim. Reapplying a changed configuration restarts control, which removes sessions whose membership or version grant expired. The session namespace owns the static volume. Namespace deletion retires the claim and volume while the underlying objects remain in the project bucket. Projects without a mount grant use the catalog copy path. Batch tasks stage their declared inputs.
 

@@ -146,26 +146,23 @@ spec:
   matchConditions:
     - name: one-container
       expression: object.spec.containers.size() == 1
-  variables:
-    - name: volume
-      expression: >-
-        Object.spec.volumes{name: 'heartwood-platform-ca',
-        configMap: Object.spec.volumes.configMap{name: 'platform-ca'}}
-    - name: mount
-      expression: >-
-        Object.spec.containers.volumeMounts{name: 'heartwood-platform-ca', readOnly: true,
-        subPath: 'ca.crt', mountPath: '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'}
   mutations:
-    # JSON patches add each element; an apply configuration cannot merge into the lists.
+    # JSON patches address the single container by its index, so the policy does not depend
+    # on the name the driver gives it. The Object constructors are declared only for the
+    # mutation expression, so the volume and the mount are written out in each branch.
     - patchType: JSONPatch
       jsonPatch:
         expression: >-
           (has(object.spec.volumes)
-          ? [JSONPatch{op: 'add', path: '/spec/volumes/-', value: variables.volume}]
-          : [JSONPatch{op: 'add', path: '/spec/volumes', value: [variables.volume]}])
+          ? [JSONPatch{op: 'add', path: '/spec/volumes/-',
+          value: Object.spec.volumes{name: 'heartwood-platform-ca', configMap: Object.spec.volumes.configMap{name: 'platform-ca'}}}]
+          : [JSONPatch{op: 'add', path: '/spec/volumes',
+          value: [Object.spec.volumes{name: 'heartwood-platform-ca', configMap: Object.spec.volumes.configMap{name: 'platform-ca'}}]}])
           + (has(object.spec.containers[0].volumeMounts)
-          ? [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts/-', value: variables.mount}]
-          : [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts', value: [variables.mount]}])
+          ? [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts/-',
+          value: Object.spec.containers.volumeMounts{name: 'heartwood-platform-ca', readOnly: true, subPath: 'ca.crt', mountPath: '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'}}]
+          : [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts',
+          value: [Object.spec.containers.volumeMounts{name: 'heartwood-platform-ca', readOnly: true, subPath: 'ca.crt', mountPath: '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'}]}])
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicyBinding
