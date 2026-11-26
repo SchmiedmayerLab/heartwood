@@ -640,7 +640,13 @@ def test_gateway_tests_require_positive_results_and_preserve_build_limits(
     assert command[command.index("--config") + 1] == (
         "profile.release.package.openshell-server.opt-level=0"
     )
-    assert command[-3:] == ["delete", "--", "--test-threads=1"]
+    assert command[-5:] == [
+        "delete",
+        "--",
+        "--test-threads=1",
+        "mutation_replay",
+        "image_update_tests",
+    ]
     assert json.loads((tmp_path / "gateway-test-command.json").read_text()) == command
 
 

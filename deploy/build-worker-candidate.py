@@ -323,12 +323,13 @@ def _gateway_version(checkout: Path, version: str) -> None:
 
 
 def _gateway_tests(container: list[str], rust: str, output: Path) -> list[dict[str, Any]]:
-    """Run gateway deletion and Kubernetes driver tests before packaging, retaining their logs."""
+    """Run the gateway tests of the carried patches before packaging, retaining their logs."""
     container = list(container)
     container[container.index("--memory") + 1] = "12g"
     container[container.index("--memory-swap") + 1] = "12g"
     suites = {
-        # The deletion tests of `openshell-server`, which include those of its two patches.
+        # The deletion, request admission and image update tests of `openshell-server`,
+        # which include those of its patches.
         "gateway": [
             "openshell-server",
             "--lib",
@@ -342,6 +343,8 @@ def _gateway_tests(container: list[str], rust: str, output: Path) -> list[dict[s
             "delete",
             "--",
             "--test-threads=1",
+            "mutation_replay",
+            "image_update_tests",
         ],
         # The Kubernetes driver crate's library tests, which include those of its patch.
         "kubernetes-driver": ["openshell-driver-kubernetes", "--lib", "--jobs", "1"],
