@@ -220,6 +220,16 @@ class SignIn:
     state: Literal["live", "ended", "refused", "provider-unavailable"] = "live"
     issuer: FakeTokenIssuer | None = None
     attempts: int = 0
+    revision: int = 0
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # Becoming live again is a new sign-in, as the gateway's identity access counts it.
+        if name == "state" and value == "live" and getattr(self, "state", "live") != "live":
+            object.__setattr__(self, "revision", self.revision + 1)
+        object.__setattr__(self, name, value)
+
+    def sign_in_revision(self) -> int:
+        return self.revision
 
     def __call__(self, scope: str, audience: str) -> str | None:
         del scope
@@ -295,6 +305,7 @@ def job_platform(
             mcp_destinations=(destination,),
             platform_planning=binding,
             service_tokens=sign_in,
+            sign_in_revision=None if sign_in is None else sign_in.sign_in_revision,
             env={},
         )
         profile = ModelProfile(

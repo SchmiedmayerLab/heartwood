@@ -498,6 +498,7 @@ class SessionGateway:
         external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
         mcp_destinations: Sequence[McpDestination] | None = None,
         service_tokens: ServiceTokens | None = None,
+        sign_in_revision: Callable[[], int] | None = None,
         platform_planning: PlatformPlanningBinding | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
@@ -660,6 +661,7 @@ class SessionGateway:
             credential_store=self.credential_store,
             destinations=() if mcp_destinations is None else mcp_destinations,
             service_tokens=service_tokens,
+            sign_in_revision=sign_in_revision,
             # A command-line gateway manages the servers of a deployment whose sessions run
             # in workers; it binds tools to sessions only with a worker of its own.
             worker_available=worker_plan_factory is not None

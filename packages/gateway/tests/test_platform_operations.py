@@ -364,6 +364,43 @@ def test_an_identity_refusal_is_asked_again_once_per_interval_not_on_every_read(
         assert operation.proposal is not None
 
 
+def test_a_new_sign_in_ends_the_held_identity_refusal_at_the_next_read(
+    tmp_path: Path,
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        service.adapter.clock = lambda: 1000.0
+        sign_in.state = "ended"
+        assert service.attempt("create_task", CPU) is None
+        service.advance()
+        assert external_action_records(service.session.replay_events()) == {}
+
+        sign_in.state = "live"
+        attempts = sign_in.attempts
+        service.advance()
+
+        (review,) = external_action_records(service.session.replay_events()).values()
+        operation = review.proposal.request.operation
+        assert operation is not None
+        assert operation.proposal is not None
+        assert sign_in.attempts == attempts + 1
+
+
+def test_an_unavailable_provider_keeps_the_hold_while_the_sign_in_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        service.adapter.clock = lambda: 1000.0
+        sign_in.state = "provider-unavailable"
+        assert service.attempt("create_task", CPU) is None
+        attempts = sign_in.attempts
+        sign_in.state = "refused"
+        service.advance()
+        assert sign_in.attempts == attempts
+        assert external_action_records(service.session.replay_events()) == {}
+
+
 def test_a_connection_after_the_next_sign_in_ends_the_held_identity_refusal(
     tmp_path: Path,
 ) -> None:

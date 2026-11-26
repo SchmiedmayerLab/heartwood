@@ -609,8 +609,8 @@ Sign in at the gateway again and approve the operation again.
 A review is valid for five minutes.
 While the service refuses with this code, an expired review of a submission is not replaced and no review opens for a new submission to the service.
 The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call, and the agent continues without the call's result.
-To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service; a connection to the service, such as an approved operation, ends that wait.
-After the next sign-in, the first session read once that interval has passed, or after such a connection, opens a review with the platform's description, and the new review needs its own approval.
+To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service while the sign-in is unchanged; a new sign-in or a connection to the service, such as an approved operation, ends that wait.
+The first session read after the next sign-in opens a review with the platform's description, and the new review needs its own approval.
 Operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
 
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
@@ -622,7 +622,7 @@ A research service that takes an exchanged token reports this code when the gate
 The review stays open; approve it again once the provider is reachable.
 While the provider stays unavailable, an expired review of a submission is not replaced and no review opens for a new submission to the service.
 The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call, and the agent continues without the call's result.
-To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service.
+To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service while the sign-in is unchanged.
 The first session read after the provider is reachable again and that interval has passed opens a review with the platform's description, and the new review needs its own approval.
 
 Operators check that `provider_url` is reachable from the gateway, that `ca_file` holds the authority of the provider's certificate, and that the discovery document's `issuer` equals the configured `issuer`.

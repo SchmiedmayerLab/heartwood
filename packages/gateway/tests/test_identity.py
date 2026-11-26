@@ -1939,9 +1939,13 @@ def test_a_bearer_token_is_the_subject_token_only_without_a_browser_sign_in(
     access = _access(tmp_path, provider, clock=clock)
     short = provider.token(exp=int(time.time()) + 120)
     bearer = provider.token()
+    revision = access.sign_in_revision()
     assert access.principal(_bearer(bearer)) == _ACTOR
+    assert access.sign_in_revision() == revision + 1
     # A token that expires earlier does not replace the one already held.
     assert access.principal(_bearer(short)) == _ACTOR
+    assert access.principal(_bearer(bearer)) == _ACTOR
+    assert access.sign_in_revision() == revision + 1
 
     assert _researcher_token(access) == bearer
     from_bearer = access.service_token("svc-data", "heartwood-data")
@@ -1949,6 +1953,7 @@ def test_a_bearer_token_is_the_subject_token_only_without_a_browser_sign_in(
 
     # A browser sign-in takes over, and its own service token replaces the earlier one.
     _sign_in(access, provider)
+    assert access.sign_in_revision() == revision + 2
     signed_in = _researcher_token(access)
     assert signed_in != bearer
     assert access.service_token("svc-data", "heartwood-data") != from_bearer

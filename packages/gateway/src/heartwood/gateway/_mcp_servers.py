@@ -145,6 +145,7 @@ class McpServerManager:
         worker_available: bool,
         project_id: str | None = None,
         service_tokens: ServiceTokens | None = None,
+        sign_in_revision: Callable[[], int] | None = None,
     ) -> None:
         self._config_store = config_store
         # The project the gateway names to services: the platform project of the launch
@@ -152,6 +153,7 @@ class McpServerManager:
         self.project_id = project_id
         self._credentials = credential_store
         self._service_tokens = service_tokens
+        self._sign_in_revision = sign_in_revision
         self._destinations = tuple(destinations)
         self._worker_available = worker_available
         # Definitions from the latest test in this process, by server and tool name.
@@ -196,6 +198,10 @@ class McpServerManager:
             return replace(current, mcp_servers=tuple(servers))
 
         self._config_store.update(apply)
+
+    def sign_in_revision(self) -> int:
+        """Return a number that changes with each new researcher sign-in, if identity is used."""
+        return 0 if self._sign_in_revision is None else self._sign_in_revision()
 
     def token(self, destination: McpDestination) -> str | None:
         """Resolve a destination's bearer token in the gateway; never in project files.
@@ -703,8 +709,9 @@ class McpOutsideAdapter:
         self._planning = planning
         self.clock = clock
         self.last_reconciled = 0.0
-        # The last identity refusal per service while describing a submission, and when.
-        self._identity_refusals: dict[str, tuple[float, McpServerError]] = {}
+        # The last identity refusal per service while describing a submission, when it
+        # happened, and the sign-in it happened under.
+        self._identity_refusals: dict[str, tuple[float, int, McpServerError]] = {}
         # The last session event whose platform operation records were linked to planning.
         self.linked_sequence = 0
 
@@ -810,10 +817,16 @@ class McpOutsideAdapter:
             return None
         service = bound.destination.service_id
         held = self._identity_refusals.get(service)
-        # Every read proposes pending calls; within an interval after an identity refusal
-        # the refusal is repeated without asking the identity provider again.
-        if held is not None and self.clock() - held[0] < _RECONCILE_INTERVAL_SECONDS:
-            raise _outside_error(held[1])
+        revision = self._manager.sign_in_revision()
+        # Every read proposes pending calls; within an interval after an identity refusal,
+        # and while the sign-in is unchanged, the refusal is repeated without asking the
+        # identity provider again. A new sign-in ends the wait at once.
+        if (
+            held is not None
+            and held[1] == revision
+            and self.clock() - held[0] < _RECONCILE_INTERVAL_SECONDS
+        ):
+            raise _outside_error(held[2])
         try:
             with self._connect(bound) as client:
                 return request_proposal(
@@ -823,7 +836,7 @@ class McpOutsideAdapter:
             # An identity refusal opens no review, so no review lacks a proposal that the
             # next sign-in could supply; a later read proposes the call again.
             if error.code.startswith("HW-INGRESS-"):
-                self._identity_refusals[service] = (self.clock(), error)
+                self._identity_refusals[service] = (self.clock(), revision, error)
                 raise _outside_error(error) from None
             return None
 

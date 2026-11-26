@@ -259,6 +259,8 @@ class IdentityAccess:
         self._logins: OrderedDict[str, _Login] = OrderedDict()
         self._refresh_lock = Lock()
         self._bearer: _Bearer | None = None
+        # Counts new sign-ins and newly accepted bearer tokens.
+        self._sign_in_revision = 0
         self._exchange_lock = Lock()
         self._exchanged: dict[tuple[str, str], _Exchanged] = {}
         self._provider_lock = RLock()
@@ -325,6 +327,8 @@ class IdentityAccess:
         expires_at = self._clock() + float(claims["exp"]) - time.time()
         with self._lock:
             if self._bearer is None or self._bearer.expires_at < expires_at:
+                if self._bearer is None or self._bearer.access_token != token.strip():
+                    self._sign_in_revision += 1
                 self._bearer = _Bearer(token.strip(), expires_at)
         return self._actor
 
@@ -385,6 +389,11 @@ class IdentityAccess:
         if path == "/" and _cookie_value(headers, LOGIN_COOKIE) != "1":
             return AccessResponse(302, location=f"{self._base_url}{LOGIN_PATH}")
         return None
+
+    def sign_in_revision(self) -> int:
+        """Return a number that changes with each new sign-in or newly accepted token."""
+        with self._lock:
+            return self._sign_in_revision
 
     def service_token(self, scope: str, audience: str) -> str | None:
         """Return a token for one platform service, exchanged for the researcher's token.
@@ -580,6 +589,7 @@ class IdentityAccess:
             while len(self._logins) >= _MAXIMUM_LOGINS:
                 self._logins.popitem(last=False)
             self._logins[capability] = login
+            self._sign_in_revision += 1
         # The marker cookie authorizes nothing. It only lets the index document through
         # once, so the page can exchange the launch token; every API request needs the
         # capability. The sign-in cookie has served its purpose and is removed.
