@@ -279,6 +279,50 @@ def test_a_refused_token_exchange_refuses_the_approval_with_its_identity_code(
         assert service.jobs.task_count == 0
 
 
+def test_an_expired_review_is_replaced_only_once_the_platform_can_describe_the_call(
+    tmp_path: Path,
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        first = service.call("create_task", CPU)
+        sign_in.state = "ended"
+        service.decide(first)
+        refusal = next(
+            event
+            for event in reversed(service.session.replay_events())
+            if event.kind == EventKind.ERROR_RECORDED
+        )
+        assert refusal.payload["code"] == "HW-INGRESS-004"
+        assert service.record(first).phase == "proposed"
+
+        # The review expires and the session is read while the researcher is signed out.
+        later = datetime.now(UTC) + timedelta(minutes=6)
+        service.session.clock = lambda: later.isoformat()
+        service.advance()
+        assert [
+            item.phase for item in external_action_records(service.session.replay_events()).values()
+        ] == ["expired"]
+
+        sign_in.state = "live"
+        service.advance()
+        (replacement,) = (
+            item
+            for item in external_action_records(service.session.replay_events()).values()
+            if item.phase == "proposed"
+        )
+        review = replacement.proposal.request.operation
+        assert review is not None
+        assert review.proposal is not None
+        service.decide(replacement)
+        projection = project_session(
+            service.session.replay_events(), session_id=service.session.store.session_id
+        )
+
+        assert _observed(service.record(replacement)) == "queued"
+        assert service.jobs.task_count == 1
+    assert "HW-OPS-001" not in "\n".join(format_projection_lines(projection))
+
+
 def test_a_missing_platform_proposal_cannot_be_approved(tmp_path: Path) -> None:
     with job_platform(tmp_path) as service:
         service.jobs.service_id = "another-service"

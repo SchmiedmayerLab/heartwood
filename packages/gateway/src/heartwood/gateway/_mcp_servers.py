@@ -809,7 +809,11 @@ class McpOutsideAdapter:
                 return request_proposal(
                     client, bound.destination, bound.tool.name, project, arguments
                 )
-        except McpServerError:
+        except McpServerError as error:
+            # An identity refusal opens no review, so no review lacks a proposal that the
+            # next sign-in could supply; a later read proposes the call again.
+            if error.code.startswith("HW-INGRESS-"):
+                raise _outside_error(error) from None
             return None
 
     def _estimate(self, proposal: PlatformOperationProposal | None) -> ExternalOperationEstimate:
@@ -1041,9 +1045,14 @@ def _propose_calls(service: SessionService, adapter: McpOutsideAdapter) -> None:
         ):
             continue
         existing = reviewed.get(event.event_id)
-        if (existing is not None and existing.phase != "proposed") or adapter.service_id(
-            str(event.payload.get("tool_name"))
-        ) in blocked:
+        # A review that expired before the platform could describe the call again has no
+        # replacement yet; an expired authorization is never proposed again.
+        replaceable = (
+            existing is None
+            or existing.phase == "proposed"
+            or (existing.phase == "expired" and existing.decision is None)
+        )
+        if not replaceable or adapter.service_id(str(event.payload.get("tool_name"))) in blocked:
             continue
         # An expired review is closed and replaced; an open one is left alone.
         with suppress(ValueError):

@@ -605,7 +605,9 @@ Operators compare the manifest's [`[identity]` table](configuration.md#identity)
 A research service that takes an exchanged token reports this code while no sign-in is live, and when the provider refuses a token for that service.
 Test and add such a service in the signed-in browser; `heartwood services` has no sign-in and reports this code for every such service.
 When this code refuses an approval of one of the service's operations, the terminal, browser and notebook show it and the review stays open.
-Sign in at the gateway again and approve the operation again; a review is valid for five minutes, and after it expires the gateway proposes the same call again for a new approval.
+Sign in at the gateway again and approve the operation again.
+A review is valid for five minutes.
+While the service refuses with this code, an expired review of a submission is not replaced and no review opens for a new submission to the service; after the next sign-in, the gateway proposes the submission again with the platform's description, and the new review needs its own approval.
 Operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
 
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
@@ -614,7 +616,8 @@ The gateway could not reach the identity provider, or the provider answered with
 Status `503` means the request to the provider failed or timed out; status `502` means the provider answered with an error or an unusable document.
 Retry when the provider is reachable.
 A research service that takes an exchanged token reports this code when the gateway cannot obtain its token, and an approval of one of its operations is refused with it in the terminal, browser and notebook.
-The review stays open; approve it again once the provider is reachable, or approve the new review the gateway proposes after the first one expires.
+The review stays open; approve it again once the provider is reachable.
+While the provider stays unavailable, an expired review of a submission is not replaced and no review opens for a new submission to the service; once the provider is reachable, the gateway proposes the submission again with the platform's description, and the new review needs its own approval.
 
 Operators check that `provider_url` is reachable from the gateway, that `ca_file` holds the authority of the provider's certificate, and that the discovery document's `issuer` equals the configured `issuer`.
 The discovery document's authorization, token and key endpoints must lie on the origin of `issuer` or of `provider_url`.
