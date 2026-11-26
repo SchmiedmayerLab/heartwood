@@ -171,9 +171,19 @@ def create_app(
             except (httpx.HTTPError, InferenceGatewayError, ProviderError) as error:
                 # Keycloak, the Kubernetes API, LiteLLM or an OpenShell gateway did not
                 # answer as expected.
-                _LOGGER.warning("a platform component failed: %s", type(error).__name__)
-                if not isinstance(error, httpx.HTTPError):
-                    _LOGGER.warning("%s", error)
+                if isinstance(error, httpx.HTTPStatusError):
+                    # The path names the component and the object; the query is left out.
+                    _LOGGER.warning(
+                        "a platform component failed: %s %s%s answered %d",
+                        error.request.method,
+                        error.request.url.host,
+                        error.request.url.path,
+                        error.response.status_code,
+                    )
+                else:
+                    _LOGGER.warning("a platform component failed: %s", type(error).__name__)
+                    if not isinstance(error, httpx.HTTPError):
+                        _LOGGER.warning("%s", error)
                 return _error(502, UNAVAILABLE)
             except InferenceSetupError as error:
                 return _error(409, str(error))

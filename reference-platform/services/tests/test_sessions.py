@@ -302,6 +302,44 @@ def test_foreign_namespace_of_the_same_name_is_not_used(platform: Platform) -> N
     assert platform.api.kind("StatefulSet", "hw-s-abc123") == {}
 
 
+def test_launch_waits_until_the_namespace_binding_is_in_effect(platform: Platform) -> None:
+    platform.api.refused[("GET", "/api/v1/namespaces/hw-s-abc123")] = 3
+
+    assert platform.provision("abc123").namespace == "hw-s-abc123"
+
+
+def test_launch_fails_when_the_namespace_stays_refused(
+    platform: Platform, caplog: pytest.LogCaptureFixture
+) -> None:
+    platform.api.refused[("GET", "/api/v1/namespaces/hw-s-abc123")] = 1000
+
+    with pytest.raises(SessionError, match="refused requests in the session namespace for 30 s"):
+        platform.provision("abc123")
+
+    assert platform.now >= 30
+    assert platform.api.kind("StatefulSet", "hw-s-abc123") == {}
+    # The API server's own refusal is reported, which may be an admission denial.
+    assert "GET /api/v1/namespaces/hw-s-abc123 answered 403: refused here" in caplog.messages
+
+
+def test_a_refused_role_binding_is_not_retried(platform: Platform) -> None:
+    rolebindings = f"{_RBAC}/namespaces/hw-s-abc123/rolebindings"
+    platform.api.refused[("POST", f"{rolebindings}/heartwood-openshell-sandbox")] = 1000
+
+    with pytest.raises(httpx.HTTPStatusError):
+        platform.provision("abc123")
+
+    assert platform.api.calls.count(("POST", rolebindings)) == 2
+
+
+def test_a_refused_write_in_the_namespace_is_retried(platform: Platform) -> None:
+    # Another API server may not yet hold the binding that authorized the read.
+    platform.api.refused[("PATCH", "/api/v1/namespaces/hw-s-abc123/serviceaccounts/hw-staging")] = 2
+
+    assert platform.provision("abc123").namespace == "hw-s-abc123"
+    assert set(platform.api.kind("ServiceAccount", "hw-s-abc123")) >= {"hw-staging"}
+
+
 def test_launch_fails_when_the_gateway_does_not_become_ready(platform: Platform) -> None:
     platform.api.reads_until_ready = 1000
 

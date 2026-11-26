@@ -468,7 +468,9 @@ def test_deletion_removes_the_session_and_its_redirect_uri(platform: Platform) -
     assert platform.launch(_BOB, "demo")["session"] != first["session"]
 
 
-def test_keycloak_failure_is_reported_as_an_unavailable_component(platform: Platform) -> None:
+def test_keycloak_failure_is_reported_as_an_unavailable_component(
+    platform: Platform, caplog: pytest.LogCaptureFixture
+) -> None:
     platform.keycloak.secret = "rotated"
 
     response = platform.client.put(
@@ -477,6 +479,11 @@ def test_keycloak_failure_is_reported_as_an_unavailable_component(platform: Plat
 
     assert response.status_code == 502
     assert response.json() == {"error": "a platform component is unavailable"}
+    # The log names the request that failed and its status, so the component is known.
+    (logged,) = (message for message in caplog.messages if "component failed" in message)
+    assert "POST" in logged
+    assert "keycloak.example.test/realms/heartwood/protocol/openid-connect/token" in logged
+    assert "answered 401" in logged
 
 
 def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: Path) -> None:

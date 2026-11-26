@@ -319,6 +319,12 @@ jobs:
         run: |
           read -ra tests <<<"${TESTS}"
           uv sync --locked
+          # Tests replace the control pod, so its logs are followed into the evidence meanwhile.
+          while :; do
+            kubectl --context kind-heartwood --namespace heartwood-platform logs --follow \
+              --timestamps pod/heartwood-control-0 || true
+            sleep 2
+          done >> ../../test-results/kubernetes-qualification/control.log 2>&1 &
           uv run pytest -c pyproject.toml "${tests[@]}" --cluster-context kind-heartwood \
             --staging-image "${WORKER_IMAGE}" \
             --junitxml ../../test-results/kubernetes-qualification/platform-chart.xml
