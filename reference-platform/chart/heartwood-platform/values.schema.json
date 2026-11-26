@@ -766,6 +766,7 @@
         "models",
         "environment",
         "trustPublicRoots",
+        "spendWriteSeconds",
         "settleWaitSeconds",
         "syntheticModel",
         "localModel"
@@ -873,6 +874,11 @@
         },
         "trustPublicRoots": {
           "type": "boolean"
+        },
+        "spendWriteSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
         },
         "settleWaitSeconds": {
           "type": "number",

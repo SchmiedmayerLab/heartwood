@@ -875,6 +875,46 @@ def test_litellm_records_costs_from_the_price_sheet_and_trusts_the_platform_ca()
     } in control["volumes"]
 
 
+def test_a_settlement_waits_longer_than_litellm_writes_the_spending() -> None:
+    def waits(values: str) -> tuple[int, float]:
+        objects = _render(values)
+        config = _named(objects, "ConfigMap", "heartwood-control")
+        settings = Settings.model_validate_json(config["data"]["configuration.json"])
+        written = _litellm(objects)["general_settings"]["proxy_batch_write_at"]
+        # LiteLLM schedules its writes with an integer interval.
+        assert isinstance(written, int), written
+        return written, settings.inference.settle_wait_seconds
+
+    assert waits("values-gke.yaml") == (10, 25)
+    assert waits("values-kind.yaml") == (1, 8)
+    result = subprocess.run(
+        [
+            *_TEMPLATE,
+            "--values",
+            str(_CHART / "values-kind.yaml"),
+            "--set",
+            "inference.settleWaitSeconds=6",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "inference.settleWaitSeconds must exceed inference.spendWriteSeconds" in result.stderr
+    # The smallest wait above the bound renders.
+    accepted = subprocess.run(
+        [
+            *_TEMPLATE,
+            "--values",
+            str(_CHART / "values-kind.yaml"),
+            "--set-json",
+            "inference.settleWaitSeconds=6.5",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+
 def test_litellm_accepts_only_the_control_service_supervisors_and_gateways() -> None:
     objects = _render("values-kind.yaml")
     (rule,) = _named(objects, "NetworkPolicy", "litellm")["spec"]["ingress"]
