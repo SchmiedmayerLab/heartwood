@@ -134,6 +134,26 @@ data:
     {{- $certificate | nindent 4 }}
 {{- end }}
 {{- /*
+The CA certificate for the Mountpoint pods of dataset volumes, in the namespace where the
+Mountpoint S3 CSI driver creates them. The policy heartwood-dataset-reader-ca mounts it
+as their trust bundle.
+*/ -}}
+{{- $mounts := false -}}
+{{- range .Values.projects }}{{- if .interactiveDataset }}{{- $mounts = true }}{{- end }}{{- end -}}
+{{- if $mounts }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-ca
+  namespace: mount-s3
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- $certificate | nindent 4 }}
+{{- end }}
+{{- /*
 The serving certificate of the Hub's proxy, for the names of its public and API Services
 and the host of hub.publicOrigin, which the proxy also presents as its client certificate
 to the Hub. The names are recorded on the Secret, and an existing

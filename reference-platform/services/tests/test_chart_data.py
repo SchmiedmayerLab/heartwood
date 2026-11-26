@@ -302,7 +302,7 @@ def test_the_data_service_reads_launch_contexts_from_the_control_service(
     assert source_pods["podSelector"]["matchLabels"]["app.kubernetes.io/component"] == "data"
 
 
-def test_mounted_dataset_grant_reaches_control_admission_and_store(tmp_path: Path) -> None:
+def _render_mounted(tmp_path: Path) -> list[dict[str, Any]]:
     project = {
         "id": "demo",
         "billingAttributionRef": "grant",
@@ -317,7 +317,11 @@ def test_mounted_dataset_grant_reaches_control_admission_and_store(tmp_path: Pat
     }
     values = tmp_path / "mounted.yaml"
     values.write_text(json.dumps({"projects": [project]}))
-    objects = _render(str(values))
+    return _render(str(values))
+
+
+def test_mounted_dataset_grant_reaches_control_admission_and_store(tmp_path: Path) -> None:
+    objects = _render_mounted(tmp_path)
     settings = ControlSettings.model_validate_json(
         _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
     )
@@ -336,3 +340,70 @@ def test_mounted_dataset_grant_reaches_control_admission_and_store(tmp_path: Pat
     assert listing["Condition"] == {"StringLike": {"s3:prefix": [prefix + "*"]}}
     assert seal["Effect"] == "Deny"
     assert "s3:PutObject" in seal["Action"]
+
+
+_TRUST_BUNDLE = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+
+
+def test_mount_readers_trust_the_platform_ca_alone(tmp_path: Path) -> None:
+    objects = _render_mounted(tmp_path)
+    authority = base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"])
+    bundle = _named(objects, "ConfigMap", "platform-ca", "mount-s3")["data"]
+    assert set(bundle) == {"ca.crt"}
+    assert bundle["ca.crt"].strip() == authority.decode().strip()
+    assert bundle["ca.crt"].count("BEGIN CERTIFICATE") == 1
+    assert "PRIVATE KEY" not in bundle["ca.crt"]
+    # The bundle verifies the store's serving certificate.
+    path = tmp_path / "tls-ca-bundle.pem"
+    path.write_text(bundle["ca.crt"])
+    serving = tmp_path / "versitygw.crt"
+    serving.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "versitygw-tls")["data"]["tls.crt"])
+    )
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(path), str(serving)],
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_only_dataset_reader_pods_receive_the_platform_ca_at_creation(tmp_path: Path) -> None:
+    objects = _render_mounted(tmp_path)
+    spec = _named(objects, "MutatingAdmissionPolicy", "heartwood-dataset-reader-ca")["spec"]
+    assert spec["failurePolicy"] == "Fail"
+    constraints = spec["matchConstraints"]
+    assert constraints["resourceRules"] == [
+        {"apiGroups": [""], "apiVersions": ["v1"], "operations": ["CREATE"], "resources": ["pods"]}
+    ]
+    # The policy selects the pods that the store's network policy admits.
+    (store,) = [
+        source
+        for item in objects
+        if item["kind"] == "NetworkPolicy"
+        for rule in item["spec"].get("ingress", [])
+        for source in rule.get("from", [])
+        if source.get("namespaceSelector", {})
+        .get("matchLabels", {})
+        .get("kubernetes.io/metadata.name")
+        == "mount-s3"
+    ]
+    assert constraints["namespaceSelector"] == store["namespaceSelector"]
+    assert constraints["objectSelector"] == store["podSelector"]
+    assert store["podSelector"] == {"matchLabels": {"heartwood.platform/role": "dataset-reader"}}
+    variables = {item["name"]: item["expression"] for item in spec["variables"]}
+    assert "configMap: Object.spec.volumes.configMap{name: 'platform-ca'}" in variables["volume"]
+    for field in ("readOnly: true", "subPath: 'ca.crt'", f"mountPath: '{_TRUST_BUNDLE}'"):
+        assert field in variables["mount"]
+    (mutation,) = spec["mutations"]
+    assert mutation["patchType"] == "JSONPatch"
+    expression = mutation["jsonPatch"]["expression"]
+    assert "value: variables.volume" in expression
+    assert "value: variables.mount" in expression
+    binding = _named(objects, "MutatingAdmissionPolicyBinding", "heartwood-dataset-reader-ca")
+    assert binding["spec"] == {"policyName": "heartwood-dataset-reader-ca"}
+
+
+def test_without_a_mounted_dataset_no_pod_is_mutated(objects: list[dict[str, Any]]) -> None:
+    kinds = {item["kind"] for item in objects}
+    assert not kinds & {"MutatingAdmissionPolicy", "MutatingAdmissionPolicyBinding"}
+    assert not [item for item in objects if item["metadata"].get("namespace") == "mount-s3"]

@@ -108,3 +108,71 @@ metadata:
 spec:
   policyName: heartwood-mounted-dataset-claims
   validationActions: [Deny]
+{{- $mounts := false }}
+{{- range .Values.projects }}{{- if .interactiveDataset }}{{- $mounts = true }}{{- end }}{{- end }}
+{{- if $mounts }}
+{{- /*
+Dataset volumes reach the object store over HTTPS with a certificate of the platform CA.
+mount-s3 starts with a cleared environment and reads only the trust bundle of its image,
+so CA environment variables never reach it. At creation, this policy mounts the platform
+CA read-only over that bundle in each Mountpoint pod that carries the dataset-reader
+label, which the store's network policy admits. The pods reach only the store, so they
+trust the platform CA alone. A pod is refused when the mutation fails, and a pod without
+the certificate fails the TLS handshake with the store.
+*/}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: heartwood-dataset-reader-ca
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: Never
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: mount-s3
+    objectSelector:
+      matchLabels:
+        heartwood.platform/role: dataset-reader
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [pods]
+  # The patch addresses the single container of a Mountpoint pod.
+  matchConditions:
+    - name: one-container
+      expression: object.spec.containers.size() == 1
+  variables:
+    - name: volume
+      expression: >-
+        Object.spec.volumes{name: 'heartwood-platform-ca',
+        configMap: Object.spec.volumes.configMap{name: 'platform-ca'}}
+    - name: mount
+      expression: >-
+        Object.spec.containers.volumeMounts{name: 'heartwood-platform-ca', readOnly: true,
+        subPath: 'ca.crt', mountPath: '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'}
+  mutations:
+    # JSON patches add each element; an apply configuration cannot merge into the lists.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          (has(object.spec.volumes)
+          ? [JSONPatch{op: 'add', path: '/spec/volumes/-', value: variables.volume}]
+          : [JSONPatch{op: 'add', path: '/spec/volumes', value: [variables.volume]}])
+          + (has(object.spec.containers[0].volumeMounts)
+          ? [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts/-', value: variables.mount}]
+          : [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts', value: [variables.mount]}])
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-dataset-reader-ca
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-dataset-reader-ca
+{{- end }}

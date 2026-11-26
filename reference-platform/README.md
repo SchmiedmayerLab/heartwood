@@ -199,7 +199,18 @@ Its Keycloak role `manage-clients` covers every client of the realm.
 ### Permitted Data
 
 The reference platform is for synthetic and open data only.
-For a platform-mounted interactive dataset, set `projects[].interactiveDataset` to its `id`, `version` (the SHA-256 digest of its verified content manifest), logical byte `size`, object count `objects`, and the platform mount account name `reader`. Publish and verify the version under `datasets/<id>/<version>/` in the project bucket before granting it. Preserve the version after retirement. The bucket policy seals each admitted version against writes and deletes. On upgrade the policy writer reads the project bucket policies, preserves their seals and withdraws reader grants for retired versions and removed projects. The active reader can read objects and list its version prefix. Supply the Mountpoint S3 CSI driver with that account and the platform CA outside the worker pod. The chart admits mount readers labeled `heartwood.platform/role: dataset-reader` from the platform-managed `mount-s3` namespace to the store.
+For a platform-mounted interactive dataset, set `projects[].interactiveDataset` to its `id`, `version` (the SHA-256 digest of its verified content manifest), logical byte `size`, object count `objects`, and the platform mount account name `reader`.
+Publish and verify the version under `datasets/<id>/<version>/` in the project bucket before granting it.
+Preserve the version after retirement.
+The bucket policy seals each admitted version against writes and deletes.
+On upgrade the policy writer reads the project bucket policies, preserves their seals and withdraws reader grants for retired versions and removed projects.
+The active reader can read objects and list its version prefix.
+Install the Mountpoint S3 CSI driver before the chart, with driver authentication through that account and `mountpointPod.podLabels` set to `heartwood.platform/role: dataset-reader`, so that the store client and its credential stay outside the worker pod.
+The chart admits these Mountpoint pods from the platform-managed `mount-s3` namespace to the store.
+The store presents a certificate of the platform CA, and `mount-s3` starts with a cleared environment and reads only its image's trust bundle `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`, so CA environment variables do not reach it.
+The chart therefore writes the platform CA to the ConfigMap `platform-ca` in `mount-s3`, and its MutatingAdmissionPolicy `heartwood-dataset-reader-ca` mounts that certificate read-only over the trust bundle of each labeled single-container Mountpoint pod at creation.
+These pods trust only the platform CA, so a driver installation that labels its pods this way serves only the platform's dataset volumes.
+The chart needs the `admissionregistration.k8s.io/v1` MutatingAdmissionPolicy API and the `mount-s3` namespace when a project has a mounted dataset, and the installation fails without them.
 
 The launch API selects the project's configured version for members. An optional `dataset=<id>@<version>` query parameter requires that exact selection. A session receives the version at `/data` through a read-only claim. Reapplying a changed configuration restarts control, which removes sessions whose membership or version grant expired. The session namespace owns the static volume. Namespace deletion retires the claim and volume while the underlying objects remain in the project bucket. Projects without a mount grant use the catalog copy path. Batch tasks stage their declared inputs.
 
