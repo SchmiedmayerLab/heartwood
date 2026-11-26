@@ -2042,6 +2042,8 @@ def test_settled_event_replay_waits_for_final_publication(
         )
         assert invalid.status_code == 400
         assert invalid.body == {"error": "settled query parameter must be true or false"}
+    # A blank after parameter still reads the full replay.
+    blank_after = RestRequest(method="GET", path="/sessions/session-1/events?after=")
     rest.handle(
         RestRequest(
             method="POST",
@@ -2058,6 +2060,7 @@ def test_settled_event_replay_waits_for_final_publication(
     assert busy.status_code == 409
     assert busy.body == {"error": "session execution is still settling"}
     assert rest.handle(request).status_code == 200
+    assert rest.handle(blank_after).status_code == 200
     parameters = gateway_openapi()["paths"]["/sessions/{session_id}/events"]["get"]["parameters"]
     settled_parameter = next(item for item in parameters if item["name"] == "settled")
     assert settled_parameter["in"] == "query"

@@ -153,6 +153,8 @@ def curl(
                 "curl",
                 "--silent",
                 "--show-error",
+                # Without URL globbing, curl has no error that repeats the URL.
+                "--globoff",
                 "--max-time",
                 str(max_time),
                 # Keycloak is verified against the platform CA alone.
@@ -163,8 +165,13 @@ def curl(
     except subprocess.TimeoutExpired:
         raise AssertionError("Probe request timed out") from None
     if result.returncode:
-        # curl can name the request URL, which may carry a signature or token.
-        reason = re.sub(r"\S+://\S+", "<url>", result.stderr).strip()[-300:]
+        # curl can repeat an argument, such as a URL with a signature or token, verbatim.
+        # Option names and short values are kept so that the reason stays readable.
+        reason = result.stderr
+        for argument in sorted(arguments, key=len, reverse=True):
+            if len(argument) >= 4 and not argument.startswith("-"):
+                reason = reason.replace(argument, "<argument>")
+        reason = re.sub(r"\S+://\S+", "<url>", reason).strip()[-300:]
         raise AssertionError(f"Probe request failed with exit status {result.returncode}: {reason}")
     return result.stdout
 

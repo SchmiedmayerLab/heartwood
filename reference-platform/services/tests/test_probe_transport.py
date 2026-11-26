@@ -208,16 +208,42 @@ def test_expiry_wait_accounts_for_elapsed_probe_time(
     sleeper.sleep.assert_called_once_with(max(0, lifetime + 1 - elapsed_seconds))
 
 
-def test_failed_probe_request_reports_curl_reason_without_its_url() -> None:
+@pytest.mark.parametrize(
+    ("argument", "stderr", "expected"),
+    [
+        (
+            _URL,
+            f"curl: (7) Failed to connect to {_URL}: Connection refused\n",
+            "curl: (7) Failed to connect to <argument>: Connection refused",
+        ),
+        (
+            _URL,
+            f"curl: (3) bad range in URL position 52:\n{_URL}\n{' ' * 51}^\n",
+            "curl: (3) bad range in URL position 52:\n<argument>\n",
+        ),
+        (
+            "user:synthetic-password@store.invalid/object?X-Amz-Signature=synthetic-private-value",
+            "curl: (3) URL rejected: user:synthetic-password@store.invalid/object"
+            "?X-Amz-Signature=synthetic-private-value\n",
+            "curl: (3) URL rejected: <argument>",
+        ),
+        (
+            f"{_URL}&note=synthetic private value",
+            f"curl: (3) URL rejected: {_URL}&note=synthetic private value\n",
+            "curl: (3) URL rejected: <argument>",
+        ),
+    ],
+)
+def test_failed_probe_request_reports_curl_reason_without_its_arguments(
+    argument: str, stderr: str, expected: str
+) -> None:
     cluster = Mock(spec=Cluster)
-    cluster.kubectl.return_value = CompletedProcess(
-        [], 7, stdout="", stderr=f"curl: (7) Failed to connect to {_URL}: Connection refused\n"
-    )
+    cluster.kubectl.return_value = CompletedProcess([], 3, stdout="", stderr=stderr)
     with pytest.raises(AssertionError) as failure:
-        curl(cluster, "probe", _URL)
+        curl(cluster, "probe", argument)
     message = str(failure.value)
-    assert message == (
-        "Probe request failed with exit status 7: "
-        "curl: (7) Failed to connect to <url> Connection refused"
-    )
-    assert "synthetic-private-value" not in message
+    assert message.startswith("Probe request failed with exit status 3: ")
+    assert message.removeprefix("Probe request failed with exit status 3: ").startswith(expected)
+    for secret in ("synthetic-private-value", "synthetic-password", "synthetic private value"):
+        assert secret not in message
+    assert "--globoff" in cluster.kubectl.call_args.args

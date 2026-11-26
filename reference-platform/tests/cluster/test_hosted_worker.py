@@ -423,7 +423,7 @@ def _settled_events(server: Server) -> list[dict[str, Any]]:
         if status != 409 or answer != {"error": "session execution is still settling"}:
             raise AssertionError(f"Could not observe the settled conversation ({status})")
         time.sleep(3)
-    raise AssertionError("Timed out waiting for the failed turn to settle")
+    raise AssertionError("Timed out waiting for the conversation to settle")
 
 
 def _settled_failure(server: Server) -> list[dict[str, Any]]:
