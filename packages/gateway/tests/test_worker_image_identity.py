@@ -114,6 +114,13 @@ def test_an_index_must_name_exactly_one_manifest_for_the_node_platform(
         manifest_chain(f"{_REPOSITORY}@{root}", "amd64", {**blobs, **index}.__getitem__)
 
 
+def test_an_indexed_child_must_match_its_digest() -> None:
+    root, child, blobs = _indexed()
+    altered = {**blobs, child: blobs[child] + b" "}
+    with pytest.raises(ValueError, match="differ from their digest"):
+        manifest_chain(f"{_REPOSITORY}@{root}", "amd64", altered.__getitem__)
+
+
 def _manifests(blobs: dict[str, bytes]) -> dict[str, str]:
     return {digest: raw.decode() for digest, raw in blobs.items()}
 

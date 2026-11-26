@@ -1358,6 +1358,7 @@ def test_logout_ends_only_streams_bound_to_that_login(
     async def scenario() -> None:
         updates = [asyncio.Queue[bool](), asyncio.Queue[bool]()]
         inputs = [asyncio.Queue[dict[str, object]](), asyncio.Queue[dict[str, object]]()]
+        last: list[dict[str, object]] = [{}, {}]
 
         async def subscribe(index: int) -> None:
             path = f"{_BASE}/sessions/session-1/events"
@@ -1375,6 +1376,7 @@ def test_logout_ends_only_streams_bound_to_that_login(
                 )
 
             async def send(message: dict[str, object]) -> None:
+                last[index] = message
                 if message["type"] == "websocket.send" or message.get("more_body") is True:
                     updates[index].put_nowait(True)
 
@@ -1406,6 +1408,11 @@ def test_logout_ends_only_streams_bound_to_that_login(
                     gateway._streams.notify(session_id="session-1")
                 await tasks[0]
                 assert updates[0].empty()
+                assert last[0] == (
+                    {"type": "http.response.body", "body": b"", "more_body": False}
+                    if transport == "sse"
+                    else {"type": "websocket.close", "code": 1008}
+                )
                 if notify:
                     await updates[1].get()
                 assert not tasks[1].done()
