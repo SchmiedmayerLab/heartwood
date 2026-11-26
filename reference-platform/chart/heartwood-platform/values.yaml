@@ -226,8 +226,12 @@ inference:
   # LiteLLM trusts the platform CA alone for its upstreams. With trustPublicRoots it
   # also trusts the public roots of its image, which hosted models need.
   trustPublicRoots: false
+  # How often LiteLLM writes the spending of keys to its database, in seconds; LiteLLM
+  # adds an offset of up to five seconds that it chooses at its start.
+  spendWriteSeconds: 10
   # How long the control service waits for LiteLLM to record the spending of a key's
-  # last requests before it reads the spending to settle or rotate the key.
+  # last requests before it reads the spending to settle or rotate the key. It must
+  # exceed spendWriteSeconds by more than five seconds.
   settleWaitSeconds: 25
   # A deterministic model for tests, served by the platform services image.
   syntheticModel:
