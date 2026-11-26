@@ -395,6 +395,8 @@ Both always require a researcher decision bound to exact content; no review mode
 The outside service adapter (`ExternalActionAdapter`) is a trusted dependency an embedding launcher supplies to `SessionGateway` through `external_actions_factory`.
 `heartwood gateway serve` installs none; native qualification uses a synthetic authenticated MCP service.
 The [Platform Contract](../operate/platform-contract.md) defines the messages an adapter exchanges.
+Without an embedding adapter, the gateway's own adapter serves the client tools of a session with an isolated worker: the enabled [research MCP server](../operate/platform-contract.md#research-mcp-servers) tools, and the [planning tools](../operate/platform-contract.md#planning-against-platform-budgets) when the deployment has a planning binding.
+A planning tool call runs in the gateway's planning state, so its records are the same ones every interface shows.
 
 An outside operation proceeds through these steps:
 

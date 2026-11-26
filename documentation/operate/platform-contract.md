@@ -550,6 +550,29 @@ A reported balance or estimate never guarantees that the platform admits work, a
 Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
 Cost figures reported by a worker are not planning records.
 
+A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one:
+
+| Tool | Behavior |
+|---|---|
+| `planning_overview` | Refreshes discovery and budgets like `/plan refresh` and returns the overview described below |
+| `record_plan_prediction` | Records one prediction revision like `/plan record` |
+| `request_plan_estimate` | Requests an estimate for a recorded revision like `/plan estimate`; the platform is asked nothing while estimates are not offered |
+
+The overview gives the status of each capability as `available`, `not-offered`, `unavailable` or `refused`, or `unchecked` before the first discovery.
+It also holds the latest budgets with their observation times, each recorded revision with its estimates, element reviews and observation references, and the planning outcomes.
+Every planning tool returns the overview as it stands after the call.
+
+Each call is an [outside operation](#outside-operation-admission) of the service `heartwood-planning`.
+The researcher reviews it before the gateway runs it, and its result reaches the model only through a separate result release.
+A prediction for another launch context, or arguments the tool does not define, are refused before review.
+A refused record, such as an estimate for an unrecorded revision, is reported as a failed call with the reason.
+The result leaves out reviewed proposals, decisions and the launch context's billing and authority references, and holds at most 48 KiB.
+A larger overview keeps only the latest revision of each plan, and then no revisions, with a limitation that says so; service status, budgets and outcomes remain, and the call fails only when they alone exceed the limit.
+The agent's records are ordinary planning records, so every interface shows them.
+A call whose outcome was not recorded is not run again.
+Its status read reports a prediction call as failed unless the journal holds that exact revision, and reports the current overview for the other calls.
+A `heartwood gateway serve` deployment with `[planning]` and no `[worker]` table keeps planning to the researcher interfaces.
+
 ### Platform Job Operations
 
 A [research MCP destination](#research-mcp-servers) whose manifest entry has an [`operations`](../reference/configuration.md#mcp-destinations) table is a platform job service.
