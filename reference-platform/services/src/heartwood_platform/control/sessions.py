@@ -16,14 +16,20 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import secrets
 import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
+import httpx
+
 from heartwood_platform.common.kubernetes import Kubernetes
+
+_LOGGER = logging.getLogger(__name__)
 
 NAMESPACE_PLACEHOLDER = "hw-s-placeholder"
 GATEWAY_IMAGE_PLACEHOLDER = "heartwood.invalid/openshell-gateway:placeholder"
@@ -70,6 +76,9 @@ class SessionSettings:
     # images, each under its upstream name and digest. Empty keeps OPENSHELL_REPOSITORY.
     openshell_repository: str = ""
     ready_timeout_seconds: float = 180.0
+    # How long requests in a new session namespace are retried while the API server
+    # refuses them, as it may until the service's RoleBinding there takes effect.
+    binding_timeout_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,15 @@ def session_namespace(session: str) -> str:
 def gateway_account(session: str) -> str:
     """Return the name of the ServiceAccount and Secret of a session's Heartwood gateway."""
     return f"hw-gw-{session}"
+
+
+def _status_message(response: httpx.Response) -> str:
+    """Return the message of the API server's Status, without its other fields."""
+    try:
+        message = response.json().get("message")
+    except ValueError:
+        return ""
+    return message if isinstance(message, str) else ""
 
 
 def _subject(name: str, namespace: str) -> dict[str, str]:
@@ -311,6 +329,33 @@ class Sessions:
                 raise SessionError(f"{describe} is not ready")
             self._sleep(2.0)
 
+    def _bound[T](self, deadline: float, call: Callable[[], T]) -> T:
+        """Make a request that the service's RoleBinding in a session namespace authorizes.
+
+        The API server can refuse a request authorized by a RoleBinding created moments
+        earlier; such a request is retried until the binding takes effect. Each API
+        server of a control plane has its own authorization cache, so any request of
+        the service in the namespace can be refused, not only the first one.
+        """
+        while True:
+            try:
+                return call()
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != httpx.codes.FORBIDDEN:
+                    raise
+                if self._clock() >= deadline:
+                    _LOGGER.warning(
+                        "%s %s answered 403: %s",
+                        error.request.method,
+                        error.request.url.path,
+                        _status_message(error.response),
+                    )
+                    raise SessionError(
+                        "the API server refused requests in the session namespace for "
+                        f"{self._settings.binding_timeout_seconds:g} s"
+                    ) from error
+            self._sleep(0.2)
+
     def provision(self, session: str) -> ProvisionedSession:
         """Bring the namespace of a session to its full state and wait for its gateway."""
         settings = self._settings
@@ -330,9 +375,10 @@ class Sessions:
         )
         control = _subject(settings.control_account, settings.control_namespace)
         kubernetes.create(_role_binding(namespace, "heartwood-session-control", control))
+        bound = self._clock() + settings.binding_timeout_seconds
         # The binding lets the service read the namespace. An existing namespace is
         # reused only when it carries the labels that a created one would.
-        existing = kubernetes.get("Namespace", namespace)
+        existing = self._bound(bound, partial(kubernetes.get, "Namespace", namespace))
         if existing is None or existing["metadata"].get("deletionTimestamp") is not None:
             raise SessionError("the session namespace is being deleted")
         found = existing["metadata"].get("labels", {})
@@ -340,19 +386,18 @@ class Sessions:
             raise SessionError("an existing namespace does not carry the session labels")
 
         for document in self._namespace_objects(session):
-            kubernetes.apply(document)
+            self._bound(bound, partial(kubernetes.apply, document))
         # One key for the lifetime of the session: OpenShell encrypts the provider
         # credentials of the session with it.
         key = base64.b64encode(secrets.token_bytes(32))
-        kubernetes.create(
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": "openshell-kek", "namespace": namespace},
-                "type": "Opaque",
-                "data": {"key-encryption-key": base64.b64encode(key).decode()},
-            }
-        )
+        kek = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "openshell-kek", "namespace": namespace},
+            "type": "Opaque",
+            "data": {"key-encryption-key": base64.b64encode(key).decode()},
+        }
+        self._bound(bound, partial(kubernetes.create, kek))
         openshell = _subject("openshell", namespace)
         account = gateway_account(session)
         for role, subject in (
@@ -361,9 +406,10 @@ class Sessions:
             ("heartwood-openshell-certgen", _subject("openshell-certgen", namespace)),
             ("heartwood-session-gateway", _subject(account, settings.gateway_namespace)),
         ):
+            # The service's ClusterRole authorizes these, so a refusal is final.
             kubernetes.create(_role_binding(namespace, role, subject))
         for document in self._openshell_objects(namespace):
-            kubernetes.apply(document)
+            self._bound(bound, partial(kubernetes.apply, document))
         self._apply_node_reader(session)
         kubernetes.create(
             {

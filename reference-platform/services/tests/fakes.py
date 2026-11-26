@@ -285,6 +285,10 @@ class FakeKubernetes:
         self.calls: list[tuple[str, str]] = []
         # Requests, as method and path, that fail with a server error.
         self.failing: set[tuple[str, str]] = set()
+        # Requests, as method and object path (also for a creation), refused as forbidden
+        # the given number of times, as before the API server's authorization cache holds
+        # a new RoleBinding.
+        self.refused: dict[tuple[str, str], int] = {}
         self.reads_until_ready = 1
         self._reads = 0
         self._created = 0
@@ -311,6 +315,14 @@ class FakeKubernetes:
         self.calls.append((request.method, path))
         if (request.method, path) in self.failing:
             return httpx.Response(500)
+        target = path
+        if request.method == "POST":
+            target = f"{path}/{json.loads(request.content)['metadata']['name']}"
+        if self.refused.get((request.method, target), 0) > 0:
+            self.refused[(request.method, target)] -= 1
+            return httpx.Response(
+                403, json={"kind": "Status", "reason": "Forbidden", "message": "refused here"}
+            )
         if request.method == "POST":
             body = json.loads(request.content)
             self.posted.append(json.loads(request.content))
