@@ -22,7 +22,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+import openai
 import pytest
+from openhands.sdk.event.error_classification import FailureKind, classify_error, classify_exception
+from openhands.sdk.llm.exceptions.types import LLMRateLimitError
 
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
 from heartwood.cli import main as terminal_main
@@ -183,6 +186,32 @@ def _assert_every_interface_shows(projection: SessionProjection, diagnostic: str
     assert diagnostic in shown["browser"]
     assert any(line.strip() == diagnostic for line in terminal)
     assert any(item.endswith(f"\n{diagnostic}") for item in notebook)
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "expected"),
+    [
+        ("insufficient_quota", FailureKind.QUOTA),
+        ("usage_limit_reached", FailureKind.QUOTA),
+        ("budget_exceeded", FailureKind.QUOTA),
+        ("rate_limit_exceeded", FailureKind.RATE_LIMIT),
+    ],
+)
+def test_rate_limit_events_preserve_provider_classification(
+    provider_code: str, expected: FailureKind
+) -> None:
+    response = httpx.Response(429, request=httpx.Request("POST", "https://example.invalid"))
+    provider = openai.RateLimitError(
+        "Request denied", response=response, body={"code": provider_code}
+    )
+    mapped = LLMRateLimitError("Request denied")
+    mapped.__cause__ = provider
+    for error in (provider, mapped):
+        classification = classify_exception(error)
+        assert classification.kind == expected
+        assert classification.retryable == (expected == FailureKind.RATE_LIMIT)
+    for code in ("RateLimitError", "LLMRateLimitError"):
+        assert classify_error(code, provider_code).kind == expected
 
 
 def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:

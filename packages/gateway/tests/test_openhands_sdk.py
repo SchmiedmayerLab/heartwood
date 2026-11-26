@@ -1164,18 +1164,53 @@ def test_public_conversation_state_projects_a_content_safe_error(
     backend.close()
 
 
+@pytest.mark.parametrize(
+    ("code", "detail", "expected"),
+    [
+        (
+            "OpenAIError",
+            "Incorrect API key provided",
+            BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED,
+        ),
+        (
+            "LLMBadRequestError",
+            "Budget has been exceeded",
+            BackendErrorCode.PROVIDER_QUOTA_EXHAUSTED,
+        ),
+        (
+            "APIError",
+            "Key not allowed to access model",
+            BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+        ),
+        (
+            "APIError",
+            "The requested model 'model-b' is not available for this API key, or the model name "
+            "is invalid. Check the models available to you and try again.",
+            BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+        ),
+        (
+            "APIError",
+            """Error code: 403 - {"error":{"type":"key_model_access_denied","code":"403"}}""",
+            BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+        ),
+        ("LLMBadRequestError", "Invalid parameter", BackendErrorCode.MODEL_CONFIGURATION_INVALID),
+    ],
+)
 def test_typed_conversation_error_replaces_generic_stopped_state(
     tmp_path: Path,
+    code: str,
+    detail: str,
+    expected: BackendErrorCode,
 ) -> None:
     conversation = _ControlledConversation()
     state = _BranchState(conversation.id)
     state.execution_status = ConversationExecutionStatus.ERROR
     state.events = (
         ConversationErrorEvent(
-            id="provider-authentication-error",
+            id="provider-error",
             source="environment",
-            code="OpenAIError",
-            detail="Incorrect API key provided: private-provider-detail",
+            code=code,
+            detail=f"{detail}: private-provider-detail",
         ),
     )
     conversation.state = state
@@ -1193,9 +1228,7 @@ def test_typed_conversation_error_replaces_generic_stopped_state(
     )
 
     errors = [event for event in events if isinstance(event, BackendErrorEvent)]
-    assert [event.error_code for event in errors] == [
-        BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED
-    ]
+    assert [event.error_code for event in errors] == [expected]
     assert "private-provider-detail" not in repr(events)
     backend.close()
 

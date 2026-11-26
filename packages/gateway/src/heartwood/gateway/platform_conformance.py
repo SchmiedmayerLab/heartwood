@@ -23,7 +23,7 @@ import openai
 from fastmcp.client.transports import StreamableHttpTransport
 from mcp.shared.exceptions import MCPError as McpProtocolError
 from openai.types.chat import ChatCompletionToolParam
-from openhands.sdk.event.error_classification import classify_error
+from openhands.sdk.event.error_classification import classify_exception
 from openhands.sdk.mcp import MCPClient
 from openhands.sdk.mcp.exceptions import MCPError
 
@@ -128,7 +128,7 @@ def check_inference(endpoint: InferenceEndpoint) -> CapabilityCheck:
         return CapabilityCheck("inference", "inference", "failed", tuple(checks))
     except openai.APIError as error:
         code = classified_error_code(
-            classify_error(type(error).__name__, str(error)),
+            classify_exception(error),
             fallback=BackendErrorCode.PROVIDER_UNAVAILABLE,
         )
         return CapabilityCheck("inference", "inference", "unavailable", tuple(checks), 0, code)

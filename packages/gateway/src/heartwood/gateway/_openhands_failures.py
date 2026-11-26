@@ -13,7 +13,7 @@ import logging
 from openhands.sdk.event.error_classification import (
     ErrorClassification,
     FailureKind,
-    classify_error,
+    classify_exception,
 )
 
 from heartwood.core_adapter import (
@@ -36,7 +36,7 @@ class _PrivacySafeRetryLogFilter(logging.Filter):
         )
         if error is None:
             return True
-        classification = classify_error(type(error).__name__, str(error))
+        classification = classify_exception(error)
         attempt = getattr(error, "retry_attempt", None)
         record.msg = (
             "Model provider request failed (%s)."
@@ -79,7 +79,7 @@ def backend_error(
         )
     return BackendErrorEvent(
         error_code=classified_error_code(
-            classify_error(type(error).__name__, str(error)),
+            classify_exception(error),
             fallback=BackendErrorCode.WORKER_STOPPED,
         ),
         source_event_id=source_event_id,
