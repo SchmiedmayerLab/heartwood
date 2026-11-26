@@ -435,9 +435,42 @@ def test_a_coded_refusal_is_recorded_with_its_code_and_keeps_the_review_open(
     assert len(platform.submissions) == 1
 
 
-def test_an_outside_refusal_code_must_be_a_stable_diagnostic_code() -> None:
-    with pytest.raises(ValueError, match="code is invalid"):
-        ExternalActionError("detail", code="service text")
+def test_an_uncoded_refusal_records_no_adapter_text(setup: Setup) -> None:
+    service, worker, platform = setup
+    record = propose(service, worker)
+
+    def refuse() -> None:
+        raise ExternalActionError("synthetic adapter text")
+
+    platform.check_hook = refuse
+    refused = service.handle(command(service, record)).events[-1]
+
+    assert refused.kind == EventKind.ERROR_RECORDED
+    assert "code" not in refused.payload
+    assert refused.payload["reason"] == "outside authorization or input validation failed"
+    assert "synthetic adapter text" not in str(service.replay_events())
+    assert latest(service).phase == "proposed"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        *(item.value for item in BackendErrorCode),
+        "HW-MCP-005",
+        "HW-PLAN-006",
+        "service text",
+    ],
+)
+def test_an_outside_refusal_carries_only_an_identity_refusal_code(code: str) -> None:
+    # A session-fatal code such as HW-AGENT-007 must never be recorded by an adapter.
+    with pytest.raises(ValueError, match="not an identity refusal"):
+        ExternalActionError("detail", code=code)
+
+
+@pytest.mark.parametrize("detail", ["", "two\nlines", "x" * 513])
+def test_a_coded_refusal_detail_is_one_bounded_line(detail: str) -> None:
+    with pytest.raises(ValueError, match="one bounded line"):
+        ExternalActionError(detail, code="HW-INGRESS-004")
 
 
 def test_rechecks_fence_after_slow_policy_callback(setup: Setup) -> None:
