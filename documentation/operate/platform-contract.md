@@ -645,7 +645,8 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
 The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
 Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
-Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
+The gateway refuses an HTTP request with its route, capability or identity diagnostic, and the browser shows that code and message.
+A missing sign-in and an unavailable identity provider also refuse the gateway's calls to a platform service that takes an exchanged token, and the terminal, browser and notebook show the same HW-INGRESS-004 or HW-INGRESS-005 diagnostic for it.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
 Planning outcomes appear in the planning projection, and the terminal, browser and notebook show their diagnostics.
 Platform job operation states appear with each operation in the session projection; a denied operation there shows HW-PLAN-006 as well.
