@@ -37,6 +37,7 @@ from heartwood.gateway._mcp_policy import (
 )
 from heartwood.gateway._mcp_servers import advance_outside_calls
 from heartwood.gateway._platform_operations import _read_only
+from heartwood.gateway._session_catalog import _session_status
 from heartwood.gateway._session_projection import (
     ProjectionActionRecord,
     ProjectionOutsideOperationActionDetails,
@@ -361,6 +362,61 @@ def test_an_identity_refusal_is_asked_again_once_per_interval_not_on_every_read(
         operation = review.proposal.request.operation
         assert operation is not None
         assert operation.proposal is not None
+
+
+def test_a_connection_after_the_next_sign_in_ends_the_held_identity_refusal(
+    tmp_path: Path,
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        service.adapter.clock = lambda: 1000.0
+        first = service.call("create_task", CPU)
+        sign_in.state = "ended"
+        assert service.attempt("create_task", CPU) is None
+        sign_in.state = "live"
+        # The approval connects with a token within the interval, which ends the hold.
+        service.decide(first)
+        assert _observed(service.record(first)) == "queued"
+
+        second = service.attempt("create_task", {**CPU, "name": "second"})
+
+        assert second is not None
+        operation = second.proposal.request.operation
+        assert operation is not None
+        assert operation.proposal is not None
+        notices = [
+            event.payload["code"]
+            for event in service.session.replay_events()
+            if event.kind == EventKind.ERROR_RECORDED and "pending_call" in event.payload
+        ]
+        assert notices == ["HW-INGRESS-004"]
+
+
+def test_a_call_waiting_for_review_leaves_the_session_and_command_outcome_as_they_were(
+    tmp_path: Path,
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        first = service.call("create_task", CPU)
+        service.decide(first)
+        before = project_session(
+            service.session.replay_events(), session_id=service.session.store.session_id
+        )
+        status = _session_status(service.session.replay_events())
+        sign_in.state = "ended"
+        assert service.attempt("create_task", {**CPU, "name": "second"}) is None
+        events = service.session.replay_events()
+        after = project_session(events, session_id=service.session.store.session_id)
+
+    assert [
+        event.payload["code"]
+        for event in events
+        if event.kind == EventKind.ERROR_RECORDED and "pending_call" in event.payload
+    ] == ["HW-INGRESS-004"]
+    assert before.last_command_outcome is not None
+    assert before.last_command_outcome.status == "accepted"
+    assert after.last_command_outcome == before.last_command_outcome
+    assert _session_status(events) == status != "error"
 
 
 def test_a_missing_platform_proposal_cannot_be_approved(tmp_path: Path) -> None:

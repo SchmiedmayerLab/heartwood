@@ -609,7 +609,8 @@ Sign in at the gateway again and approve the operation again.
 A review is valid for five minutes.
 While the service refuses with this code, an expired review of a submission is not replaced and no review opens for a new submission to the service.
 The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call, and the agent continues without the call's result.
-The gateway asks the provider again at most every ten seconds; within ten seconds after the next sign-in it proposes the submission again with the platform's description, and the new review needs its own approval.
+To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service; a connection to the service, such as an approved operation, ends that wait.
+After the next sign-in, the first session read once that interval has passed, or after such a connection, opens a review with the platform's description, and the new review needs its own approval.
 Operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
 
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
@@ -620,8 +621,9 @@ Retry when the provider is reachable.
 A research service that takes an exchanged token reports this code when the gateway cannot obtain its token, and an approval of one of its operations is refused with it in the terminal, browser and notebook.
 The review stays open; approve it again once the provider is reachable.
 While the provider stays unavailable, an expired review of a submission is not replaced and no review opens for a new submission to the service.
-The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call.
-The gateway asks the provider again at most every ten seconds; once the provider is reachable, it proposes the submission again with the platform's description, and the new review needs its own approval.
+The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call, and the agent continues without the call's result.
+To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service.
+The first session read after the provider is reachable again and that interval has passed opens a review with the platform's description, and the new review needs its own approval.
 
 Operators check that `provider_url` is reachable from the gateway, that `ca_file` holds the authority of the provider's certificate, and that the discovery document's `issuer` equals the configured `issuer`.
 The discovery document's authorization, token and key endpoints must lie on the origin of `issuer` or of `provider_url`.
