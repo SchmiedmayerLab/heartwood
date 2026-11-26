@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Never, cast
+from typing import Any, Literal, Never, cast
 
 import pytest
 from pydantic import AnyHttpUrl
@@ -47,9 +47,11 @@ from heartwood.gateway import (
     SessionGateway,
     platform_operation_lines,
 )
+from heartwood.gateway._access import AccessUnavailableError
 from heartwood.gateway._mcp_policy import (
     McpDestination,
     McpOperationProfile,
+    TokenExchange,
     mcp_destinations_from_mapping,
 )
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
@@ -235,10 +237,31 @@ class Platform:
         )
 
 
+@dataclass
+class SignIn:
+    """The researcher's sign-in at the gateway, as the gateway's token exchange sees it."""
+
+    state: Literal["live", "ended", "provider-unavailable"] = "live"
+    issuer: FakeTokenIssuer | None = None
+
+    def __call__(self, scope: str, audience: str) -> str | None:
+        del scope
+        if self.state == "provider-unavailable":
+            raise AccessUnavailableError(502)
+        if self.state == "ended" or self.issuer is None:
+            return None
+        return self.issuer.exchange(audience=audience, project_id=PROJECT_ID)
+
+
 @contextmanager
 def platform(
-    tmp_path: Path, *, planning: bool = True, gpu_projects: frozenset[str] = frozenset()
+    tmp_path: Path,
+    *,
+    planning: bool = True,
+    gpu_projects: frozenset[str] = frozenset(),
+    sign_in: SignIn | None = None,
 ) -> Iterator[Platform]:
+    """Connect the job service; with ``sign_in`` it takes the token exchanged for it."""
     clock = _Clock()
     issuer = FakeTokenIssuer()
     jobs = FakeJobService(
@@ -248,6 +271,8 @@ def platform(
         contexts={PROJECT_ID: _LAUNCH.project_context_id},
     )
     budgets = FakeBudgetService(issuer, clock=lambda: clock.now)
+    if sign_in is not None:
+        sign_in.issuer = issuer
     with serve(jobs.app) as jobs_origin, serve(budgets.app) as budgets_origin:
         destination = McpDestination(
             service_id=jobs.service_id,
@@ -260,6 +285,9 @@ def platform(
                 cancel_tool="cancel_task",
             ),
             call_timeout_seconds=2,
+            token_exchange=(
+                None if sign_in is None else TokenExchange(scope="svc-jobs", audience=JOBS_AUDIENCE)
+            ),
         )
         root = tmp_path / "project"
         root.mkdir()
@@ -286,6 +314,7 @@ def platform(
             worker_plan_factory=_Workers().prepare,
             mcp_destinations=(destination,),
             platform_planning=binding,
+            service_tokens=sign_in,
             env={},
         )
         profile = ModelProfile(
@@ -314,7 +343,11 @@ def platform(
                 server_id="jobs",
                 label="Synthetic jobs",
                 url=f"{jobs_origin}/mcp",
-                token=issuer.exchange(audience=JOBS_AUDIENCE, project_id=project),
+                token=(
+                    issuer.exchange(audience=JOBS_AUDIENCE, project_id=project)
+                    if sign_in is None
+                    else None
+                ),
             )
         )
         tested = gateway.test_mcp_server("jobs", McpServerTestRequest())

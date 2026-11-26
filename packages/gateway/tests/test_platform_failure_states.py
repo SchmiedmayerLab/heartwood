@@ -59,6 +59,7 @@ from heartwood.gateway.platform_fakes import (
 from heartwood.notebook import NotebookSession, build_view_model, build_widget_spec
 from heartwood.schemas import PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand, SessionEvent
+from packages.gateway.tests.test_platform_operations import _CPU, SignIn, platform
 
 _ROOT = Path(__file__).resolve().parents[3]
 _STATES = json.loads(
@@ -350,6 +351,49 @@ def test_identity_refusals_carry_the_fixture_diagnostic(
         gateway.stop()
 
     assert f"{body['code']}: {body['error']}" == state["diagnostic"]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(item, id=item["code"])
+        for item in _STATES
+        if item["surface"] == "gateway-response" and item["code"] in _IDENTITY_CODES
+    ],
+)
+def test_identity_refusals_of_a_platform_call_show_the_same_diagnostic_in_every_interface(
+    tmp_path: Path, state: dict[str, str]
+) -> None:
+    sign_in = SignIn()
+    with platform(tmp_path, sign_in=sign_in) as service:
+        record = service.call("create_task", _CPU)
+        # The sign-in ends, or the provider goes down, before the researcher approves.
+        sign_in.state = "ended" if state["code"] == "HW-INGRESS-004" else "provider-unavailable"
+        approval = SessionCommand(
+            command_id="approve-synthetic-task",
+            session_id=service.session.store.session_id,
+            kind=CommandKind.APPROVE,
+            actor_id="researcher",
+            created_at="2026-07-01T00:00:00Z",
+            payload={"target_type": "action-set", "target_id": record.proposal.group_id},
+        )
+        service.session.handle(approval)
+        projection = project_session(
+            service.session.replay_events(), session_id=service.session.store.session_id
+        )
+        refused = service.record(record).phase
+
+        # The review stays open, and an approval after the next sign-in sends the task.
+        sign_in.state = "live"
+        service.session.handle(approval.model_copy(update={"command_id": "approve-again"}))
+        approved = service.record(record).phase
+
+    _assert_every_interface_shows(projection, state["diagnostic"])
+    assert projection.last_command_outcome is not None
+    assert projection.last_command_outcome.error_code == state["code"]
+    assert refused == "proposed"
+    assert approved == "observed"
+    assert service.jobs.task_count == 1
 
 
 @pytest.mark.parametrize(

@@ -211,10 +211,7 @@ class McpServerManager:
         try:
             return self._service_tokens(exchange.scope, exchange.audience)
         except AccessUnavailableError:
-            raise McpServerError(
-                "gateway-identity-provider",
-                "the identity provider is unavailable, so the research service has no token",
-            ) from None
+            raise McpServerError("gateway-identity-provider") from None
         except TokenExchangeRefusedError:
             raise McpServerError(
                 "gateway-identity",
@@ -558,19 +555,9 @@ class McpServerManager:
         try:
             token = self.token(bound.destination)
         except McpServerError as error:
-            # Identity refusals keep their stable code, so the researcher sees HW-INGRESS-004.
-            raise ExternalActionError(
-                str(error) if error.code.startswith("HW-INGRESS-") else error.detail
-            ) from None
+            raise _outside_error(error) from None
         if bound.destination.token_exchange is not None and token is None:
-            raise ExternalActionError(
-                str(
-                    McpServerError(
-                        "gateway-identity",
-                        "the research service waits until the researcher signs in at the gateway",
-                    )
-                )
-            )
+            raise _outside_error(McpServerError("gateway-identity"))
         if token_authentication(token).status == "expired":
             raise ExternalActionError("the research service credential is expired")
 
@@ -595,10 +582,7 @@ class McpServerManager:
             self._refuse_entered(destination, token)
             token = self.token(destination)
             if token is None:
-                raise McpServerError(
-                    "gateway-identity",
-                    "the research service waits until the researcher signs in at the gateway",
-                )
+                raise McpServerError("gateway-identity")
         token = self.token(destination) if token is None else token
         if token_authentication(token).status == "expired":
             raise McpServerError("mcp-credential", "the research service token is expired")
@@ -637,6 +621,16 @@ class McpServerManager:
             yield client
         finally:
             client.sync_close()
+
+
+def _outside_error(error: McpServerError) -> ExternalActionError:
+    """Refuse an outside operation; identity refusals keep their stable ingress code.
+
+    The researcher resolves those by signing in at the gateway, so every interface shows
+    the code and recovery step that the gateway's own HTTP refusal carries.
+    """
+    code = error.code if error.code.startswith("HW-INGRESS-") else None
+    return ExternalActionError(error.detail, code=code)
 
 
 def _entered(token: str | None) -> str | None:
@@ -856,7 +850,7 @@ class McpOutsideAdapter:
             with self._manager.connect(bound.server, bound.destination) as client:
                 self._verify_definition(client, bound)
         except McpServerError as error:
-            raise ExternalActionError(error.detail) from None
+            raise _outside_error(error) from None
 
     def read_input(self, reference: ExternalInputReference) -> bytes:  # noqa: ARG002
         """Research service calls carry no file inputs."""

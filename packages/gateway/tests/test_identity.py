@@ -2016,7 +2016,7 @@ def test_a_research_service_receives_the_exchanged_token_of_its_own_project_and_
             servers = gateway.mcp_servers
             servers.add("data", "Synthetic data", f"{origin}/mcp", None, False)
             # Without a sign-in the service is not contacted and shows no credential.
-            with pytest.raises(McpServerError, match=r"HW-INGRESS-004.*signs in"):
+            with pytest.raises(McpServerError, match=r"HW-INGRESS-004: Open the gateway's URL"):
                 servers.test("data", None, False)
             assert _listed_servers(gateway)[0]["authentication"]["status"] == "missing"
             assert provider.exchanges == []
@@ -2107,7 +2107,7 @@ def test_a_reviewed_call_waits_for_the_sign_in_its_service_token_needs(tmp_path:
             with pytest.raises(ExternalActionError, match=r"HW-INGRESS-004.*issued no token"):
                 servers.require_current(bound)
             clock.now += 3600
-            with pytest.raises(ExternalActionError, match=r"HW-INGRESS-004.*signs in"):
+            with pytest.raises(ExternalActionError, match="HW-INGRESS-004: Open the gateway"):
                 servers.require_current(bound)
         finally:
             gateway.stop()
