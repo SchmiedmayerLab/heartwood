@@ -1,0 +1,826 @@
+{
+  "schema_version": "heartwood.planning-projection.v1",
+  "offered": true,
+  "launch": {
+    "schema_version": "heartwood.platform-launch-context.v1",
+    "project_context_id": "launch-synthetic-1",
+    "platform_id": "synthetic-platform",
+    "project_id": "research-project-a",
+    "billing_attribution_ref": "binding-a",
+    "authority_ref": "synthetic-platform",
+    "policy_ref": "synthetic-policy-v1",
+    "issued_at": "2026-07-01T00:00:00Z",
+    "expires_at": null
+  },
+  "services": {
+    "budgets": "available",
+    "estimates": "available",
+    "checked_at": "2026-07-01T00:00:00Z"
+  },
+  "budgets": [
+    {
+      "schema_version": "heartwood.budget-observation.v1",
+      "project_context_id": "launch-synthetic-1",
+      "budget_id": "budget-compute",
+      "observed_at": "2026-07-01T00:00:00Z",
+      "denomination": {
+        "kind": "currency",
+        "unit": "USD"
+      },
+      "allocated": "50",
+      "reserved": "0",
+      "spent": "40",
+      "available": "10",
+      "constraints": [
+        "Reported availability does not reserve funds or admit work."
+      ],
+      "limitations": [],
+      "platform_record_ref": "synthetic-budget:budget-compute:2"
+    },
+    {
+      "schema_version": "heartwood.budget-observation.v1",
+      "project_context_id": "launch-synthetic-1",
+      "budget_id": "budget-inference",
+      "observed_at": "2026-07-01T00:00:00Z",
+      "denomination": {
+        "kind": "currency",
+        "unit": "USD"
+      },
+      "allocated": "20",
+      "reserved": "5",
+      "spent": "2",
+      "available": "13",
+      "constraints": [
+        "Reported availability does not reserve funds or admit work."
+      ],
+      "limitations": [],
+      "platform_record_ref": "synthetic-budget:budget-inference:1"
+    }
+  ],
+  "plans": [
+    {
+      "plan_id": "cohort-analysis",
+      "revisions": [
+        {
+          "overview": {
+            "schema_version": "heartwood.planning-overview.v1",
+            "prediction": {
+              "schema_version": "heartwood.workload-prediction.v1",
+              "project_context_id": "launch-synthetic-1",
+              "prediction": {
+                "record_id": "cohort-prediction",
+                "revision": 1
+              },
+              "plan": {
+                "record_id": "cohort-analysis",
+                "revision": 1
+              },
+              "created_at": "2026-07-01T00:00:00Z",
+              "elements": [
+                {
+                  "element_id": "exploration",
+                  "kind": "exploration",
+                  "description": "Bounded interactive exploration of the synthetic cohort extract",
+                  "runtime_profile_ref": "synthetic-exploration-small",
+                  "quantities": [
+                    {
+                      "metric": "duration",
+                      "unit": "seconds",
+                      "expected": "7200",
+                      "lower": "3600",
+                      "upper": "10800",
+                      "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+                    }
+                  ],
+                  "assumptions": [
+                    "One interactive session; the researcher stops it after at most three hours."
+                  ],
+                  "evidence_ids": [
+                    "researcher-scope"
+                  ]
+                },
+                {
+                  "element_id": "batch",
+                  "kind": "batch",
+                  "description": "Bootstrap resampling batch over the synthetic cohort",
+                  "runtime_profile_ref": "synthetic-batch-small",
+                  "quantities": [
+                    {
+                      "metric": "tasks",
+                      "unit": "count",
+                      "expected": "200",
+                      "lower": null,
+                      "upper": null,
+                      "uncertainty": "Fixed by the analysis design."
+                    },
+                    {
+                      "metric": "duration_per_task",
+                      "unit": "seconds",
+                      "expected": "300",
+                      "lower": "240",
+                      "upper": "450",
+                      "uncertainty": "Measured on a ten-task synthetic sample; larger inputs may take longer."
+                    },
+                    {
+                      "metric": "retry_allowance",
+                      "unit": "count",
+                      "expected": "20",
+                      "lower": null,
+                      "upper": null,
+                      "uncertainty": "Allowance for failed tasks; actual retries are unknown."
+                    }
+                  ],
+                  "assumptions": [
+                    "Each task reads the same synthetic extract.",
+                    "Tasks run independently on the declared runtime profile."
+                  ],
+                  "evidence_ids": [
+                    "sample-run"
+                  ]
+                },
+                {
+                  "element_id": "inference",
+                  "kind": "inference",
+                  "description": "Model-assisted summaries of the batch results",
+                  "runtime_profile_ref": "synthetic-coder",
+                  "quantities": [
+                    {
+                      "metric": "input_tokens",
+                      "unit": "tokens",
+                      "expected": "2000000",
+                      "lower": "1500000",
+                      "upper": "3000000",
+                      "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+                    },
+                    {
+                      "metric": "output_tokens",
+                      "unit": "tokens",
+                      "expected": "200000",
+                      "lower": "100000",
+                      "upper": "300000",
+                      "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+                    }
+                  ],
+                  "assumptions": [
+                    "Model synthetic-coder through the platform's managed inference route.",
+                    "About forty summary requests of fifty thousand input tokens each."
+                  ],
+                  "evidence_ids": [
+                    "researcher-scope"
+                  ]
+                }
+              ],
+              "assumptions": [
+                "Synthetic data only."
+              ],
+              "uncertainty": "Batch duration depends on input sizes not yet measured at full scale.",
+              "evidence": [
+                {
+                  "evidence_id": "researcher-scope",
+                  "project_context_id": "launch-synthetic-1",
+                  "kind": "researcher-input",
+                  "reference": "project://notes/plan-scope",
+                  "description": "Researcher-supplied scope and session limits.",
+                  "observed_at": "2026-07-01T00:00:00Z",
+                  "content_sha256": null
+                },
+                {
+                  "evidence_id": "sample-run",
+                  "project_context_id": "launch-synthetic-1",
+                  "kind": "sample-run",
+                  "reference": "project://results/sample-run",
+                  "description": "Ten-task synthetic sample on the small batch profile.",
+                  "observed_at": "2026-07-01T00:00:00Z",
+                  "content_sha256": null
+                }
+              ],
+              "supersedes": null
+            },
+            "estimates": [
+              {
+                "schema_version": "heartwood.platform-estimate.v1",
+                "project_context_id": "launch-synthetic-1",
+                "estimate_id": "est-fd5a28fae8fd16a5",
+                "scope": "plan",
+                "prediction": {
+                  "record_id": "cohort-prediction",
+                  "revision": 1
+                },
+                "plan": {
+                  "record_id": "cohort-analysis",
+                  "revision": 1
+                },
+                "created_at": "2026-07-01T00:00:00Z",
+                "valid_until": "2026-07-01T01:00:00Z",
+                "total": {
+                  "denomination": {
+                    "kind": "currency",
+                    "unit": "USD"
+                  },
+                  "coverage": "complete",
+                  "expected": "24.7",
+                  "lower": "18.54",
+                  "upper": "37.05",
+                  "limitations": []
+                },
+                "covered_element_ids": [
+                  "exploration",
+                  "batch",
+                  "inference"
+                ],
+                "element_estimates": [
+                  {
+                    "element_ids": [
+                      "exploration"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "3.6",
+                      "lower": "1.8",
+                      "upper": "5.4",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  },
+                  {
+                    "element_ids": [
+                      "batch"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "19.8",
+                      "lower": "15.84",
+                      "upper": "29.7",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  },
+                  {
+                    "element_ids": [
+                      "inference"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "1.3",
+                      "lower": "0.9",
+                      "upper": "1.95",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  }
+                ],
+                "pricing_assumptions": [
+                  "Synthetic list prices; no discounts or commitments apply."
+                ],
+                "exclusions": [],
+                "focus_evidence": [
+                  {
+                    "specification_version": "1.5-draft",
+                    "dataset": "SKU Price",
+                    "reference": "synthetic-price-sheet",
+                    "draft_revision": "005a30566a754db4e0f346d20c7063daba579080",
+                    "content_sha256": "af92ebe7d3a10ad19135621469a9e62e4bc04bc33a5680762973b6c6a32419e4"
+                  }
+                ]
+              },
+              {
+                "schema_version": "heartwood.platform-estimate.v1",
+                "project_context_id": "launch-synthetic-1",
+                "estimate_id": "est-bd37e0f0de714af2",
+                "scope": "elements",
+                "prediction": {
+                  "record_id": "cohort-prediction",
+                  "revision": 1
+                },
+                "plan": {
+                  "record_id": "cohort-analysis",
+                  "revision": 1
+                },
+                "created_at": "2026-07-01T00:00:00Z",
+                "valid_until": "2026-07-01T01:00:00Z",
+                "total": {
+                  "denomination": {
+                    "kind": "currency",
+                    "unit": "USD"
+                  },
+                  "coverage": "complete",
+                  "expected": "19.8",
+                  "lower": "15.84",
+                  "upper": "29.7",
+                  "limitations": []
+                },
+                "covered_element_ids": [
+                  "batch"
+                ],
+                "element_estimates": [
+                  {
+                    "element_ids": [
+                      "batch"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "19.8",
+                      "lower": "15.84",
+                      "upper": "29.7",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  }
+                ],
+                "pricing_assumptions": [
+                  "Synthetic list prices; no discounts or commitments apply."
+                ],
+                "exclusions": [],
+                "focus_evidence": [
+                  {
+                    "specification_version": "1.5-draft",
+                    "dataset": "SKU Price",
+                    "reference": "synthetic-price-sheet",
+                    "draft_revision": "005a30566a754db4e0f346d20c7063daba579080",
+                    "content_sha256": "af92ebe7d3a10ad19135621469a9e62e4bc04bc33a5680762973b6c6a32419e4"
+                  }
+                ]
+              }
+            ],
+            "operation_sets": [],
+            "researcher_decisions": [],
+            "authorizations": [],
+            "budgets": [
+              {
+                "schema_version": "heartwood.budget-observation.v1",
+                "project_context_id": "launch-synthetic-1",
+                "budget_id": "budget-compute",
+                "observed_at": "2026-07-01T00:00:00Z",
+                "denomination": {
+                  "kind": "currency",
+                  "unit": "USD"
+                },
+                "allocated": "50",
+                "reserved": "0",
+                "spent": "40",
+                "available": "10",
+                "constraints": [
+                  "Reported availability does not reserve funds or admit work."
+                ],
+                "limitations": [],
+                "platform_record_ref": "synthetic-budget:budget-compute:2"
+              },
+              {
+                "schema_version": "heartwood.budget-observation.v1",
+                "project_context_id": "launch-synthetic-1",
+                "budget_id": "budget-inference",
+                "observed_at": "2026-07-01T00:00:00Z",
+                "denomination": {
+                  "kind": "currency",
+                  "unit": "USD"
+                },
+                "allocated": "20",
+                "reserved": "5",
+                "spent": "2",
+                "available": "13",
+                "constraints": [
+                  "Reported availability does not reserve funds or admit work."
+                ],
+                "limitations": [],
+                "platform_record_ref": "synthetic-budget:budget-inference:1"
+              }
+            ],
+            "operations": []
+          },
+          "elements": [
+            {
+              "element_id": "exploration",
+              "kind": "exploration",
+              "runtime_profile_ref": "synthetic-exploration-small",
+              "review": "requires-review",
+              "approved_in": null,
+              "platform": "not-requested"
+            },
+            {
+              "element_id": "batch",
+              "kind": "batch",
+              "runtime_profile_ref": "synthetic-batch-small",
+              "review": "requires-review",
+              "approved_in": null,
+              "platform": "not-requested"
+            },
+            {
+              "element_id": "inference",
+              "kind": "inference",
+              "runtime_profile_ref": "synthetic-coder",
+              "review": "requires-review",
+              "approved_in": null,
+              "platform": "not-requested"
+            }
+          ],
+          "estimates": [
+            {
+              "estimate_id": "est-fd5a28fae8fd16a5",
+              "state": "current",
+              "budget_changed": true
+            },
+            {
+              "estimate_id": "est-bd37e0f0de714af2",
+              "state": "current",
+              "budget_changed": true
+            }
+          ]
+        },
+        {
+          "overview": {
+            "schema_version": "heartwood.planning-overview.v1",
+            "prediction": {
+              "schema_version": "heartwood.workload-prediction.v1",
+              "project_context_id": "launch-synthetic-1",
+              "prediction": {
+                "record_id": "cohort-prediction",
+                "revision": 2
+              },
+              "plan": {
+                "record_id": "cohort-analysis",
+                "revision": 2
+              },
+              "created_at": "2026-07-01T00:00:00Z",
+              "elements": [
+                {
+                  "element_id": "exploration",
+                  "kind": "exploration",
+                  "description": "Bounded interactive exploration of the synthetic cohort extract",
+                  "runtime_profile_ref": "synthetic-exploration-small",
+                  "quantities": [
+                    {
+                      "metric": "duration",
+                      "unit": "seconds",
+                      "expected": "7200",
+                      "lower": "3600",
+                      "upper": "10800",
+                      "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+                    }
+                  ],
+                  "assumptions": [
+                    "One interactive session; the researcher stops it after at most three hours."
+                  ],
+                  "evidence_ids": [
+                    "researcher-scope"
+                  ]
+                },
+                {
+                  "element_id": "batch",
+                  "kind": "batch",
+                  "description": "Bootstrap resampling batch over the synthetic cohort on GPU nodes",
+                  "runtime_profile_ref": "synthetic-batch-gpu",
+                  "quantities": [
+                    {
+                      "metric": "tasks",
+                      "unit": "count",
+                      "expected": "200",
+                      "lower": null,
+                      "upper": null,
+                      "uncertainty": "Fixed by the analysis design."
+                    },
+                    {
+                      "metric": "duration_per_task",
+                      "unit": "seconds",
+                      "expected": "20",
+                      "lower": "15",
+                      "upper": "30",
+                      "uncertainty": "Projected from the CPU sample with an assumed fifteenfold speedup; not measured."
+                    },
+                    {
+                      "metric": "retry_allowance",
+                      "unit": "count",
+                      "expected": "20",
+                      "lower": null,
+                      "upper": null,
+                      "uncertainty": "Allowance for failed tasks; actual retries are unknown."
+                    }
+                  ],
+                  "assumptions": [
+                    "Each task reads the same synthetic extract.",
+                    "Tasks run independently on one synthetic GPU each."
+                  ],
+                  "evidence_ids": [
+                    "sample-run"
+                  ]
+                },
+                {
+                  "element_id": "inference",
+                  "kind": "inference",
+                  "description": "Model-assisted summaries of the batch results",
+                  "runtime_profile_ref": "synthetic-coder",
+                  "quantities": [
+                    {
+                      "metric": "input_tokens",
+                      "unit": "tokens",
+                      "expected": "2000000",
+                      "lower": "1500000",
+                      "upper": "3000000",
+                      "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+                    },
+                    {
+                      "metric": "output_tokens",
+                      "unit": "tokens",
+                      "expected": "200000",
+                      "lower": "100000",
+                      "upper": "300000",
+                      "uncertainty": "Researcher estimate from a synthetic pilot; no calibrated confidence."
+                    }
+                  ],
+                  "assumptions": [
+                    "Model synthetic-coder through the platform's managed inference route.",
+                    "About forty summary requests of fifty thousand input tokens each."
+                  ],
+                  "evidence_ids": [
+                    "researcher-scope"
+                  ]
+                }
+              ],
+              "assumptions": [
+                "Synthetic data only."
+              ],
+              "uncertainty": "Batch duration depends on input sizes not yet measured at full scale.",
+              "evidence": [
+                {
+                  "evidence_id": "researcher-scope",
+                  "project_context_id": "launch-synthetic-1",
+                  "kind": "researcher-input",
+                  "reference": "project://notes/plan-scope",
+                  "description": "Researcher-supplied scope and session limits.",
+                  "observed_at": "2026-07-01T00:00:00Z",
+                  "content_sha256": null
+                },
+                {
+                  "evidence_id": "sample-run",
+                  "project_context_id": "launch-synthetic-1",
+                  "kind": "sample-run",
+                  "reference": "project://results/sample-run",
+                  "description": "Ten-task synthetic sample on the small batch profile.",
+                  "observed_at": "2026-07-01T00:00:00Z",
+                  "content_sha256": null
+                }
+              ],
+              "supersedes": {
+                "record_id": "cohort-prediction",
+                "revision": 1
+              }
+            },
+            "estimates": [
+              {
+                "schema_version": "heartwood.platform-estimate.v1",
+                "project_context_id": "launch-synthetic-1",
+                "estimate_id": "est-95f588caaccd6582",
+                "scope": "plan",
+                "prediction": {
+                  "record_id": "cohort-prediction",
+                  "revision": 2
+                },
+                "plan": {
+                  "record_id": "cohort-analysis",
+                  "revision": 2
+                },
+                "created_at": "2026-07-01T00:00:00Z",
+                "valid_until": "2026-07-01T01:00:00Z",
+                "total": {
+                  "denomination": {
+                    "kind": "currency",
+                    "unit": "USD"
+                  },
+                  "coverage": "complete",
+                  "expected": "22.5",
+                  "lower": "15.9",
+                  "upper": "33.75",
+                  "limitations": []
+                },
+                "covered_element_ids": [
+                  "exploration",
+                  "batch",
+                  "inference"
+                ],
+                "element_estimates": [
+                  {
+                    "element_ids": [
+                      "exploration"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "3.6",
+                      "lower": "1.8",
+                      "upper": "5.4",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  },
+                  {
+                    "element_ids": [
+                      "batch"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "17.6",
+                      "lower": "13.2",
+                      "upper": "26.4",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  },
+                  {
+                    "element_ids": [
+                      "inference"
+                    ],
+                    "cost": {
+                      "denomination": {
+                        "kind": "currency",
+                        "unit": "USD"
+                      },
+                      "coverage": "complete",
+                      "expected": "1.3",
+                      "lower": "0.9",
+                      "upper": "1.95",
+                      "limitations": []
+                    },
+                    "included_in_total": true
+                  }
+                ],
+                "pricing_assumptions": [
+                  "Synthetic list prices; no discounts or commitments apply."
+                ],
+                "exclusions": [],
+                "focus_evidence": [
+                  {
+                    "specification_version": "1.5-draft",
+                    "dataset": "SKU Price",
+                    "reference": "synthetic-price-sheet",
+                    "draft_revision": "005a30566a754db4e0f346d20c7063daba579080",
+                    "content_sha256": "af92ebe7d3a10ad19135621469a9e62e4bc04bc33a5680762973b6c6a32419e4"
+                  }
+                ]
+              }
+            ],
+            "operation_sets": [],
+            "researcher_decisions": [],
+            "authorizations": [],
+            "budgets": [
+              {
+                "schema_version": "heartwood.budget-observation.v1",
+                "project_context_id": "launch-synthetic-1",
+                "budget_id": "budget-compute",
+                "observed_at": "2026-07-01T00:00:00Z",
+                "denomination": {
+                  "kind": "currency",
+                  "unit": "USD"
+                },
+                "allocated": "50",
+                "reserved": "0",
+                "spent": "40",
+                "available": "10",
+                "constraints": [
+                  "Reported availability does not reserve funds or admit work."
+                ],
+                "limitations": [],
+                "platform_record_ref": "synthetic-budget:budget-compute:2"
+              },
+              {
+                "schema_version": "heartwood.budget-observation.v1",
+                "project_context_id": "launch-synthetic-1",
+                "budget_id": "budget-inference",
+                "observed_at": "2026-07-01T00:00:00Z",
+                "denomination": {
+                  "kind": "currency",
+                  "unit": "USD"
+                },
+                "allocated": "20",
+                "reserved": "5",
+                "spent": "2",
+                "available": "13",
+                "constraints": [
+                  "Reported availability does not reserve funds or admit work."
+                ],
+                "limitations": [],
+                "platform_record_ref": "synthetic-budget:budget-inference:1"
+              }
+            ],
+            "operations": []
+          },
+          "elements": [
+            {
+              "element_id": "exploration",
+              "kind": "exploration",
+              "runtime_profile_ref": "synthetic-exploration-small",
+              "review": "requires-review",
+              "approved_in": null,
+              "platform": "not-requested"
+            },
+            {
+              "element_id": "batch",
+              "kind": "batch",
+              "runtime_profile_ref": "synthetic-batch-gpu",
+              "review": "requires-review",
+              "approved_in": null,
+              "platform": "not-requested"
+            },
+            {
+              "element_id": "inference",
+              "kind": "inference",
+              "runtime_profile_ref": "synthetic-coder",
+              "review": "requires-review",
+              "approved_in": null,
+              "platform": "not-requested"
+            }
+          ],
+          "estimates": [
+            {
+              "estimate_id": "est-95f588caaccd6582",
+              "state": "current",
+              "budget_changed": true
+            }
+          ]
+        }
+      ],
+      "comparison": [
+        {
+          "prediction": {
+            "record_id": "cohort-prediction",
+            "revision": 1
+          },
+          "estimate_id": "est-fd5a28fae8fd16a5",
+          "runtime_profile_refs": [
+            "synthetic-batch-small",
+            "synthetic-coder",
+            "synthetic-exploration-small"
+          ],
+          "total": {
+            "denomination": {
+              "kind": "currency",
+              "unit": "USD"
+            },
+            "coverage": "complete",
+            "expected": "24.7",
+            "lower": "18.54",
+            "upper": "37.05",
+            "limitations": []
+          },
+          "state": "current",
+          "comparable": true
+        },
+        {
+          "prediction": {
+            "record_id": "cohort-prediction",
+            "revision": 2
+          },
+          "estimate_id": "est-95f588caaccd6582",
+          "runtime_profile_refs": [
+            "synthetic-batch-gpu",
+            "synthetic-coder",
+            "synthetic-exploration-small"
+          ],
+          "total": {
+            "denomination": {
+              "kind": "currency",
+              "unit": "USD"
+            },
+            "coverage": "complete",
+            "expected": "22.5",
+            "lower": "15.9",
+            "upper": "33.75",
+            "limitations": []
+          },
+          "state": "current",
+          "comparable": true
+        }
+      ]
+    }
+  ],
+  "outcomes": [
+    {
+      "code": "HW-PLAN-004",
+      "title": "A platform budget changed after the estimate",
+      "next_action": "Compare the plan with the current budgets and revise it if needed.",
+      "subject": "estimate est-95f588caaccd6582",
+      "diagnostic": "HW-PLAN-004: A platform budget changed after the estimate"
+    }
+  ]
+}

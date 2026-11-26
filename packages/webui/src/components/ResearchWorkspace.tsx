@@ -35,6 +35,7 @@ import {
   ExperimentRunList,
   ProjectExperimentRecords,
 } from "./ExperimentRecords";
+import { ProjectPlanning } from "./ProjectPlanning";
 import { displaySafeText, SafeMarkdown } from "./SafeMarkdown";
 import { VerificationEnvironment } from "./VerificationEnvironment";
 
@@ -46,6 +47,9 @@ interface ResearchWorkspaceProps {
     | "getExperimentRecords"
     | "getExperimentExport"
     | "getVerificationEnvironment"
+    | "getPlanning"
+    | "refreshPlanning"
+    | "requestPlanEstimate"
   >;
   sessionId: string;
   projection: SessionProjection;
@@ -71,6 +75,7 @@ export const ResearchWorkspace = (props: ResearchWorkspaceProps) => (
         ]),
       ])}
     />
+    <ProjectPlanning client={props.client} />
   </>
 );
 

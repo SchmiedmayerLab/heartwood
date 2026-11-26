@@ -47,6 +47,10 @@ _GATEWAY_METHODS = {
     ("GET", "/research/workflows"): "research_workflows",
     ("GET", "/research/experiments"): "experiment_records",
     ("GET", "/research/experiments/export"): "export_experiments",
+    ("GET", "/project/planning"): "planning",
+    ("POST", "/project/planning/refresh"): "refresh_planning",
+    ("POST", "/project/planning/predictions"): "record_plan_prediction",
+    ("POST", "/project/planning/estimates"): "request_plan_estimate",
     ("GET", "/settings/specialists"): "specialist_settings",
     ("POST", "/settings/skills/inspect"): "inspect_skill",
     ("POST", "/settings/skills/install"): "install_skill",
@@ -54,6 +58,12 @@ _GATEWAY_METHODS = {
     ("POST", "/settings/skills/local/inspect"): "inspect_local_skill",
     ("POST", "/settings/skills/local/install"): "install_local_skill",
     ("DELETE", "/settings/skills/{name}"): "remove_skill",
+    ("GET", "/settings/mcp-servers"): "mcp_server_settings",
+    ("POST", "/settings/mcp-servers"): "add_mcp_server",
+    ("DELETE", "/settings/mcp-servers/{server_id}"): "disconnect_mcp_server",
+    ("POST", "/settings/mcp-servers/{server_id}/test"): "test_mcp_server",
+    ("PUT", "/settings/mcp-servers/{server_id}/tools"): "select_mcp_tools",
+    ("PUT", "/settings/mcp-servers/{server_id}/enabled"): "set_mcp_server_enabled",
     ("GET", "/settings/models/artifacts"): "model_artifacts",
     ("POST", "/settings/models/catalog"): "discover_models",
     ("POST", "/settings/models/subscription/device"): "start_subscription_device_login",
@@ -81,7 +91,15 @@ _GATEWAY_METHODS = {
     ("GET", "/sessions/{session_id}/projection"): "session_projection",
     ("GET", "/sessions/{session_id}/events"): "session_snapshot",
 }
+_PREDICTION = json.loads(
+    (
+        Path(__file__).parents[3]
+        / "fixtures/synthetic/platform-contract/research-plan.r1.prediction.json"
+    ).read_text("utf-8")
+)
 _REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
+    "WorkloadPrediction": _PREDICTION,
+    "PlanningEstimateRequest": {"prediction": _PREDICTION["prediction"], "scope": "plan"},
     "SessionCreateRequest": {},
     "SessionRenameRequest": {"title": "Synthetic study"},
     "ActionReviewRequest": {"mode": "review-all"},
@@ -114,6 +132,14 @@ _REQUEST_EXAMPLES: dict[str, dict[str, Any]] = {
     "SubscriptionDevicePollRequest": {"connection_id": "synthetic", "login_id": "synthetic"},
     "ModelSelectionRequest": {"profile_id": "synthetic"},
     "SkillInspectRequest": {"name": "synthetic"},
+    "McpServerAddRequest": {
+        "server_id": "synthetic",
+        "label": "Synthetic service",
+        "url": "https://research.example.org/mcp",
+    },
+    "McpServerTestRequest": {},
+    "McpServerToolsRequest": {"tools": [{"name": "lookup", "sha256": "a" * 64}]},
+    "McpServerEnabledRequest": {"enabled": True},
     "SkillInstallRequest": {
         "name": "synthetic",
         "approved": True,
@@ -238,7 +264,7 @@ def test_openapi_resolves_references_and_declares_path_parameters() -> None:
                 if parameter["in"] == "path" and parameter["required"]
             }
             assert declared == set(re.findall(r"{([^}]+)}", path))
-    assert len(operation_ids) == len(set(operation_ids)) == 55
+    assert len(operation_ids) == len(set(operation_ids)) == 65
     for schema in document["components"]["schemas"].values():
         Draft202012Validator.check_schema(schema)
     for reference in _references(document):

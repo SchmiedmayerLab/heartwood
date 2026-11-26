@@ -15,12 +15,19 @@ import {
   Plus,
   Settings,
   UsersRound,
+  PlugZap,
 } from "lucide-react";
 import type { SessionSummary } from "../types";
 import { HeartwoodMark } from "./HeartwoodMark";
 
 export type UtilityPanel =
-  "action-review" | "activity" | "settings" | "skills" | "specialists" | null;
+  | "action-review"
+  | "activity"
+  | "services"
+  | "settings"
+  | "skills"
+  | "specialists"
+  | null;
 
 interface SessionRailProps {
   activePanel: UtilityPanel;
@@ -112,6 +119,14 @@ export const SessionRailContent = ({
       >
         <BookOpen size={17} />
         Skills
+      </Button>
+      <Button
+        aria-pressed={activePanel === "services"}
+        variant={activePanel === "services" ? "secondary" : "ghost"}
+        onClick={() => onOpenPanel("services")}
+      >
+        <PlugZap size={17} />
+        Research services
       </Button>
       <Button
         aria-pressed={activePanel === "activity"}

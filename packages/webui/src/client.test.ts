@@ -1405,6 +1405,31 @@ describe("GatewayClient", () => {
     },
   );
 
+  it("reads and updates planning through the deployment prefix", async () => {
+    const body = { offered: true };
+    const fetch = vi
+      .fn<(url: string, init: RequestInit) => Promise<Response>>()
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify(body))),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = new GatewayClient("/proxy/8767");
+    const request = {
+      prediction: { record_id: "cohort-prediction", revision: 2 },
+      scope: "plan" as const,
+    };
+
+    await expect(client.getPlanning()).resolves.toEqual(body);
+    await expect(client.refreshPlanning()).resolves.toEqual(body);
+    await expect(client.requestPlanEstimate(request)).resolves.toEqual(body);
+    expect(fetch.mock.calls.map(([url, init]) => [url, init.method])).toEqual([
+      ["/proxy/8767/project/planning", undefined],
+      ["/proxy/8767/project/planning/refresh", "POST"],
+      ["/proxy/8767/project/planning/estimates", "POST"],
+    ]);
+    expect(fetch.mock.calls[2]?.[1].body).toBe(JSON.stringify(request));
+  });
+
   it("preserves gateway status for non-JSON error responses", async () => {
     vi.stubGlobal(
       "fetch",

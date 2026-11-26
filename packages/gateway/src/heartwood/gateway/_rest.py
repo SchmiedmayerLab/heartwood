@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from heartwood.core_adapter import (
     CommandConflictError,
@@ -27,6 +27,7 @@ from heartwood.gateway._gateway import SessionGateway
 from heartwood.gateway._lifecycle import GatewayClosedError
 from heartwood.gateway._local_model_contract import DEFAULT_LOCAL_CONTEXT_WINDOW
 from heartwood.gateway._local_models import ModelRepositoryError
+from heartwood.gateway._mcp_policy import McpServerError
 from heartwood.gateway._model_artifacts import ModelArtifactError
 from heartwood.gateway._model_catalog import ModelCatalogError
 from heartwood.gateway._model_settings import (
@@ -34,6 +35,11 @@ from heartwood.gateway._model_settings import (
     model_profile_from_mapping,
 )
 from heartwood.gateway._model_transfer import ModelTransferError
+from heartwood.gateway._platform_planning import (
+    PlanningNotOfferedError,
+    PlanningRecordError,
+    PlanningStateError,
+)
 from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import ProjectConfigError
@@ -44,10 +50,13 @@ from heartwood.gateway._workspace import WorkspaceInspectionError
 from heartwood.persistence import NativeLockUnavailableError
 from heartwood.schemas import (
     ActionReviewRequest,
-    ApiRequest,
     CustomLocalModelDownloadRequest,
     JsonValue,
     LocalModelImportRequest,
+    McpServerAddRequest,
+    McpServerEnabledRequest,
+    McpServerTestRequest,
+    McpServerToolsRequest,
     ModelCatalogRequest,
     ModelConnectRequest,
     ModelDownloadRequest,
@@ -67,8 +76,17 @@ from heartwood.schemas import (
     SkillRefreshRequest,
     SubscriptionDeviceLoginRequest,
     SubscriptionDevicePollRequest,
+    WorkloadPrediction,
 )
+from heartwood.schemas.planning import PlanningEstimateRequest
 from heartwood.session import SessionCommand, validate_session_id
+
+_PLANNING_ROUTES = {
+    ("GET", ("project", "planning")): "view",
+    ("POST", ("project", "planning", "refresh")): "refresh",
+    ("POST", ("project", "planning", "predictions")): "prediction",
+    ("POST", ("project", "planning", "estimates")): "estimate",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +254,8 @@ class RestGateway:
                 )
             except ValueError:
                 return _error(409, "Experiment records require integrity recovery")
+        if (request.method, parts) in _PLANNING_ROUTES:
+            return self._handle_planning(_PLANNING_ROUTES[request.method, parts], request.body)
         if parts == ("settings", "specialists") and request.method == "GET":
             try:
                 specialist_settings = self.gateway.specialist_settings()
@@ -258,6 +278,14 @@ class RestGateway:
             except SkillSettingsError as error:
                 return _error(422, error)
             return RestResponse(status_code=200, body=_json_object(skill_settings))
+        if parts == ("settings", "mcp-servers") and request.method == "GET":
+            return RestResponse(
+                status_code=200, body=_json_object(self.gateway.mcp_server_settings())
+            )
+        if parts == ("settings", "mcp-servers") and request.method == "POST":
+            return self._handle_mcp_server_add(body=request.body)
+        if len(parts) >= 3 and parts[:2] == ("settings", "mcp-servers"):
+            return self._handle_mcp_server(parts[2], parts[3:], request)
         if parts == ("settings", "models", "artifacts") and request.method == "GET":
             return RestResponse(status_code=200, body=_json_object(self.gateway.model_artifacts()))
         if parts == ("settings", "models", "catalog") and request.method == "POST":
@@ -432,6 +460,30 @@ class RestGateway:
                 },
             )
         return _error(405, "method is not allowed for gateway route")
+
+    def _handle_planning(self, route: str, body: str) -> RestResponse:
+        try:
+            if route == "view":
+                projection = self.gateway.planning()
+            elif route == "refresh":
+                projection = self.gateway.refresh_planning()
+            elif route == "prediction":
+                prediction = _request_body(WorkloadPrediction, body)
+                if isinstance(prediction, RestResponse):
+                    return prediction
+                projection = self.gateway.record_plan_prediction(prediction)
+            else:
+                estimate = _request_body(PlanningEstimateRequest, body)
+                if isinstance(estimate, RestResponse):
+                    return estimate
+                projection = self.gateway.request_plan_estimate(estimate)
+        except PlanningNotOfferedError as error:
+            return _error(404, error)
+        except PlanningRecordError as error:
+            return _error(422, error)
+        except PlanningStateError as error:
+            return _error(409, error)
+        return RestResponse(status_code=200, body=_json_object(projection.model_dump(mode="json")))
 
     def _handle_session_creation(self, *, body: str) -> RestResponse:
         payload = _request_body(SessionCreateRequest, body or "{}")
@@ -622,6 +674,43 @@ class RestGateway:
             return _error(422, error)
         return RestResponse(status_code=200, body=_json_object(model_settings))
 
+    def _handle_mcp_server_add(self, *, body: str) -> RestResponse:
+        payload = _request_body(McpServerAddRequest, body)
+        if isinstance(payload, RestResponse):
+            return payload
+        try:
+            settings = self.gateway.add_mcp_server(payload)
+        except (CredentialStoreError, ProjectConfigError, McpServerError) as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(settings))
+
+    def _handle_mcp_server(
+        self, server_id: str, rest: tuple[str, ...], request: RestRequest
+    ) -> RestResponse:
+        try:
+            if rest == () and request.method == "DELETE":
+                result: object = self.gateway.disconnect_mcp_server(server_id)
+            elif rest == ("test",) and request.method == "POST":
+                test = _request_body(McpServerTestRequest, request.body)
+                if isinstance(test, RestResponse):
+                    return test
+                result = self.gateway.test_mcp_server(server_id, test)
+            elif rest == ("tools",) and request.method == "PUT":
+                tools = _request_body(McpServerToolsRequest, request.body)
+                if isinstance(tools, RestResponse):
+                    return tools
+                result = self.gateway.select_mcp_tools(server_id, tools)
+            elif rest == ("enabled",) and request.method == "PUT":
+                enabled = _request_body(McpServerEnabledRequest, request.body)
+                if isinstance(enabled, RestResponse):
+                    return enabled
+                result = self.gateway.set_mcp_server_enabled(server_id, enabled)
+            else:
+                return _error(404, "unknown research service route")
+        except (CredentialStoreError, ProjectConfigError, McpServerError) as error:
+            return _error(422, error)
+        return RestResponse(status_code=200, body=_json_object(result))
+
     def _handle_skill_inspection(self, *, body: str) -> RestResponse:
         payload = _request_body(SkillInspectRequest, body)
         if isinstance(payload, RestResponse):
@@ -682,7 +771,7 @@ class RestGateway:
         return RestResponse(status_code=200, body=_json_object(skill_settings))
 
 
-def _request_body[RequestT: ApiRequest](
+def _request_body[RequestT: BaseModel](
     request_type: type[RequestT],
     body: str,
 ) -> RequestT | RestResponse:
@@ -724,6 +813,15 @@ def _optional_int(value: str | None) -> int | None:
 
 
 def _error(status_code: int, reason: object) -> RestResponse:
+    if isinstance(reason, McpServerError):
+        return RestResponse(
+            status_code=status_code, body={"code": reason.code, "error": reason.detail}
+        )
+    if isinstance(reason, ModelCatalogError) and reason.code is not None:
+        # Clients show the stable code the same way as the terminal message does.
+        return RestResponse(
+            status_code=status_code, body={"code": reason.code, "error": reason.detail}
+        )
     return RestResponse(status_code=status_code, body={"error": str(reason)})
 
 

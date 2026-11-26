@@ -38,7 +38,7 @@ Without a terminal on standard input and without `--prompt`, it prints usage and
 | Command | Purpose |
 |---|---|
 | `heartwood doctor [--json] [--deployment MANIFEST]` | Report project, model, credential, policy, and compute readiness without changing state; with a deployment manifest, report its effective policy and source, and check the selected model route and stored review mode against that policy |
-| `heartwood setup` | Configure a model connection without opening a conversation |
+| `heartwood setup [--deployment MANIFEST]` | Configure a model connection without opening a conversation; with a deployment manifest, configure the deployment's project and also list the model connections the manifest declares |
 | `heartwood actions` | Show the review mode in use, the default, its scope, and why any mode is unavailable |
 | `heartwood specialists` | List research specialists and any disabled role with its reason |
 
@@ -46,7 +46,8 @@ Without a terminal on standard input and without `--prompt`, it prints usage and
 
 | Option | Meaning |
 |---|---|
-| `--model-source SOURCE` | `heartwood`, `stanford-ai-api-gateway`, `openai-subscription`, `openai`, `anthropic`, or `custom` |
+| `--model-source SOURCE` | `heartwood`, `stanford-ai-api-gateway`, `openai-subscription`, `openai`, `anthropic`, `custom`, or with `--deployment` a connection identifier the manifest declares. Setup stops with [`HW-SETUP-004`](troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) for a source the platform does not offer |
+| `--deployment MANIFEST` | Absolute operator manifest whose project and model connections to configure |
 | `--model-id ID` | Exact model identifier reported by the service |
 | `--base-url URL` | Base URL of another compatible model service |
 | `--remember-credential` | Store the provider API key in the system credential store when one is available |
@@ -105,6 +106,23 @@ Without a deployment manifest, a selection lasts until the process exits and is 
 Use `--approve-license` only in automation that already presented and approved the same bundle.
 `heartwood models forget openai-subscription` signs the current operating-system user out of ChatGPT; the project keeps its non-secret profile until another connection is selected.
 See [Move a Model Into an Offline Environment](../models/offline.md) for the bundle workflow.
+
+## Research Services
+
+| Command | Purpose |
+|---|---|
+| `heartwood services list` | Servers, token state, reviewed tools and the tools enabled for new sessions |
+| `heartwood services add --label TEXT [--token-stdin] [--remember] ID URL` | Add a server at a deployment-approved origin; it stays disabled |
+| `heartwood services test [--token-stdin] [--remember] ID` | Connect and list the server's tools; listing authorizes nothing |
+| `heartwood services select [--token-stdin] [--remember] ID [TOOL=SHA256 ...]` | Select tools with the definition digests printed by `services test`; no tool removes the selection |
+| `heartwood services enable ID`, `disable ID` | Offer or stop offering the selected tools to new sessions |
+| `heartwood services disconnect ID` | Remove the server and forget its token; completed remote work is not undone |
+
+Pass `--deployment PATH` before the subcommand, as in `heartwood services --deployment PATH list`; its `mcp_destinations` list the allowed origins, and without it every server is refused.
+`--token-stdin` reads the bearer token from the first line of standard input.
+A token entered with `test` or `select` is kept only after the server accepted it, and `select` without tools keeps none; `add` keeps its token without contacting the server.
+Without `--remember`, it lasts only for the command; keep it with `--remember` where the deployment allows the system credential store, or have the operator set the variable named by `services list`.
+Tools reach sessions started by `heartwood gateway serve --deployment` with an isolated worker; see [Research MCP Servers](../operate/platform-contract.md#research-mcp-servers).
 
 ## Skills
 

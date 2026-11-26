@@ -139,7 +139,8 @@ An automatic decision that cannot be completed, for example because required che
 ## Outside Authorization
 
 An outside operation is a request to a platform service prepared through a trusted embedding's adapter; a result release discloses that operation's result to the worker and its model route.
-No outside-service adapter ships with Heartwood, and `heartwood gateway serve` installs none, so a deployment offers outside operations only through an embedding launcher that supplies one, as the native qualification fixture does.
+`heartwood gateway serve` installs the adapter for [research MCP servers](platform-contract.md#research-mcp-servers) when the deployment manifest lists MCP destinations and a worker.
+Other services need an embedding launcher that supplies an adapter, as the native qualification fixture does.
 Each needs its own researcher decision bound to the exact proposal digest, including the request, input digests, destination, worker identity, policy revision and a five-minute validity interval.
 No review mode decides either one.
 
@@ -151,7 +152,7 @@ The [Platform Contract](platform-contract.md#outside-operation-admission) define
 
 ## Credentials
 
-Provider credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs and audit exports.
+Provider and research service credentials are excluded from project configuration, browser storage, command arguments, durable session events, logs and audit exports.
 Heartwood resolves process values, operator bindings, optional system-keyring entries or platform identity only for named provider calls.
 Provider failures are reduced to a typed category before persistence, so raw provider exception text is not retained.
 Custom compatible-service tokens remain process-only; project-scoped keyring persistence is explicit and requires a working system credential store.

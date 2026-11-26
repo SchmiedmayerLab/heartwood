@@ -48,6 +48,7 @@ The file never contains a raw credential.
 | `[audit]` | Optional `signer_profile` approved by the deployment signer registry |
 | `[models]` | Non-secret model profiles and `active_profile` |
 | `[[connections]]` | Platform-provided model connections |
+| `[[mcp_servers]]` | Research MCP servers: identifier, label, URL, enabled state and the reviewed definition of each selected tool; no credential |
 | `[local_model]` | Selected Heartwood-managed model artifact with its path, source, license, runtime settings, and qualification record |
 | `[policy]` | Project policy; see [Policy Fields](#policy-fields) |
 
@@ -146,6 +147,8 @@ checkpoint_evidence = false
 | `[requirements]` | Optional; `isolated_worker` and `checkpoint_evidence` set to `true` stop the launch with `HW-DEPLOY-003` unless the manifest configures `[worker]` or required-mode `[evidence]` |
 | `[worker]` | Optional managed worker; see [Managed Worker](#managed-worker) |
 | `[evidence]` | Optional automatic checkpointing; requires `[worker]`; see [Configure Managed Evidence](../operate/audit-checkpoints.md#configure-managed-evidence) |
+| `[model_connections]`, `[model_metadata]` | Optional platform model connections and model declarations; see [Model Connections](#model-connections) |
+| `[[mcp_destinations]]` | Optional origins for research MCP servers; requires `[worker]`; see [MCP Destinations](#mcp-destinations) |
 
 Any other key, at any level, is rejected.
 The manifest must be an absolute path that traverses no symbolic link, lie outside the research directory and the state root, be a regular file of at most 64 KiB owned by root or the gateway user, and not be writable by group or others.
@@ -210,9 +213,85 @@ Membership in the socket's group grants Docker control-plane authority; never ad
 The registered sandbox gateway must report the two [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) native revocation depends on; the gateway version is not configured and does not satisfy the check.
 The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
 
+### Model Connections
+
+The `[model_connections]` table supplies platform model connections in the [`heartwood.model-connections.v1`](../operate/platform-contract.md#contract-artifacts) format.
+The optional `[model_metadata]` table declares the protocol, limits and tool support of models in the `heartwood.platform-model-metadata.v1` format, for model aliases the OpenHands model table does not recognize.
+
+```toml
+[model_connections]
+schema_version = "heartwood.model-connections.v1"
+
+[[model_connections.connections]]
+connection_id = "research-models"
+label = "Research Models"
+protocol = "openai-compatible"
+model_prefix = "openai/"
+credential_kind = "file"
+api_key_file = "/run/secrets/research-models-key"
+base_url = "https://models.example.invalid/v1"
+catalog_endpoint = "https://models.example.invalid/v1/models"
+policy_endpoint = "https://models.example.invalid/v1/chat/completions"
+
+[model_connections.connections.data_handling]
+destination = "institution-managed"
+retention_authority = "institution"
+route = "Institution inference gateway, then the providers it routes to"
+
+[model_metadata]
+schema_version = "heartwood.platform-model-metadata.v1"
+
+[[model_metadata.models]]
+connection_id = "research-models"
+model_id = "research-coder"
+protocols = ["chat"]
+context_window_tokens = 131072
+max_output_tokens = 8192
+supports_tool_calls = true
+```
+
+Each connection appears with the institution-managed providers in browser settings, `heartwood models list` and `heartwood setup --deployment MANIFEST`.
+A connection identifier must use lowercase letters, digits, hyphens and underscores and must differ from Heartwood's built-in connection and model-source identifiers, because it becomes the project's model source once a model is selected.
+A declared model with a supported protocol is selected at the `supervised` capability tier.
+The gateway validates connections as described in [Inference](../operate/platform-contract.md#inference).
+Each declaration must name a connection in `[model_connections]` and declare its model once, and `[model_metadata]` requires `[model_connections]`.
+`[policy]` must still permit each connection's endpoints, credential reference and data destination.
+Credential references name a variable or mounted file; the manifest never holds the credential.
+An invalid table stops the launch with [`HW-DEPLOY-001`](troubleshooting.md#hw-deploy-001-deployment-manifest-is-unavailable-or-invalid).
+
+### MCP Destinations
+
+Each `[[mcp_destinations]]` entry allows one origin for [research MCP servers](../operate/platform-contract.md#research-mcp-servers).
+
+```toml
+[[mcp_destinations]]
+service_id = "research-catalog"
+origin = "https://catalog.example.invalid"
+tools = ["find_records"]
+observation_tool = "get_operation"
+max_result_bytes = 16384
+call_timeout_seconds = 30
+private_address = false
+```
+
+| Key | Requirement |
+|---|---|
+| `service_id` | The service identity the service reports in its operation observations; it also names the token binding |
+| `origin` | Scheme, host and optional port only; HTTPS except on loopback; no private address without `private_address`, and never a link-local or metadata address |
+| `tools` | Tools researchers may select on servers at this origin |
+| `observation_tool` | Read-only tool that reports an operation by `project_id` and `operation_id`, and an identifier it never received as `failed`; not selectable |
+| `max_result_bytes` | Optional result limit from 1024 to 32768 bytes; default 16384 |
+| `call_timeout_seconds` | Optional limit for one request, from 1 to 300 seconds; default 30 |
+| `private_address` | Optional; `true` permits an RFC 1918 or unique local address for this exact origin, such as a cluster service; default `false`. Link-local and metadata addresses stay refused, and HTTPS stays required except on loopback. |
+
+Each origin may appear once, and the section requires `[worker]`.
+Without the section, every research MCP server is refused.
+A changed destination list counts as a manifest change beyond its policy, which stops dispatch until the next start.
+
 ## Credential Binding Names
 
 Built-in connections use binding names such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `STANFORD_AI_API_KEY`, and `HEARTWOOD_CUSTOM_MODEL_API_KEY`.
+A research MCP server's token uses `HEARTWOOD_MCP_TOKEN_` followed by its destination's `service_id` in upper case, with other characters than letters and digits as underscores, such as `HEARTWOOD_MCP_TOKEN_RESEARCH_CATALOG`.
 A binding name identifies a secret source; it is not the secret.
 On a workstation, a value saved with `--remember-credential` is stored in the operating-system keyring under a project-scoped account.
 Containers and platform adapters use process entry, a mounted secret file, or a managed identity.

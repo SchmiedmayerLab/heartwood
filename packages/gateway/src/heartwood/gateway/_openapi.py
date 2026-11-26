@@ -24,6 +24,7 @@ from heartwood.gateway._access import CAPABILITY_HEADER, LaunchRequest, LaunchRe
 from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.gateway._session_projection import SessionProjection
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.usage import ProjectUsageSummary
 from heartwood.schemas.workflows import WorkflowCatalog
@@ -31,7 +32,7 @@ from heartwood.session import SessionCommand
 
 
 class GatewayError(TypedDict):
-    """An application error, optionally carrying a stable ingress diagnostic code."""
+    """An application error, optionally carrying a stable diagnostic code."""
 
     error: str
     code: NotRequired[str]
@@ -168,6 +169,32 @@ _REST_OPERATIONS = (
         "GET", "/research/experiments/export", "Export experiment records", ExperimentExport
     ),
     _Operation(
+        "GET", "/project/planning", "Inspect research plans and budgets", PlanningProjection
+    ),
+    _Operation(
+        "POST",
+        "/project/planning/refresh",
+        "Read the platform's planning capabilities and budgets",
+        PlanningProjection,
+        errors=(404, 409),
+    ),
+    _Operation(
+        "POST",
+        "/project/planning/predictions",
+        "Record a workload prediction revision",
+        PlanningProjection,
+        api.WorkloadPrediction,
+        errors=(404, 409, 422),
+    ),
+    _Operation(
+        "POST",
+        "/project/planning/estimates",
+        "Request a platform estimate",
+        PlanningProjection,
+        PlanningEstimateRequest,
+        errors=(404, 409, 422),
+    ),
+    _Operation(
         "GET",
         "/settings/specialists",
         "Inspect specialist settings",
@@ -219,6 +246,51 @@ _REST_OPERATIONS = (
         "Remove a Skill",
         api.SkillSettingsResponse,
         errors=(422,),
+    ),
+    _Operation(
+        "GET",
+        "/settings/mcp-servers",
+        "Inspect research MCP servers",
+        api.McpServersResponse,
+    ),
+    _Operation(
+        "POST",
+        "/settings/mcp-servers",
+        "Add a research MCP server",
+        api.McpServersResponse,
+        api.McpServerAddRequest,
+        errors=(422,),
+    ),
+    _Operation(
+        "DELETE",
+        "/settings/mcp-servers/{server_id}",
+        "Disconnect a research MCP server",
+        api.McpServersResponse,
+        errors=(404, 422),
+    ),
+    _Operation(
+        "POST",
+        "/settings/mcp-servers/{server_id}/test",
+        "Test a research MCP server and list its tools",
+        api.McpServerTestResponse,
+        api.McpServerTestRequest,
+        errors=(404, 422),
+    ),
+    _Operation(
+        "PUT",
+        "/settings/mcp-servers/{server_id}/tools",
+        "Select reviewed research MCP tools",
+        api.McpServersResponse,
+        api.McpServerToolsRequest,
+        errors=(404, 422),
+    ),
+    _Operation(
+        "PUT",
+        "/settings/mcp-servers/{server_id}/enabled",
+        "Enable or disable a research MCP server",
+        api.McpServersResponse,
+        api.McpServerEnabledRequest,
+        errors=(404, 422),
     ),
     _Operation(
         "GET",

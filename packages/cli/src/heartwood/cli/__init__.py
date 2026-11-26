@@ -47,6 +47,7 @@ from heartwood.cli._interactive import (
 from heartwood.cli._launch import LaunchOptions, run_launch
 from heartwood.cli._models import _handle_models, configure_models
 from heartwood.cli._progress import _run_with_progress
+from heartwood.cli._services import configure_services, handle_services
 from heartwood.cli._setup import (
     _STARTUP_ACTIVITY,
     _configure_setup,
@@ -257,6 +258,9 @@ def _build_parser() -> argparse.ArgumentParser:
         )
     )
 
+    configure_services(
+        subparsers.add_parser("services", help="Manage research MCP servers for worker sessions.")
+    )
     configure_skills(
         subparsers.add_parser("skills", help="Browse and manage verified Agent Skills.")
     )
@@ -464,6 +468,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json, deployment_path=args.deployment)
+    if args.command == "services":
+        return _handle_services(parser, project=project, args=args)
     if args.command == "experiments":
         return handle_experiments(args, project=project)
     if args.command == "usage":
@@ -645,6 +651,26 @@ def _main(argv: Sequence[str] | None = None) -> int:
             )
         parser.print_help()
         return 0
+    finally:
+        gateway.stop()
+
+
+def _handle_services(
+    parser: argparse.ArgumentParser, *, project: ProjectContext, args: argparse.Namespace
+) -> int:
+    # Destinations come only from the operator manifest; without one every server is refused.
+    deployment = (
+        load_project_deployment(args.deployment, project_root=project.root)
+        if args.deployment is not None
+        else None
+    )
+    gateway = (
+        SessionGateway(deployment=deployment)
+        if deployment is not None
+        else SessionGateway(project=project)
+    )
+    try:
+        return handle_services(parser, gateway, args)
     finally:
         gateway.stop()
 
@@ -859,7 +885,10 @@ def _interactive_chat(gateway: SessionGateway, *, session_id: str, plain: bool =
         from heartwood.cli._tui import run_terminal
 
         return run_terminal(session)
-    print(f"Heartwood agent. Commands: {command_help()}.")
+    print(
+        "Heartwood agent. Commands: "
+        f"{command_help(planning=gateway.platform_planning is not None)}."
+    )
     displayed_group_id: str | None = None
     while True:
         try:

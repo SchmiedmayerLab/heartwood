@@ -20,6 +20,9 @@ export type PythonEnvironmentSnapshot = Api.PythonEnvironmentSnapshot;
 export type ExperimentCollection = Api.ExperimentCollection;
 export type ExperimentExport = Api.ExperimentExport;
 export type ExperimentRun = Api.ExperimentRun;
+export type PlanningProjection = Api.PlanningProjection;
+export type PlanningEstimateRequest = Api.PlanningEstimateRequest;
+export type EstimatedCost = Api.EstimatedCost;
 export type WorkflowRequest =
   | Api.WorkflowStart
   | Api.WorkflowTransition
@@ -77,6 +80,11 @@ export type {
   LocalModelQualification,
   LocalModelRuntime,
   LocalModelTier,
+  McpServerAddRequest,
+  McpServerEnabledRequest,
+  McpServerTestRequest,
+  McpServerToolsRequest,
+  McpToolChoice,
   ModelCatalogRequest,
   ModelConnectRequest,
   ModelDownloadRequest,
@@ -141,6 +149,9 @@ export type ModelSnapshot = Api.ModelSnapshotResponse;
 export type ModelArtifacts = Api.ModelArtifactsResponse;
 export type ModelTransfer = Api.ModelTransferResponse;
 export type ModelTransferPlan = Api.ModelTransferPlanResponse;
+export type McpServer = Api.McpServerResponse;
+export type McpServers = Api.McpServersResponse;
+export type McpServerTest = Api.McpServerTestResponse;
 export type SkillSummary = Api.SkillSummaryResponse;
 export type SkillSettings = Api.SkillSettingsResponse;
 export type SpecialistRole = Api.SpecialistRoleResponse;

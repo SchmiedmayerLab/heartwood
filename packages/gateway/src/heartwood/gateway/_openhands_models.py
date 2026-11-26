@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from importlib import import_module
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 
 class OpenHandsModelError(RuntimeError):
@@ -56,19 +56,25 @@ def model_uses_responses_api(model: str) -> bool:
         raise OpenHandsModelError("OpenHands model capabilities are unavailable") from error
 
 
-def request_endpoint_for_model(model: str, default_endpoint: str) -> str:
-    """Align policy with OpenHands' Chat Completions or Responses request path."""
+def request_endpoint_for_model(
+    model: str,
+    default_endpoint: str,
+    *,
+    api_mode: Literal["chat", "responses"] | None = None,
+) -> str:
+    """Align policy with OpenHands' Chat Completions or Responses request path.
+
+    An explicit API mode selects the path as OpenHands does; otherwise its model table does.
+    """
     chat_suffix = "/chat/completions"
     responses_suffix = "/responses"
-    if default_endpoint.endswith(chat_suffix):
-        return (
-            f"{default_endpoint.removesuffix(chat_suffix)}{responses_suffix}"
-            if model_uses_responses_api(model)
-            else default_endpoint
-        )
-    if default_endpoint.endswith(responses_suffix) and not model_uses_responses_api(model):
-        return f"{default_endpoint.removesuffix(responses_suffix)}{chat_suffix}"
-    return default_endpoint
+    if not default_endpoint.endswith((chat_suffix, responses_suffix)):
+        return default_endpoint
+    uses_responses = (
+        api_mode == "responses" if api_mode is not None else model_uses_responses_api(model)
+    )
+    base = default_endpoint.removesuffix(chat_suffix).removesuffix(responses_suffix)
+    return f"{base}{responses_suffix if uses_responses else chat_suffix}"
 
 
 def openai_subscription_models() -> tuple[str, ...]:

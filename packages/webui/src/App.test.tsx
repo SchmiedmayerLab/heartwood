@@ -264,6 +264,22 @@ const localModelChoice = (
   ...overrides,
 });
 
+const noMcpServers = (): Awaited<
+  ReturnType<HeartwoodClient["getMcpServers"]>
+> => ({
+  availability: "unavailable",
+  unavailable_reason: "research services run only in isolated worker sessions",
+  unavailable_code: "HW-MCP-004",
+  destinations: [],
+  credential_store: {
+    backends: ["process"],
+    default_backend: "process",
+    persistence_available: false,
+    persistence_description: "Current Heartwood process only",
+  },
+  servers: [],
+});
+
 class FakeClient implements HeartwoodClient {
   commands: SessionCommand[] = [];
   auditExportCalls = 0;
@@ -1091,6 +1107,18 @@ class FakeClient implements HeartwoodClient {
     });
   }
 
+  getPlanning(): ReturnType<HeartwoodClient["getPlanning"]> {
+    return Promise.resolve({ offered: false });
+  }
+
+  refreshPlanning(): ReturnType<HeartwoodClient["refreshPlanning"]> {
+    return Promise.reject(new Error("Platform planning is not offered"));
+  }
+
+  requestPlanEstimate(): ReturnType<HeartwoodClient["requestPlanEstimate"]> {
+    return Promise.reject(new Error("Platform planning is not offered"));
+  }
+
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary> {
     return Promise.resolve({
       ...bundledSkill(),
@@ -1151,6 +1179,30 @@ class FakeClient implements HeartwoodClient {
   removeSkill(name: string): Promise<SkillSettings> {
     this.installedSkill = `removed:${name}`;
     return Promise.resolve({ skills: [bundledSkill()] });
+  }
+
+  getMcpServers(): ReturnType<HeartwoodClient["getMcpServers"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  addMcpServer(): ReturnType<HeartwoodClient["addMcpServer"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  testMcpServer(): ReturnType<HeartwoodClient["testMcpServer"]> {
+    return Promise.reject(new Error("No research services configured"));
+  }
+
+  selectMcpTools(): ReturnType<HeartwoodClient["selectMcpTools"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  setMcpServerEnabled(): ReturnType<HeartwoodClient["setMcpServerEnabled"]> {
+    return Promise.resolve(noMcpServers());
+  }
+
+  disconnectMcpServer(): ReturnType<HeartwoodClient["disconnectMcpServer"]> {
+    return Promise.resolve(noMcpServers());
   }
 
   saveModelProfile(profile: ModelProfileDraft): Promise<ModelSettings> {
@@ -2559,6 +2611,11 @@ describe("App", () => {
       "Models available from Research AI Service",
     );
     expect(modelSelect).toHaveTextContent("Provider Coder");
+    expect(
+      screen.getByText(
+        "Context window: 128,000 tokens; native tool calls: supported",
+      ),
+    ).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Use model" }));
     await waitFor(() =>
       expect(client.modelConnectionRequest).toEqual({

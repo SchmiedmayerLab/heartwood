@@ -33,6 +33,8 @@ Codes use `HW-{AREA}-{NNN}`.
 | `COMPUTE` | Scheduler allocation, GPU, memory, and scratch storage |
 | `TERRA` | Terra-specific project and compute requirements |
 | `WORKER` | Managed worker sandbox gateway |
+| `MCP` | Research MCP server destinations, credentials and tool review |
+| `PLAN` | Research planning against platform budgets and estimates |
 | `ENV` | Readiness checks without a more specific code |
 
 Numbers `001` to `899` are assigned in sequence within an area and never reused; `900` to `999` are generic fallbacks.
@@ -96,6 +98,13 @@ Select a route the policy permits, or ask the operator, who alone can change a d
 The deployment manifest's `allowed_action_review_modes` no longer lists the project's stored review mode, so Heartwood applies Review Every Action, which every policy permits.
 Each session records the change before its next model dispatch.
 Select any mode the deployment permits in `/permissions`, browser settings or with `--review-mode`; the selection replaces the stored mode and ends the warning.
+
+### `HW-SETUP-004`: Capability Is Not Offered on This Platform
+
+The project's stored model connection, or a requested one, is not offered by the detected platform.
+Setup lists only the connections the platform offers, so this happens when a project moves to another platform or a client names a connection directly.
+`heartwood doctor` and the browser readiness view report a stored connection, and the terminal, browser and notebook refuse a requested one with this code.
+Run `heartwood setup` or open browser settings and select a connection this platform offers.
 
 ## Models and Credentials
 
@@ -188,8 +197,9 @@ Inspect the session replay and Activity & audit, then continue in a new session.
 
 ### `HW-AGENT-008`: Model Provider Authentication Failed
 
-The model provider rejected the credential configured for the active connection.
-Open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.
+The model provider rejected the credential configured for the active connection, during a task or while listing models.
+For a platform connection, the deployment supplies the credential; ask the operator to renew it.
+Otherwise open model settings, update the credential through the supported secret mechanism, and validate the connection before retrying.
 
 ### `HW-AGENT-009`: Model Provider Quota Exhausted
 
@@ -204,11 +214,13 @@ Wait briefly and retry the task without repeating any action whose outcome is un
 ### `HW-AGENT-011`: Model Configuration Is Invalid
 
 The selected model, endpoint, or provider configuration cannot serve the requested task.
-Open model settings, correct the connection, and validate it before retrying.
+Model setup reports the same code when the model is no longer in the connection's model list or the deployment declares no protocol Heartwood supports for it.
+A withdrawn model stays selected until you choose another; Heartwood does not replace it.
+Open model settings, choose or correct the connection, and validate it before retrying.
 
 ### `HW-AGENT-012`: Model Provider Is Unavailable
 
-The configured model service could not be reached or returned a temporary availability failure.
+The configured model service could not be reached or returned a temporary availability failure, during a task or while listing models.
 Check the connection and provider status, then retry the task.
 
 ### `HW-AGENT-013`: Session Runtime Is Incompatible
@@ -278,6 +290,49 @@ In a source checkout, run `git submodule update --init` and discard local change
 Restoring tracked files does not remove git-ignored files inside a Skill folder, such as `__pycache__/` or `.DS_Store`, and any extra file changes the Skill's digest; list them with `git -C vendor/heartwood-skills status --ignored skills` and delete them.
 In a native installation, reinstall the same release; in a container, use the published image unchanged.
 A warning names entries in the bundled Skill directory that are not part of the release, such as `.DS_Store`; Heartwood never loads them, and you can delete them.
+
+## Research Services
+
+Research MCP servers are managed in the browser's Research services panel or with `heartwood services`.
+[Research MCP Servers](../operate/platform-contract.md#research-mcp-servers) describes how calls are reviewed.
+
+### `HW-MCP-001`: Research Service Destination Is Not Allowed
+
+The server URL is not at an origin listed in the deployment manifest's `mcp_destinations`, or it resolves to a private, link-local or metadata address.
+Without a deployment manifest, or with no listed destinations, every research service is refused.
+Plain HTTP is accepted only on loopback.
+A private address, such as a cluster service, is accepted only when the operator sets `private_address` for that destination; link-local and metadata addresses never are.
+Ask the operator to add the exact origin, or use a server at an approved origin.
+
+### `HW-MCP-002`: Research Service Credential Is Expired
+
+The token held for the server has an expiry time in the past, so the gateway does not send it.
+Enter a current token when you test the server again.
+Heartwood reads the expiry from the token; the service still verifies the token itself.
+
+### `HW-MCP-003`: Research Service Tool Changed After Review
+
+A tool's definition differs from the definition you reviewed.
+A test that lists a changed definition removes the tool from the enabled set, a pending call to it is not sent, and a selection with an outdated digest is refused.
+Test the server, compare the listed tools, and select them again.
+
+### `HW-MCP-004`: Research Services Require an Isolated Worker
+
+Research service calls run only in sessions with an isolated worker, because each call needs outside review.
+Start the gateway with a deployment manifest that configures an isolated worker and lists MCP destinations.
+`heartwood services` can still manage the servers of such a deployment.
+
+### `HW-MCP-005`: Research Service Is Unavailable or Refused the Request
+
+The server did not answer, refused the credential, redirected to another origin, or did not list its tools.
+Heartwood follows redirects only within the same origin.
+The MCP client reports a refused credential and an unavailable service the same way, so check both the URL and the token.
+
+### `HW-MCP-006`: Research Service Tool Cannot Be Selected
+
+The deployment does not list the tool for the server's origin, or the tool does not accept a `project_id` and an `operation_id`.
+Heartwood supplies both values so the service can scope the call and recognize a repeated operation.
+Tools without them cannot be selected.
 
 ## Deployment Manifests
 
@@ -364,6 +419,48 @@ Inspect its record and continue in a new session.
 | `review-outside-effects` without an admitted sandbox worker | Available only under a deployment manifest with a `[worker]` table; a local launch never runs one, so the mode is always unavailable there |
 | Reduced review outside a sandbox worker with a credential-backed model route | See [`HW-CREDENTIAL-002`](#hw-credential-002-model-credential-isolation-is-unavailable) |
 | A session is active and the selection asks less often than the current mode | Finish or resolve the active session work; a stricter mode is always accepted |
+
+## Research Planning
+
+These conditions appear in the planning overview of the terminal, browser and notebook.
+The platform owns budgets, prices and admission; see [Launch Context, Budgets and Estimates](../operate/platform-contract.md#launch-context-budgets-and-estimates).
+
+### `HW-PLAN-001`: Platform Planning Information Is Unavailable
+
+The platform's planning service could not be reached, did not accept the gateway's credential, or returned a response that did not match the contract or the launch context.
+Plans, estimates and budget observations recorded earlier stay visible with their observation times.
+Retry later; when the condition persists, ask the platform administrator to check the planning service and the credential the deployment issued for it.
+
+### `HW-PLAN-002`: The Platform Refused the Planning Request
+
+The planning service answered, and refused the request.
+Typical causes are a platform project the gateway's identity may not use, or a prediction the service does not accept.
+Heartwood does not show the service's text.
+Confirm the project's platform access with the platform administrator.
+
+### `HW-PLAN-003`: The Platform Estimate Has Expired
+
+The latest estimate for these plan elements is past its validity time.
+An expired estimate stays in the plan's history.
+Request a new estimate before approving work; the platform decides admission with its current prices and budgets either way.
+
+### `HW-PLAN-004`: A Platform Budget Changed After the Estimate
+
+A budget observation read after the estimate differs from the one read before it, for example because other work spent from the same allocation or an administrator changed it.
+Compare the plan with the current budgets and revise it if needed.
+A reported balance never guarantees that the platform admits work.
+
+### `HW-PLAN-005`: The Platform Estimate Is Incomplete
+
+The estimate's coverage is partial or unknown, for example because the platform does not estimate one kind of work or has no price for a runtime profile.
+The elements without a complete cost show their limitations; their cost stays unknown.
+Review them before approving work, or revise the plan to a configuration the platform estimates.
+
+### `HW-PLAN-006`: The Platform Denied an Operation
+
+The platform denied or revoked authorization for a reviewed proposal, or denied an operation, even if the researcher approved it.
+Revise the plan, or request more allocation through the platform's own process.
+Heartwood never resubmits a denied operation automatically.
 
 ## Managed Compute
 

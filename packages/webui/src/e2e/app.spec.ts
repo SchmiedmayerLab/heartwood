@@ -426,6 +426,29 @@ test("shows an outside operation review without expansion at high zoom", async (
   await expectNoAccessibilityViolations(page);
 });
 
+for (const colorScheme of ["light", "dark"] as const)
+  test(`shows research services on a phone in ${colorScheme} mode`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/?configured-model=1");
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Open sessions").click();
+    await page.getByRole("button", { name: "Research services" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Research services" }),
+    ).toBeVisible();
+    await expect(page.getByText("Synthetic catalog")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Enabled for new sessions: catalog__find_records_aaaaaaaa",
+      ),
+    ).toBeVisible();
+    await expect(page.locator("body")).toHaveJSProperty("scrollWidth", 390);
+    await expectNoAccessibilityViolations(page);
+  });
+
 test("confirms a new project before creating private state", async ({
   page,
 }) => {
@@ -1225,6 +1248,62 @@ const installGatewayRoutes = async (page: Page): Promise<void> => {
           compatibility_reason: null,
           unexpected_content: [],
           installable: false,
+        },
+      ],
+    }),
+  );
+  await page.route("**/settings/mcp-servers", (route) =>
+    json(route, {
+      availability: "available",
+      unavailable_reason: null,
+      unavailable_code: null,
+      destinations: [
+        {
+          service_id: "synthetic-catalog",
+          origin: "https://catalog.example.org",
+          tools: ["find_records"],
+          max_result_bytes: 16384,
+          credential_binding: "HEARTWOOD_MCP_TOKEN_SYNTHETIC_CATALOG",
+          private_address: false,
+        },
+      ],
+      credential_store: {
+        backends: ["process"],
+        default_backend: "process",
+        persistence_available: false,
+        persistence_description: "Credentials remain in this server process.",
+      },
+      servers: [
+        {
+          server_id: "catalog",
+          label: "Synthetic catalog",
+          url: "https://catalog.example.org/mcp",
+          origin: "https://catalog.example.org",
+          service_id: "synthetic-catalog",
+          destination: "allowed",
+          enabled: true,
+          authentication: {
+            status: "valid",
+            expires_at: "2026-12-01T00:00:00Z",
+          },
+          tools: [
+            {
+              name: "find_records",
+              worker_tool: "catalog__find_records_aaaaaaaa",
+              description: "Find synthetic records.",
+              sha256: "a".repeat(64),
+              parameters: "{}",
+              definition: '{"name":"find_records"}',
+              annotations: {
+                read_only: true,
+                destructive: false,
+                idempotent: true,
+                open_world: false,
+              },
+              status: "ready",
+            },
+          ],
+          enabled_tools: ["catalog__find_records_aaaaaaaa"],
         },
       ],
     }),

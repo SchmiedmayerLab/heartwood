@@ -26,6 +26,8 @@ from heartwood.core_adapter.worker_attempts import (
 )
 
 if TYPE_CHECKING:
+    from openhands.sdk.tool.client_tool import ClientToolSpec
+
     from heartwood.gateway._model_settings import ModelProfile
     from heartwood.gateway._openhands_sdk import WorkerConversationContext
     from heartwood.gateway._project import ProjectContext
@@ -44,6 +46,8 @@ class WorkerSessionRequest:
     policy: PolicyProfile
     skills: SkillManager
     specialists: SpecialistCatalog
+    # Client tools the gateway binds to this session's outside service, such as MCP tools.
+    client_tools: tuple[ClientToolSpec, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

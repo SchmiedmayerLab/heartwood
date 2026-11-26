@@ -49,7 +49,7 @@ An operator starts the gateway with `heartwood gateway serve --deployment` and a
 With a `[worker]` section, each session runs in a sandboxed OpenShell worker on an operator-controlled Linux Docker host.
 The worker receives selected read-only inputs and verified Skills; protected state, provider credentials, the Docker socket and signing keys stay outside it.
 Operations outside the worker, and the release of their results to it, are authorized only by a researcher decision bound to the exact content reviewed, in every review mode.
-No production outside-service adapter ships and `gateway serve` installs none; these operations are available only through an embedding launcher.
+With MCP destinations in the manifest, research MCP servers are called this way; other services need an embedding launcher.
 See [Projects and Private State](start/project.md#operator-bound-external-state) and [Security and Controlled Data](operate/security.md).
 
 ## Support Levels

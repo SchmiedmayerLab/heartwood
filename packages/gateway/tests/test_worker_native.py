@@ -379,10 +379,21 @@ def test_native_plan_captures_only_trusted_client_tool_specifications(
     original = spec.model_dump(mode="json")
     factory = native_worker_plan_factory(settings, project, client_tools=(spec,))
     spec.parameters["properties"]["record"]["type"] = "number"
-    factory(cast(WorkerSessionRequest, SimpleNamespace(project=project)))
+    factory(cast(WorkerSessionRequest, SimpleNamespace(project=project, client_tools=())))
     captured = attempt.call_args.kwargs["client_tools"]
     assert len(captured) == 1
     assert captured[0].model_dump(mode="json") == original
+    # A session's own client tools, such as its MCP tools, follow the launcher's fixed ones.
+    session_spec = spec.model_copy(update={"name": "session_tool"})
+    factory(
+        cast(WorkerSessionRequest, SimpleNamespace(project=project, client_tools=(session_spec,)))
+    )
+    assert [item.name for item in attempt.call_args.kwargs["client_tools"]] == [
+        "propose_record",
+        "session_tool",
+    ]
+    with pytest.raises(WorkerAttemptError, match="unique"):
+        factory(cast(WorkerSessionRequest, SimpleNamespace(project=project, client_tools=(spec,))))
     with pytest.raises(ValueError, match="names must be unique"):
         native_worker_plan_factory(settings, project, client_tools=(spec, spec))
 

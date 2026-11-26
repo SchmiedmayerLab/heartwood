@@ -152,7 +152,6 @@ from heartwood.gateway._model_catalog import (
     ProviderModel,
     custom_model_connection,
     custom_model_connection_requires_token,
-    load_model_connections,
     model_connections_from_mapping,
 )
 from heartwood.gateway._model_settings import (
@@ -189,6 +188,18 @@ from heartwood.gateway._model_transfer import (
     import_model_bundle,
     inspect_model_bundle,
 )
+from heartwood.gateway._planning_presentation import planning_lines
+from heartwood.gateway._platform_planning import (
+    McpPlanningClient,
+    PlanningDiscovery,
+    PlanningNotOfferedError,
+    PlanningRecordError,
+    PlanningServiceClient,
+    PlanningServiceError,
+    PlanningStateError,
+    PlatformPlanning,
+    PlatformPlanningBinding,
+)
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_activity import ProjectOwnershipError
 from heartwood.gateway._project_config import (
@@ -200,6 +211,7 @@ from heartwood.gateway._project_config import (
 )
 from heartwood.gateway._readiness import (
     MODEL_SOURCE_OPTIONS,
+    CapabilityNotOfferedError,
     DeploymentReadiness,
     ModelSourceOption,
     ReadinessCheck,
@@ -286,6 +298,7 @@ __all__ = [
     "AuditCheckpointVerification",
     "AuditIntegrityError",
     "AuditVerification",
+    "CapabilityNotOfferedError",
     "CheckpointSigner",
     "CheckpointSignerError",
     "CheckpointSignerProfile",
@@ -322,6 +335,7 @@ __all__ = [
     "LocalModelRuntime",
     "LocalModelSelection",
     "ManagedRuntimeActivity",
+    "McpPlanningClient",
     "ModelArtifact",
     "ModelArtifactCatalog",
     "ModelArtifactError",
@@ -354,6 +368,14 @@ __all__ = [
     "NativeLockUnavailableError",
     "OpenHandsSdkBackend",
     "OpenHandsSdkError",
+    "PlanningDiscovery",
+    "PlanningNotOfferedError",
+    "PlanningRecordError",
+    "PlanningServiceClient",
+    "PlanningServiceError",
+    "PlanningStateError",
+    "PlatformPlanning",
+    "PlatformPlanningBinding",
     "ProjectConfig",
     "ProjectConfigError",
     "ProjectConfigStore",
@@ -448,7 +470,6 @@ __all__ = [
     "inspect_project_deployment",
     "load_checkpoint_signer_registry",
     "load_model_artifact_catalog",
-    "load_model_connections",
     "load_model_snapshot_catalog",
     "load_project_deployment",
     "local_checkpoint_signer_socket",
@@ -473,6 +494,7 @@ __all__ = [
     "persist_deployment_profile",
     "plan_local_context_window",
     "plan_startup",
+    "planning_lines",
     "project_session",
     "retained_approval",
     "retained_approval_notice",

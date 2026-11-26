@@ -24,6 +24,7 @@ from pydantic import (
 from heartwood.schemas._connections import DataDestination, RetentionAuthority
 from heartwood.schemas._records import ActionReviewMode, CapabilityTier
 from heartwood.schemas.experiments import ExperimentCollection, ExperimentExport
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.workflows import WorkflowCatalog, WorkflowRequest
 
@@ -45,6 +46,20 @@ __all__ = [
     "LocalModelChoiceResponse",
     "LocalModelImportRequest",
     "LocalModelImportResponse",
+    "McpAuthenticationResponse",
+    "McpCapabilityResponse",
+    "McpDestinationResponse",
+    "McpDiscoveredToolResponse",
+    "McpSelectedToolResponse",
+    "McpServerAddRequest",
+    "McpServerEnabledRequest",
+    "McpServerResponse",
+    "McpServerTestRequest",
+    "McpServerTestResponse",
+    "McpServerToolsRequest",
+    "McpServersResponse",
+    "McpToolAnnotationsResponse",
+    "McpToolChoice",
     "ModelArtifactResponse",
     "ModelArtifactsResponse",
     "ModelCatalogEntryResponse",
@@ -302,6 +317,44 @@ class SkillRefreshRequest(ApiRequest):
     """Refresh all configured signed sources or one named source."""
 
     source_id: str | None = Field(default=None, min_length=1)
+
+
+class McpServerAddRequest(ApiRequest):
+    """Add one research MCP server at a deployment-approved origin."""
+
+    server_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,23}$")
+    label: str = Field(min_length=1, max_length=80)
+    url: str = Field(min_length=1, max_length=512)
+    token: str | None = None
+    remember: bool = False
+
+
+class McpServerTestRequest(ApiRequest):
+    """Connect to one research MCP server and list its tools."""
+
+    token: str | None = None
+    remember: bool = False
+
+
+class McpToolChoice(ApiRequest):
+    """One tool and the digest of the definition the researcher reviewed."""
+
+    name: str = Field(min_length=1, max_length=40)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class McpServerToolsRequest(ApiRequest):
+    """Select reviewed tool definitions of one research MCP server."""
+
+    tools: list[McpToolChoice] = Field(max_length=64)
+    token: str | None = None
+    remember: bool = False
+
+
+class McpServerEnabledRequest(ApiRequest):
+    """Enable or disable one research MCP server for new sessions."""
+
+    enabled: bool
 
 
 @with_config(ConfigDict(extra="forbid", strict=True))
@@ -689,6 +742,103 @@ class CredentialSettingsResponse(_ApiResponse):
     bindings: list[CredentialBindingStatusResponse]
 
 
+class McpToolAnnotationsResponse(_ApiResponse):
+    """Behavior hints a server advertises for a tool; never authorization."""
+
+    read_only: bool | None
+    destructive: bool | None
+    idempotent: bool | None
+    open_world: bool | None
+
+
+class McpAuthenticationResponse(_ApiResponse):
+    """Authentication state the gateway judges from the token it holds."""
+
+    status: Literal["missing", "valid", "expired", "unknown-expiry"]
+    expires_at: str | None
+
+
+class McpSelectedToolResponse(_ApiResponse):
+    """One researcher-selected tool and its reviewed definition digest."""
+
+    name: str
+    worker_tool: str
+    description: str
+    sha256: str
+    parameters: str
+    definition: str
+    annotations: McpToolAnnotationsResponse
+    status: Literal["ready", "changed", "missing", "disallowed", "unsupported"]
+
+
+class McpServerResponse(_ApiResponse):
+    """One research MCP server without credential values or references."""
+
+    server_id: str
+    label: str
+    url: str
+    origin: str
+    service_id: str | None
+    destination: Literal["allowed", "refused"]
+    enabled: bool
+    authentication: McpAuthenticationResponse
+    tools: list[McpSelectedToolResponse]
+    enabled_tools: list[str]
+
+
+class McpDestinationResponse(_ApiResponse):
+    """One deployment-approved origin and the tools researchers may select there."""
+
+    service_id: str
+    origin: str
+    tools: list[str]
+    max_result_bytes: int
+    credential_binding: str
+    private_address: bool
+
+
+class McpServersResponse(_ApiResponse):
+    """Research MCP servers, destinations and availability."""
+
+    availability: Literal["available", "unavailable"]
+    unavailable_reason: str | None
+    unavailable_code: str | None
+    destinations: list[McpDestinationResponse]
+    credential_store: CredentialStoreAvailabilityResponse
+    servers: list[McpServerResponse]
+
+
+class McpDiscoveredToolResponse(_ApiResponse):
+    """One tool listed by a test; listing authorizes nothing."""
+
+    name: str
+    description: str
+    sha256: str
+    parameters: str
+    definition: str
+    annotations: McpToolAnnotationsResponse
+    allowed: bool
+    accepts_operation_binding: bool
+    selected: bool
+    changed: bool
+
+
+class McpCapabilityResponse(_ApiResponse):
+    """Whether a server advertises a capability Heartwood does not use."""
+
+    advertised: bool
+    support: Literal["unsupported"]
+
+
+class McpServerTestResponse(_ApiResponse):
+    """The result of connecting to one server and listing its tools."""
+
+    server: McpServerResponse
+    tools: list[McpDiscoveredToolResponse]
+    resources: McpCapabilityResponse
+    prompts: McpCapabilityResponse
+
+
 class CredentialIsolationResponse(_ApiResponse):
     """Model-authentication isolation relative to agent tools."""
 
@@ -1037,6 +1187,9 @@ type ApiResponse = (
     | ProjectReadinessResponse
     | SessionListResponse
     | SessionSummaryResponse
+    | McpServerResponse
+    | McpServersResponse
+    | McpServerTestResponse
     | SkillSettingsResponse
     | SkillSummaryResponse
     | SpecialistSettingsResponse
@@ -1051,6 +1204,8 @@ type ApiResponse = (
 type PublicApiContract = (
     ApiResponse
     | ExperimentCollection
+    | PlanningProjection
+    | PlanningEstimateRequest
     | PythonEnvironmentSnapshot
     | ExperimentExport
     | WorkflowCatalog
@@ -1058,6 +1213,11 @@ type PublicApiContract = (
     | ActionReviewRequest
     | CustomLocalModelDownloadRequest
     | LocalModelImportRequest
+    | McpServerAddRequest
+    | McpServerEnabledRequest
+    | McpServerTestRequest
+    | McpServerToolsRequest
+    | McpToolChoice
     | ModelCatalogRequest
     | ModelConnectRequest
     | ModelDownloadRequest

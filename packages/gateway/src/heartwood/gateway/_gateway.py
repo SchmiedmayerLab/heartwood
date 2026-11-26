@@ -89,11 +89,18 @@ from heartwood.gateway._local_model_lifecycle import LocalModelLifecycle
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
 )
+from heartwood.gateway._mcp_policy import McpDestination
+from heartwood.gateway._mcp_servers import (
+    McpOutsideAdapter,
+    McpServerManager,
+    advance_outside_calls,
+)
 from heartwood.gateway._model_artifacts import (
     ModelArtifactCatalog,
     load_model_artifact_catalog,
 )
 from heartwood.gateway._model_catalog import (
+    BUILT_IN_MODEL_CONNECTIONS,
     ModelCatalog,
     ModelCatalogEntry,
     ModelCatalogError,
@@ -102,7 +109,8 @@ from heartwood.gateway._model_catalog import (
     active_model_connections,
     custom_model_connection,
     data_handling_summary,
-    load_model_connections,
+    declared_api_mode,
+    declared_input_limit,
     matching_model_connection,
     route_data_handling,
     route_policy_decision,
@@ -121,6 +129,12 @@ from heartwood.gateway._model_snapshots import (
     load_model_snapshot_catalog,
 )
 from heartwood.gateway._openhands_models import prepare_openhands_import
+from heartwood.gateway._platform_planning import (
+    PlanningNotOfferedError,
+    PlatformPlanning,
+    PlatformPlanningBinding,
+    not_offered_projection,
+)
 from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._project_activity import ProjectActivity
 from heartwood.gateway._project_config import (
@@ -132,6 +146,7 @@ from heartwood.gateway._project_config import (
     ProjectModelSettingsStore,
 )
 from heartwood.gateway._readiness import (
+    CapabilityNotOfferedError,
     DeploymentReadiness,
     EffectivePolicy,
     inspect_deployment,
@@ -174,6 +189,12 @@ from heartwood.schemas import (
     CredentialSettingsResponse,
     JsonValue,
     LocalModelImportResponse,
+    McpServerAddRequest,
+    McpServerEnabledRequest,
+    McpServersResponse,
+    McpServerTestRequest,
+    McpServerTestResponse,
+    McpServerToolsRequest,
     ModelArtifactsResponse,
     ModelCallDecision,
     ModelCatalogResponse,
@@ -194,6 +215,7 @@ from heartwood.schemas import (
     SpecialistSettingsResponse,
     StartupPlanResponse,
     SubscriptionDeviceLoginResponse,
+    WorkloadPrediction,
     WorkspaceChangesResponse,
     WorkspaceDiffResponse,
     WorkspaceFileResponse,
@@ -207,6 +229,7 @@ from heartwood.schemas.experiments import (
     ExperimentExportBinding,
 )
 from heartwood.schemas.parallel_reviews import ParallelReviewPlan
+from heartwood.schemas.planning import PlanningEstimateRequest, PlanningProjection
 from heartwood.schemas.python_environment import PythonEnvironmentSnapshot
 from heartwood.schemas.review import (
     ResearchReviewRun,
@@ -470,6 +493,8 @@ class SessionGateway:
         | None = None,
         checkpoint_evidence_factory: Callable[[str], SessionCheckpointEvidence] | None = None,
         external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
+        mcp_destinations: Sequence[McpDestination] | None = None,
+        platform_planning: PlatformPlanningBinding | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
         skill_source_registry: SkillSourceRegistry | None = None,
@@ -482,11 +507,19 @@ class SessionGateway:
     ) -> None:
         prepare_openhands_import()
         if deployment is not None:
-            if deployment_policy is not None or (
-                project is not None and project != deployment.project
+            if (
+                deployment_policy is not None
+                or model_connections is not None
+                or mcp_destinations is not None
+                or (project is not None and project != deployment.project)
             ):
-                raise ValueError("A deployment binding supplies its own project and policy")
+                raise ValueError(
+                    "A deployment binding supplies its own project, policy, model connections "
+                    "and MCP destinations"
+                )
             project, deployment_policy = deployment.project, deployment.policy
+            mcp_destinations = deployment.mcp_destinations
+            model_connections = (*BUILT_IN_MODEL_CONNECTIONS, *deployment.model_connections)
         self._deployment = deployment
         # A manifest change that cannot apply safely stops dispatch until the next start.
         self._deployment_refusal: str | None = None
@@ -514,7 +547,20 @@ class SessionGateway:
             raise ValueError("Outside services require protected state and owned native workers")
         if worker_reconciler is not None and worker_plan_factory is None:
             raise ValueError("Worker reconciliation requires managed workers")
+        if external_actions_factory is not None and mcp_destinations:
+            raise ValueError(
+                "Research MCP servers and another outside service cannot share a gateway"
+            )
         self._external_actions_factory = external_actions_factory
+        if platform_planning is not None and self.project.protected_state is None:
+            raise ValueError("Platform planning requires protected state")
+        self._planning = (
+            PlatformPlanning(
+                platform_planning, journal_path=self.project.state_root / "planning.jsonl"
+            )
+            if platform_planning is not None
+            else None
+        )
         self._worker_plan_factory = worker_plan_factory
         self._worker_reconciler = worker_reconciler
         self._worker_sessions: dict[int, ManagedWorkerSession] = {}
@@ -569,9 +615,7 @@ class SessionGateway:
             else LaunchActionSettingsStore()
         )
         self._base_model_connections = (
-            tuple(model_connections)
-            if model_connections is not None
-            else load_model_connections(None)
+            BUILT_IN_MODEL_CONNECTIONS if model_connections is None else tuple(model_connections)
         )
         self.model_catalog_service = model_catalog_service or ModelCatalogService(env=self.env)
         self._model_connections: dict[str, ModelConnection] = {}
@@ -589,6 +633,17 @@ class SessionGateway:
             env=self.env,
             use_system_keyring=env is None,
         )
+        self.mcp_servers = McpServerManager(
+            config_store=self.config_store,
+            credential_store=self.credential_store,
+            destinations=() if mcp_destinations is None else mcp_destinations,
+            # A command-line gateway manages the servers of a deployment whose sessions run
+            # in workers; it binds tools to sessions only with a worker of its own.
+            worker_available=worker_plan_factory is not None
+            or (deployment is not None and deployment.worker is not None),
+        )
+        # The research service adapter of each worker session, by service identity.
+        self._mcp_adapters: dict[int, McpOutsideAdapter] = {}
         self.subscription_provider = subscription_provider or OpenHandsOpenAISubscription()
         self.workspace_inspector = workspace_inspector or WorkspaceInspector(self.project)
         resource_root = _runtime_resource_root()
@@ -1480,6 +1535,48 @@ class SessionGateway:
         content = store.export() if store is not None else b""
         return ExperimentExport(sha256=hashlib.sha256(content).hexdigest(), jsonl=content.decode())
 
+    @gateway_operation
+    def planning(self) -> PlanningProjection:
+        """Return plans, platform estimates, budget observations and planning outcomes.
+
+        Planning holds no gateway state lock, so a slow platform delays no other operation.
+        """
+        if self._planning is None:
+            return not_offered_projection()
+        return self._planner().projection()
+
+    @gateway_operation
+    def refresh_planning(self) -> PlanningProjection:
+        """Discover the platform's planning capabilities and read its current budgets."""
+        planner = self._planner()
+        planner.refresh()
+        return planner.projection()
+
+    @gateway_operation
+    def record_plan_prediction(self, prediction: WorkloadPrediction) -> PlanningProjection:
+        """Record one immutable workload prediction revision for the launch context."""
+        planner = self._planner()
+        planner.record_prediction(prediction)
+        return planner.projection()
+
+    @gateway_operation
+    def request_plan_estimate(self, request: PlanningEstimateRequest) -> PlanningProjection:
+        """Ask the platform to estimate a recorded prediction; nothing is reserved or run."""
+        planner = self._planner()
+        planner.request_estimate(request)
+        return planner.projection()
+
+    @property
+    def platform_planning(self) -> PlatformPlanning | None:
+        """Return the planning state an embedding links reviewed proposals and records to."""
+        return self._planning
+
+    def _planner(self) -> PlatformPlanning:
+        if self._planning is None:
+            raise PlanningNotOfferedError("Platform planning is not offered by this deployment")
+        self._project_activity.initialize()
+        return self._planning
+
     def _experiment_store(self) -> ExperimentStore | None:
         from heartwood.core_adapter.workflow_provenance import workflow_experiment_events
 
@@ -1751,6 +1848,9 @@ class SessionGateway:
             policy=self.effective_policy(),
             config_store=self.config_store,
             model_connections=self._model_connections.values(),
+            deployment_connections=(
+                () if self._deployment is None else self._deployment.model_connections
+            ),
         )
 
     @gateway_operation
@@ -1831,7 +1931,7 @@ class SessionGateway:
             None,
         )
         if option is None:
-            raise ProjectConfigError(f"unsupported model source: {model_source}")
+            raise CapabilityNotOfferedError
         persist_deployment_profile(
             self.project,
             model_source=option.source_id,
@@ -1915,11 +2015,17 @@ class SessionGateway:
                 refresh=True,
             )
         else:
-            catalog = self.model_catalog_service.cached(connection.connection_id)
+            # A platform can withdraw a model at any time, so its selection rereads the list.
+            catalog = (
+                None
+                if connection.source == "platform"
+                else self.model_catalog_service.cached(connection.connection_id)
+            )
         if catalog is None:
             discovered = self.discover_models(
                 connection_id,
                 base_url=base_url,
+                refresh=connection.source == "platform",
                 remember=remember,
             )
             catalog = self.model_catalog_service.cached(connection.connection_id)
@@ -1928,8 +2034,6 @@ class SessionGateway:
                     f"model catalog did not cache discovery result: {discovered}"
                 )
         entry = _catalog_entry(catalog, model_id)
-        if entry.availability == "unsupported":
-            raise ModelCatalogError(f"model is unavailable for OpenHands: {entry.reason}")
         request_endpoint = connection.request_endpoint(entry.execution_model)
         profile = ModelProfile(
             profile_id=connection.connection_id,
@@ -2053,10 +2157,14 @@ class SessionGateway:
         return self.action_settings()
 
     @gateway_operation
-    @_serialized_state
     def save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         """Add or replace a non-secret profile and reset active services."""
-        profile = align_model_profile_request_endpoint(profile)
+        profile = self._declared_request_endpoint(align_model_profile_request_endpoint(profile))
+        self._require_listed_platform_model(profile)
+        return self._save_model_profile(profile)
+
+    @_serialized_state
+    def _save_model_profile(self, profile: ModelProfile) -> ModelSettingsResponse:
         if profile.profile_id in _RESERVED_MODEL_PROFILE_IDS:
             raise ModelSettingsError(
                 f"model profile id is reserved by Heartwood: {profile.profile_id}"
@@ -2069,9 +2177,13 @@ class SessionGateway:
         return self.model_settings()
 
     @gateway_operation
-    @_serialized_state
     def select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         """Select a profile and reset active services."""
+        self._require_listed_platform_model(self.settings_store.load().profile(profile_id))
+        return self._select_model_profile(profile_id)
+
+    @_serialized_state
+    def _select_model_profile(self, profile_id: str) -> ModelSettingsResponse:
         settings = self.settings_store.load().selecting(profile_id)
         self._save_model_selection(self._model_source_for_profile(settings.profile()), settings)
         self._reset_services()
@@ -2263,6 +2375,60 @@ class SessionGateway:
         return self.local_models.model_transfer_status(transfer_id)
 
     @gateway_operation
+    def mcp_server_settings(self) -> McpServersResponse:
+        """Return research MCP servers, the deployment destinations and enabled tool sets."""
+        return api_response(McpServersResponse, self.mcp_servers.settings())
+
+    @gateway_operation
+    def add_mcp_server(self, request: McpServerAddRequest) -> McpServersResponse:
+        """Add a server at an approved origin without contacting or enabling it."""
+        return api_response(
+            McpServersResponse,
+            self.mcp_servers.add(
+                request.server_id, request.label, request.url, request.token, request.remember
+            ),
+        )
+
+    @gateway_operation
+    def test_mcp_server(
+        self, server_id: str, request: McpServerTestRequest
+    ) -> McpServerTestResponse:
+        """Connect to a server, list its tools and compare them with the reviewed definitions."""
+        return api_response(
+            McpServerTestResponse,
+            self.mcp_servers.test(server_id, request.token, request.remember),
+        )
+
+    @gateway_operation
+    def select_mcp_tools(
+        self, server_id: str, request: McpServerToolsRequest
+    ) -> McpServersResponse:
+        """Record the researcher's review of tool definitions from the latest test."""
+        return api_response(
+            McpServersResponse,
+            self.mcp_servers.select_tools(
+                server_id,
+                [(item.name, item.sha256) for item in request.tools],
+                token=request.token,
+                remember=request.remember,
+            ),
+        )
+
+    @gateway_operation
+    def set_mcp_server_enabled(
+        self, server_id: str, request: McpServerEnabledRequest
+    ) -> McpServersResponse:
+        """Enable or disable a server; running sessions refuse calls to a disabled server."""
+        return api_response(
+            McpServersResponse, self.mcp_servers.set_enabled(server_id, request.enabled)
+        )
+
+    @gateway_operation
+    def disconnect_mcp_server(self, server_id: str) -> McpServersResponse:
+        """Remove a server and forget its token; completed remote work is not undone."""
+        return api_response(McpServersResponse, self.mcp_servers.disconnect(server_id))
+
+    @gateway_operation
     def skill_settings(self) -> SkillSettingsResponse:
         """Return the shared bundled, installed, and signed-catalog projection."""
         return api_response(
@@ -2444,6 +2610,10 @@ class SessionGateway:
                 raise ValueError("Managed worker session is unavailable")
             return worker.context()
 
+        mcp_adapter: McpOutsideAdapter | None = None
+        if self._worker_plan_factory is not None and self._external_actions_factory is None:
+            bound = self.mcp_servers.bound_tools()
+            mcp_adapter = McpOutsideAdapter(self.mcp_servers, bound) if bound else None
         backend = self._backend(
             model_settings=configuration.model_settings,
             selected_model=configuration.local_model,
@@ -2468,7 +2638,7 @@ class SessionGateway:
             external_actions=(
                 self._external_actions_factory(session_id)
                 if self._external_actions_factory is not None
-                else None
+                else mcp_adapter
             ),
             workflow_evaluator=ResearchStageEvaluator(
                 self.workspace_inspector,
@@ -2497,10 +2667,13 @@ class SessionGateway:
                         policy=service.policy_profile,
                         skills=self.skill_manager,
                         specialists=backend.specialist_catalog,
+                        client_tools=() if mcp_adapter is None else mcp_adapter.client_tools,
                     ),
                     self._worker_plan_factory,
                 )
                 self._worker_sessions[id(service)] = worker
+                if mcp_adapter is not None:
+                    self._mcp_adapters[id(service)] = mcp_adapter
         if self._parallel_review_preparer is not None:
             from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
             from heartwood.gateway._workflow_review_execution import bind_workflow_review_execution
@@ -2569,6 +2742,15 @@ class SessionGateway:
         except ModelSettingsError:
             return _UnconfiguredAgentBackend()
         selected_model = selected_model if profile.is_local else None
+        connection = matching_model_connection(profile, self._model_connections.values())
+        declared = None if connection is None else connection.declared_model(profile.model)
+        if declared is not None:
+            # Declared limits take precedence; OpenHands resolves any limit left unset.
+            profile = replace(
+                profile,
+                max_input_tokens=declared_input_limit(declared) or profile.max_input_tokens,
+                max_output_tokens=declared.max_output_tokens or profile.max_output_tokens,
+            )
         from heartwood.core_adapter.workflow_runtime import workflow_run
         from heartwood.gateway._openhands_sdk import OpenHandsSdkBackend
 
@@ -2595,7 +2777,10 @@ class SessionGateway:
                 managed_model_native_tool_calling(selected_model.tool_call_parser)
                 if selected_model is not None
                 else None
+                if declared is None
+                else declared.supports_tool_calls
             ),
+            api_mode=None if declared is None else declared_api_mode(declared),
             structured_task_outcomes=(
                 workflow_run(FileSessionStore(self.sessions_root, session_id).replay_events())
                 is not None
@@ -2671,6 +2856,9 @@ class SessionGateway:
             return None
         try:
             service.reconcile()
+            adapter = self._mcp_adapters.get(id(service))
+            if adapter is not None:
+                advance_outside_calls(service, adapter)
         except RuntimeError:
             with self._state_lock:
                 if self._services.get(session_id) is service:
@@ -2717,7 +2905,7 @@ class SessionGateway:
         try:
             if active_service is not reconciled and self._read_under_lock(active_service):
                 active_service.reconcile()
-            return active_service.replay_events()
+            return active_service.replay_complete_reports()
         finally:
             if close_service:
                 active_service.close(record_closure=False)
@@ -2905,7 +3093,7 @@ class SessionGateway:
             return
         available_sources = {option.source_id for option in model_source_options(self.env)}
         if model_source not in available_sources:
-            raise ModelCatalogError(f"{connection_id} is unavailable in the detected environment")
+            raise CapabilityNotOfferedError
         try:
             self.configure_model_source(model_source)
         except ProjectConfigError as error:
@@ -2945,6 +3133,34 @@ class SessionGateway:
             self.model_catalog_service.invalidate(connection_id)
         return dynamic
 
+    def _declared_request_endpoint(self, profile: ModelProfile) -> ModelProfile:
+        """Move a platform profile to the request path its model declaration selects."""
+        connection = self._model_connections.get(profile.profile_id)
+        if connection is None or connection.source != "platform":
+            return profile
+        try:
+            declared = replace(profile, policy_endpoint=connection.request_endpoint(profile.model))
+        except ModelCatalogError:
+            return profile
+        # Only the path suffix may change; another origin or route stays as saved.
+        return (
+            declared
+            if connection.matches_profile(declared)
+            and _same_route_base(profile.policy_endpoint, declared.policy_endpoint)
+            else profile
+        )
+
+    def _require_listed_platform_model(self, profile: ModelProfile) -> None:
+        """Refuse a platform route whose model the platform no longer lists for this identity."""
+        connection = matching_model_connection(profile, self._model_connections.values())
+        if connection is None or connection.source != "platform":
+            return
+        self.discover_models(connection.connection_id, refresh=True)
+        catalog = self.model_catalog_service.cached(connection.connection_id)
+        if catalog is None:  # pragma: no cover - discovery caches its result
+            raise ModelCatalogError("model catalog did not cache the discovery result")
+        _catalog_entry(catalog, connection.provider_model_id(profile.model))
+
     def _subscription_connection(self, connection_id: str) -> ModelConnection:
         connection = self._model_connections.get(connection_id)
         if connection is None:
@@ -2982,7 +3198,7 @@ class SessionGateway:
             return
         adapter = select_platform_adapter(self.env)
         if "custom" not in adapter.capabilities().model_sources:
-            raise ModelCatalogError("Custom API is unavailable on this platform")
+            raise CapabilityNotOfferedError
         default_policy = adapter.default_policy_profile()
         credential_allowlist = default_policy.credential_allowlist
         if connection.credential_reference is not None:
@@ -3095,7 +3311,7 @@ class SessionGateway:
         active: list[str] = []
         for session_id, service in self._services.items():
             projection = project_session(
-                service.replay_events(),
+                service.replay_complete_reports(),
                 session_id=session_id,
                 streaming_text=self._streaming_text.get(session_id, ""),
                 stream_epoch=self._stream_epoch,
@@ -3184,6 +3400,7 @@ class SessionGateway:
             if worker.wait_closed(0):
                 del self._releasing[session_id]
                 self._worker_sessions.pop(id(service), None)
+                self._mcp_adapters.pop(id(service), None)
                 continue
             failed.append(session_id)
             if worker.revocation_pending:
@@ -3214,6 +3431,7 @@ class SessionGateway:
         if not worker.close():
             return False
         self._worker_sessions.pop(id(service), None)
+        self._mcp_adapters.pop(id(service), None)
         return True
 
     @_serialized_state
@@ -3395,9 +3613,24 @@ def _review_mode_unavailable_reason(
     return None
 
 
+def _same_route_base(first: str, second: str) -> bool:
+    def base(endpoint: str) -> str:
+        return endpoint.removesuffix("/chat/completions").removesuffix("/responses")
+
+    return base(first) == base(second)
+
+
 def _catalog_entry(catalog: ModelCatalog, model_id: str) -> ModelCatalogEntry:
     selected = model_id.strip()
     for entry in catalog.models:
         if selected in {entry.model_id, entry.execution_model}:
+            if entry.availability == "unsupported":
+                raise ModelCatalogError(
+                    f"model is unavailable for OpenHands: {entry.reason}",
+                    code=BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+                )
             return entry
-    raise ModelCatalogError(f"model is not present in the discovered catalog: {model_id}")
+    raise ModelCatalogError(
+        f"model is not in the model list for this identity: {model_id}",
+        code=BackendErrorCode.MODEL_CONFIGURATION_INVALID,
+    )

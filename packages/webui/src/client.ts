@@ -28,6 +28,13 @@ import type {
   JsonValue,
   LocalModelImportRequest,
   LocalModelImportResult,
+  McpServerAddRequest,
+  McpServerEnabledRequest,
+  McpServers,
+  McpServerTestRequest,
+  McpServerToolsRequest,
+  McpServerTest,
+  McpToolChoice,
   ModelCatalog,
   ModelCatalogRequest,
   ModelConnectRequest,
@@ -47,6 +54,8 @@ import type {
   ModelTransferInspectRequest,
   ModelTransferPlan,
   ModelValidation,
+  PlanningEstimateRequest,
+  PlanningProjection,
   ProjectReadiness,
   PythonEnvironmentSnapshot,
   SessionCreateRequest,
@@ -162,6 +171,11 @@ export interface HeartwoodClient {
   getVerificationEnvironment(): Promise<PythonEnvironmentSnapshot>;
   getExperimentRecords(): Promise<ExperimentCollection>;
   getExperimentExport(): Promise<ExperimentExport>;
+  getPlanning(): Promise<PlanningProjection>;
+  refreshPlanning(): Promise<PlanningProjection>;
+  requestPlanEstimate(
+    request: PlanningEstimateRequest,
+  ): Promise<PlanningProjection>;
   refreshSkills(sourceId?: string): Promise<SkillSettings>;
   inspectSkill(name: string, sourceId?: string): Promise<SkillSummary>;
   installSkill(
@@ -175,6 +189,16 @@ export interface HeartwoodClient {
     expectedTreeSha256: string,
   ): Promise<SkillSettings>;
   removeSkill(name: string): Promise<SkillSettings>;
+  getMcpServers(): Promise<McpServers>;
+  addMcpServer(request: McpServerAddRequest): Promise<McpServers>;
+  testMcpServer(
+    serverId: string,
+    token: string | null,
+    remember: boolean,
+  ): Promise<McpServerTest>;
+  selectMcpTools(serverId: string, tools: McpToolChoice[]): Promise<McpServers>;
+  setMcpServerEnabled(serverId: string, enabled: boolean): Promise<McpServers>;
+  disconnectMcpServer(serverId: string): Promise<McpServers>;
 }
 
 export const createCommand = (
@@ -718,6 +742,38 @@ export class GatewayClient implements HeartwoodClient {
     );
   }
 
+  async getPlanning(): Promise<PlanningProjection> {
+    return parseJsonResponse<PlanningProjection>(
+      await authenticatedFetch(this.basePath, this.url("/project/planning")),
+    );
+  }
+
+  async refreshPlanning(): Promise<PlanningProjection> {
+    return parseJsonResponse<PlanningProjection>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/project/planning/refresh"),
+        { method: "POST" },
+      ),
+    );
+  }
+
+  async requestPlanEstimate(
+    request: PlanningEstimateRequest,
+  ): Promise<PlanningProjection> {
+    return parseJsonResponse<PlanningProjection>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/project/planning/estimates"),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        },
+      ),
+    );
+  }
+
   async refreshSkills(sourceId?: string): Promise<SkillSettings> {
     const request: SkillRefreshRequest = { source_id: sourceId ?? null };
     return parseJsonResponse<SkillSettings>(
@@ -819,6 +875,81 @@ export class GatewayClient implements HeartwoodClient {
         this.url(`/settings/skills/${encodeURIComponent(name)}`),
         {
           method: "DELETE",
+        },
+      ),
+    );
+  }
+
+  async getMcpServers(): Promise<McpServers> {
+    return parseJsonResponse<McpServers>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url("/settings/mcp-servers"),
+      ),
+    );
+  }
+
+  async addMcpServer(request: McpServerAddRequest): Promise<McpServers> {
+    return this.sendMcp<McpServers>("", "POST", request);
+  }
+
+  async testMcpServer(
+    serverId: string,
+    token: string | null,
+    remember: boolean,
+  ): Promise<McpServerTest> {
+    return this.sendMcp<McpServerTest>(
+      `/${encodeURIComponent(serverId)}/test`,
+      "POST",
+      { remember, token } satisfies McpServerTestRequest,
+    );
+  }
+
+  async selectMcpTools(
+    serverId: string,
+    tools: McpToolChoice[],
+  ): Promise<McpServers> {
+    return this.sendMcp<McpServers>(
+      `/${encodeURIComponent(serverId)}/tools`,
+      "PUT",
+      { tools } satisfies McpServerToolsRequest,
+    );
+  }
+
+  async setMcpServerEnabled(
+    serverId: string,
+    enabled: boolean,
+  ): Promise<McpServers> {
+    return this.sendMcp<McpServers>(
+      `/${encodeURIComponent(serverId)}/enabled`,
+      "PUT",
+      { enabled } satisfies McpServerEnabledRequest,
+    );
+  }
+
+  async disconnectMcpServer(serverId: string): Promise<McpServers> {
+    return parseJsonResponse<McpServers>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/settings/mcp-servers/${encodeURIComponent(serverId)}`),
+        { method: "DELETE" },
+      ),
+    );
+  }
+
+  private async sendMcp<Response>(
+    suffix: string,
+    method: "POST" | "PUT",
+    request: object,
+  ): Promise<Response> {
+    return parseJsonResponse<Response>(
+      await authenticatedFetch(
+        this.basePath,
+        this.url(`/settings/mcp-servers${suffix}`),
+        {
+          body: JSON.stringify(request),
+          headers: { "Content-Type": "application/json" },
+          method,
         },
       ),
     );
@@ -959,18 +1090,31 @@ export class GatewayClient implements HeartwoodClient {
   }
 }
 
+// Gateway refusals such as ingress checks carry a stable diagnostic code beside the message.
+const gatewayError = async (response: Response): Promise<Error> => {
+  let error = `Gateway request failed with status ${response.status}`;
+  try {
+    const payload = (await response.json()) as {
+      code?: string;
+      error?: string;
+    };
+    if (payload.error !== undefined) {
+      error =
+        payload.code === undefined ?
+          payload.error
+        : `${payload.code}: ${payload.error}`;
+    }
+  } catch {
+    // Preserve the gateway status when an upstream proxy returns HTML/text.
+  }
+  return new Error(error);
+};
+
 const parseResponse = async (
   response: Response,
 ): Promise<SessionProjectionResponse> => {
   if (!response.ok) {
-    let error = `Gateway request failed with status ${response.status}`;
-    try {
-      const payload = (await response.json()) as { error?: string };
-      error = payload.error ?? error;
-    } catch {
-      // Preserve the gateway status when an upstream proxy returns HTML/text.
-    }
-    throw new Error(error);
+    throw await gatewayError(response);
   }
   return parseProjectionPayload(await response.text());
 };
@@ -980,14 +1124,7 @@ const asError = (value: unknown): Error =>
 
 const parseJsonResponse = async <Value>(response: Response): Promise<Value> => {
   if (!response.ok) {
-    let error = `Gateway request failed with status ${response.status}`;
-    try {
-      const payload = (await response.json()) as { error?: string };
-      error = payload.error ?? error;
-    } catch {
-      // Preserve the gateway status when an upstream proxy returns HTML/text.
-    }
-    throw new Error(error);
+    throw await gatewayError(response);
   }
   return (await response.json()) as Value;
 };

@@ -127,6 +127,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Select a review mode the deployment permits; Review Every Action applies until then.",
         "/reference/troubleshooting/#hw-setup-003-stored-review-mode-is-not-permitted-by-the-deployment",
     ),
+    "platform-capability": DiagnosticDefinition(
+        "HW-SETUP-004",
+        "Capability is not offered on this platform",
+        "Select a model connection this platform offers.",
+        "/reference/troubleshooting/#hw-setup-004-capability-is-not-offered-on-this-platform",
+    ),
     "agent-runtime": DiagnosticDefinition(
         "HW-AGENT-001",
         "Agent runtime is unavailable",
@@ -275,6 +281,42 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "/reference/troubleshooting/#hw-skill-002-bundled-skills-do-not-match-this-release",
         "path-sensitive",
     ),
+    "mcp-destination": DiagnosticDefinition(
+        "HW-MCP-001",
+        "Research service destination is not allowed",
+        "Use a server at an origin the deployment approves, or ask the operator to add it.",
+        "/reference/troubleshooting/#hw-mcp-001-research-service-destination-is-not-allowed",
+    ),
+    "mcp-credential": DiagnosticDefinition(
+        "HW-MCP-002",
+        "Research service credential is expired",
+        "Enter a current token for the server, then test it again.",
+        "/reference/troubleshooting/#hw-mcp-002-research-service-credential-is-expired",
+    ),
+    "mcp-tool-changed": DiagnosticDefinition(
+        "HW-MCP-003",
+        "Research service tool changed after review",
+        "Test the server, review the changed tools and select them again.",
+        "/reference/troubleshooting/#hw-mcp-003-research-service-tool-changed-after-review",
+    ),
+    "mcp-worker-required": DiagnosticDefinition(
+        "HW-MCP-004",
+        "Research services require an isolated worker",
+        "Start Heartwood with a deployment manifest that configures an isolated worker.",
+        "/reference/troubleshooting/#hw-mcp-004-research-services-require-an-isolated-worker",
+    ),
+    "mcp-unavailable": DiagnosticDefinition(
+        "HW-MCP-005",
+        "Research service is unavailable or refused the request",
+        "Check the server URL and credential, then test the server again.",
+        "/reference/troubleshooting/#hw-mcp-005-research-service-is-unavailable-or-refused-the-request",
+    ),
+    "mcp-binding": DiagnosticDefinition(
+        "HW-MCP-006",
+        "Research service tool cannot be selected",
+        "Select tools the deployment allows that accept a project and operation identifier.",
+        "/reference/troubleshooting/#hw-mcp-006-research-service-tool-cannot-be-selected",
+    ),
     "worker-gateway-capability": DiagnosticDefinition(
         "HW-WORKER-001",
         "Sandbox gateway lacks a required deletion capability",
@@ -292,6 +334,42 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Worker revocation was not observed",
         "Restore the sandbox control plane; the gateway retries revocation while it runs.",
         "/reference/troubleshooting/#hw-worker-003-worker-revocation-was-not-observed",
+    ),
+    "planning-unavailable": DiagnosticDefinition(
+        "HW-PLAN-001",
+        "Platform planning information is unavailable",
+        "Retry later; recorded plans and estimates stay available.",
+        "/reference/troubleshooting/#hw-plan-001-platform-planning-information-is-unavailable",
+    ),
+    "planning-refused": DiagnosticDefinition(
+        "HW-PLAN-002",
+        "The platform refused the planning request",
+        "Confirm the project's platform access with the platform administrator.",
+        "/reference/troubleshooting/#hw-plan-002-the-platform-refused-the-planning-request",
+    ),
+    "planning-estimate-expired": DiagnosticDefinition(
+        "HW-PLAN-003",
+        "The platform estimate has expired",
+        "Request a new estimate before approving work.",
+        "/reference/troubleshooting/#hw-plan-003-the-platform-estimate-has-expired",
+    ),
+    "planning-budget-changed": DiagnosticDefinition(
+        "HW-PLAN-004",
+        "A platform budget changed after the estimate",
+        "Compare the plan with the current budgets and revise it if needed.",
+        "/reference/troubleshooting/#hw-plan-004-a-platform-budget-changed-after-the-estimate",
+    ),
+    "planning-estimate-incomplete": DiagnosticDefinition(
+        "HW-PLAN-005",
+        "The platform estimate is incomplete",
+        "Review the elements without a complete estimate; their cost stays unknown.",
+        "/reference/troubleshooting/#hw-plan-005-the-platform-estimate-is-incomplete",
+    ),
+    "planning-denied": DiagnosticDefinition(
+        "HW-PLAN-006",
+        "The platform denied an operation",
+        "Revise the plan, or request more allocation through the platform's process.",
+        "/reference/troubleshooting/#hw-plan-006-the-platform-denied-an-operation",
     ),
 }
 

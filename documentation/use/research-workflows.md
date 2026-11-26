@@ -101,6 +101,35 @@ Specialist review and corrections share the stage's remaining allowance.
 An in-flight request can exceed a limit before Heartwood receives its usage, and some providers do not report cost; these are execution safeguards, not guaranteed billing caps.
 When a limit is reached, retain the outputs and inspect the session before starting another bounded task.
 
+## Plan Against Platform Budgets
+
+Some deployments connect a platform planning service.
+There, the platform reports its budgets and estimates the cost of planned work before you approve it.
+Without such a service, the planning views are hidden.
+
+A plan revision is a workload prediction: the elements of the work, such as a bounded interactive exploration, a batch job or model inference, with their quantities, runtime profiles, assumptions and uncertainty.
+The repository's `fixtures/synthetic/platform-contract/research-plan.r1.prediction.json` is a synthetic example.
+
+1. Record the prediction with `/plan record plan.json` in the terminal or `session.record_plan_prediction()` in a notebook.
+2. Read the current budgets with **Refresh Budgets** in the browser's **Research Planning** section, `/plan refresh` or `session.refresh_planning()`.
+3. Request an estimate for the whole plan with **Request Plan Estimate** or `/plan estimate cohort-prediction 1`, or for named elements with `/plan estimate cohort-prediction 1 batch`.
+4. Record a revised prediction that supersedes the earlier one and estimate it again.
+   The comparison lists the complete-plan estimate of each revision with its runtime profiles.
+
+Each estimate shows its coverage, range, cost components, limitations, exclusions, pricing assumptions, creation time and validity.
+An unknown cost is shown as unknown and never counted as zero.
+Each budget shows its allocation, reservations, spending and availability with the time the platform observed them.
+Each element shows whether you approved a reviewed proposal that contains it, whether it is unchanged since an approval in an earlier revision, and the platform's authorization.
+
+The platform owns prices, budgets, reservations and admission:
+
+- An estimate or a reported balance does not reserve funds or guarantee that the platform admits the work.
+- Agreeing to a plan does not approve its operations; each operation is reviewed and authorized on its own.
+- More allocation is requested through the platform's own process.
+
+The [work limits](#work-limits) above apply to reported model cost during a workflow and are separate from platform budgets.
+Conditions such as an expired estimate or a changed budget carry an [`HW-PLAN` diagnostic](../reference/troubleshooting.md#research-planning).
+
 ## Verify an Existing Analysis
 
 Independent Result Verification preserves the original analysis and writes fresh reproduction outputs.

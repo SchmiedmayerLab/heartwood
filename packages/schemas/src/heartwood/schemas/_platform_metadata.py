@@ -8,7 +8,8 @@
 
 Inference requests and MCP messages retain their upstream schemas. These records supply
 only launch bindings, missing model declarations, and non-secret deployment references.
-No loader, credential resolution, network connection, or policy enforcement is provided.
+The gateway reads the model metadata supplement from the deployment manifest; these records
+provide no credential resolution, network connection, or policy enforcement.
 """
 
 from __future__ import annotations

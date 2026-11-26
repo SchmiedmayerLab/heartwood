@@ -58,7 +58,13 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { modelProfileLabel } from "../modelPresentation";
 import type {
   ActionReviewMode,
@@ -94,10 +100,12 @@ import type {
   StartupPlan,
   SubscriptionDeviceLogin,
 } from "../types";
+import { ResearchServices } from "./ResearchServices";
 import type { UtilityPanel } from "./SessionRail";
 
 interface UtilitySheetProps {
   actionModeLockedReason: string | null;
+  servicesClient: ComponentProps<typeof ResearchServices>["client"];
   actions: ActionSettings | null;
   artifacts: ModelArtifacts | null;
   panel: UtilityPanel;
@@ -182,6 +190,9 @@ export const UtilitySheet = (props: UtilitySheetProps) => (
       : null}
       {props.panel === "specialists" ?
         <SpecialistsContent {...props} />
+      : null}
+      {props.panel === "services" ?
+        <ResearchServices client={props.servicesClient} />
       : null}
       {props.panel === "settings" || props.panel === "action-review" ?
         <SettingsContent key={props.panel} {...props} />
@@ -2399,8 +2410,24 @@ const ModelChoiceStatus = ({
         {status.label}
       </Badge>
       <span>{status.detail}</span>
+      <span className="model-choice-capability">
+        {modelCapabilityText(model)}
+      </span>
     </div>
   );
+};
+
+// Unknown values stay unknown; the gateway reports only what the runtime or deployment states.
+const modelCapabilityText = (model: ModelCatalog["models"][number]): string => {
+  const window =
+    model.context_window === null ?
+      "unknown"
+    : `${model.context_window.toLocaleString()} tokens`;
+  const tools =
+    model.supports_tools === null ? "unknown"
+    : model.supports_tools ? "supported"
+    : "not supported";
+  return `Context window: ${window}; native tool calls: ${tools}`;
 };
 
 const connectionGroups = (connections: ModelConnection[]) => {

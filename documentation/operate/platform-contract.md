@@ -29,7 +29,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
-| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization is current, but no outside-service adapter ships and built-in launchers install none |
+| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
 | Hosted per-project gateways with verified OpenID Connect identity | Unavailable |
 | Realtime voice | Unavailable |
 
@@ -168,14 +168,19 @@ Required for isolated workers:
 
 Recommended:
 
-- The Responses API where the model supports it; Heartwood selects the protocol per model from the OpenHands model capabilities.
+- The Responses API where the model supports it; Heartwood selects the protocol per model from the deployment's declaration, or else from the OpenHands model capabilities.
 
 Optional:
 
 - Compute on which Heartwood [runs a managed model](../models/run-with-heartwood.md), and an approved process to [import verified model bundles](../models/offline.md).
 
 Heartwood discovers models through a policy-checked catalog endpoint and never implements a second provider proxy.
-The `heartwood.model-connections.v1` schema describes deployment-owned connections, but startup does not load a connection manifest, and the OpenHands model table does not recognize platform model aliases.
+A deployment supplies its connections in `heartwood.model-connections.v1` and its model declarations in `heartwood.platform-model-metadata.v1`, both inside the [deployment manifest](../reference/configuration.md#model-connections).
+The gateway loads them at start; a later change to either stops dispatch until the next start.
+The model list shows only the models the endpoint returns for the deployment's credential; a declaration never adds a model to it.
+Choosing, selecting or saving a model on a platform connection rereads the list, so a withdrawn model cannot be chosen again.
+A selected model that the platform later withdraws stays selected, and its next model call fails with the platform's model error.
+
 The draft model-metadata supplement declares, per model identity:
 
 | Field | Meaning | Level |
@@ -186,6 +191,16 @@ The draft model-metadata supplement declares, per model identity:
 | Tool calling | Whether native tool calls are supported | Required |
 | Data classes | Classes the route may receive under the platform's agreements | Required |
 | Deprecation | Whether the model is being withdrawn, so no model is silently substituted | Recommended |
+
+Heartwood uses a declaration in place of the OpenHands model table for that model.
+A declared model with a supported protocol is listed as available and selected at the `supervised` capability tier, as a model the OpenHands SDK verifies would be.
+Protocols name the OpenHands API modes `chat` and `responses`.
+One declared mode selects the request path, and the policy-checked endpoint, for every request; with both, OpenHands chooses.
+A model whose declaration names neither is listed as unavailable and cannot be selected.
+The declared input limit, or else the context window less the output limit, sets the agent's input limit; the output limit sets its output limit; OpenHands resolves a limit that is not declared.
+Tool calling sets whether OpenHands uses native tool calls.
+Model setup shows the declared context window and tool support, and reports an undeclared value as unknown.
+The data classes in a declaration are informational, and Heartwood does not act on them.
 
 #### Route Data Handling
 
@@ -261,7 +276,8 @@ The signer interface is `POST /v1/checkpoints/sign`, accepting `heartwood.audit-
 ### Platform Services
 
 The service, operation, task and budget messages are draft.
-Heartwood disables MCP servers in its OpenHands configuration and advertises no platform service.
+The agent's OpenHands configuration contains no MCP server.
+The gateway is the MCP client: [research MCP servers](#research-mcp-servers) reach the worker only as reviewed outside operations.
 
 #### Service Discovery
 
@@ -354,6 +370,19 @@ A draft `heartwood.platform-launch-context.v1` document carries the platform-own
 Keep it outside agent-writable state; possession of a copy does not authenticate its issuer.
 It is separate from the deployment manifest, which binds only the research directory, state and policy.
 
+A planning service offers budget observations and estimates to Heartwood.
+
+Required:
+
+- Derive the project context and billing attribution of every record from the caller's authenticated project, never from a value in the request.
+- Produce estimates from the platform's own prices for a whole plan or for named elements, and report work it does not estimate as unknown cost with a limitation.
+- Return a new estimate identity for each quote.
+
+Optional:
+
+- Serve both capabilities as MCP tools annotated read-only: `get_budgets` with argument `project_id`, returning `{"budgets": [...]}` budget observations, and `estimate_workload` with `project_id`, `scope`, `prediction` and `element_ids`, returning one estimate.
+  Heartwood's MCP planning client calls a tool only when the server lists it with `readOnlyHint` true; an estimate that persists data, charges or reserves follows the [operation](#operations-that-change-platform-state) path instead.
+
 `fixtures/synthetic/platform-contract/` contains a complete exchange for an exploration, a batch and an inference workload, plus `mcp-tasks.json` with immediate and deferred estimates and a cancellation followed by continued backend work.
 Read each exchange in this order:
 
@@ -405,8 +434,8 @@ A successful HTTP exchange does not establish that an asynchronous research acti
 A trusted Python embedding can connect platform services to the research session.
 It supplies a session-scoped `ExternalActionAdapter` through `SessionGateway(external_actions_factory=...)` and the SDK `ClientToolSpec` definitions through `native_worker_plan_factory(client_tools=...)`.
 The worker registers those tools; their acknowledgement proposes an operation and does not execute it.
-No production outside-service adapter ships with Heartwood: `heartwood gateway serve` and the other built-in launchers install none, and the gateway has no HTTP route for registering adapters or creating proposals.
-The interface is exercised only by embedding launchers such as the native qualification fixture.
+`heartwood gateway serve` installs one adapter, for [research MCP servers](#research-mcp-servers), when the deployment manifest lists MCP destinations.
+The gateway has no HTTP route for registering other adapters or creating proposals; other services need an embedding launcher such as the native qualification fixture.
 
 To offer outside operations, a platform or embedding launcher must provide:
 
@@ -427,6 +456,7 @@ The adapter's contract:
 
 `SessionService.propose_external_action` turns a retained worker proposal into a review with a gateway-issued operation identifier, the complete request, input digests, destination, worker identity, policy revision and a five-minute validity interval.
 The approve and deny commands bind the full proposal digest.
+While another operation on the same service is being submitted or has an unknown outcome, the gateway neither proposes nor sends another one; reconciliation through `observe` comes first.
 Immediately before submission the gateway rechecks the live worker attempt, project, policy, actor entitlement, validity and input contents, and submits the verified bytes without reopening worker paths.
 
 The decision and submission intent are journaled before the service is contacted; with managed evidence, the authorization is retained outside first, even in buffered mode.
@@ -449,11 +479,41 @@ Approval requires current disclosure policy, the live worker lease and an idle c
 The release reaches the model as a user-role message whose JSON envelope labels it as an outside result; that label is not an instruction boundary.
 There is one open release review per operation, denial is final for it, and an interrupted delivery is never retried automatically.
 
+### Planning Against Platform Budgets
+
+A trusted Python embedding connects a planning service by passing `SessionGateway(platform_planning=PlatformPlanningBinding(launch, client))`.
+`launch` is the platform's launch context and `client` a `PlanningServiceClient`, such as `McpPlanningClient` for the MCP tools above.
+The gateway requires protected state for it, and `heartwood gateway serve` and the other built-in launchers install none.
+Without a binding, the planning projection reports that planning is not offered, and every interface hides it.
+
+The gateway does the following and nothing more:
+
+- **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when the last discovery found estimates offered, and a change in the service shows after the next refresh.
+- **Plan revisions:** a workload prediction for the launch context is recorded once per revision; a changed revision under the same identity is refused, and a superseded revision must be recorded first.
+- **Estimates:** the platform estimates a recorded revision as a whole plan or for named elements, and an answer for another project context, revision or scope is discarded.
+- **Linked records:** `PlatformPlanning.link_operation_set` and `link_platform_record` attach the exact reviewed proposal bytes, researcher decisions with their session audit references, platform authorizations and operation observations to the revision they belong to.
+  The contract overview's validator checks every link; the embedding is responsible for passing only records it obtained from the session's action review or from the platform.
+- **Projection:** `GET /project/planning`, `/plan` in the terminal and `NotebookSession.planning()` show one `heartwood.planning-projection.v1` document per project.
+
+The projection holds the latest observation of each budget and, for each revision, the contract overview, each element's review state and each estimate's freshness.
+An element's review state comes from researcher decisions on reviewed proposals that contain it; agreeing to one proposal does not approve elements outside it.
+An element that is unchanged since an approval in an earlier revision is shown as such, and a changed or new element requires review.
+Platform authorization is shown separately for each element.
+The comparison lists the complete-plan estimates of every revision with their runtime profiles, and marks an estimate in another denomination as not comparable; amounts are never converted or summed across estimates.
+The outcomes in [Failure States](#failure-states) cover each failed service capability, the plan's latest revision, its latest estimate for each scope and the latest platform authorization of each proposal.
+A damaged journal stops the projection in every interface, and the routes answer `409`.
+
+Plans, estimates and linked records are kept in `planning.jsonl` in protected state, and each launch context sees only its own records.
+They are observations and decisions, and Heartwood derives no balance, reservation or spending total from them.
+A reported balance or estimate never guarantees that the platform admits work, and a researcher's approval neither raises a limit nor reserves funds.
+Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
+Cost figures reported by a worker are not planning records.
+
 ### Failure States
 
 | Condition | The platform returns | Heartwood shows |
 |---|---|---|
-| Capability not offered | No advertised support | The choice is hidden in every interface |
+| Capability not offered | No advertised support | The choice is hidden in every interface; a stored or requested choice shows [HW-SETUP-004](../reference/troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Sandbox gateway lacks a deletion capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
@@ -461,10 +521,25 @@ There is one open release review per operation, denial is final for it, and an i
 | Exhausted quota or budget | A quota error | HW-AGENT-009 |
 | Rate limit | A rate-limit error with a retry interval when known | HW-AGENT-010 |
 | Denied or misconfigured model | A model or authorization error | HW-AGENT-011 |
+| Model no longer authorized | A model list without the model | HW-AGENT-011 |
+| Unsupported model protocol | A declaration without a supported protocol | HW-AGENT-011 |
 | Service temporarily unavailable | An unavailability error | HW-AGENT-012 |
+| Planning service unavailable, or a response outside the contract or launch context | An unavailability error or an invalid record | [HW-PLAN-001](../reference/troubleshooting.md#research-planning) |
+| Planning request refused | A tool error | HW-PLAN-002 |
+| Expired estimate | An estimate past its validity time | HW-PLAN-003 |
+| Budget changed after the estimate | A later budget observation with other amounts | HW-PLAN-004 |
+| Partial or unknown estimate coverage | An estimate with limitations | HW-PLAN-005 |
+| Denied operation | A denied or revoked authorization, or a denied operation observation | HW-PLAN-006 |
 
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
-Platform-operation failures have no runtime presentation because the operation profile is draft.
+`fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
+Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
+The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
+Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
+Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
+The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
+Planning outcomes appear in the planning projection, and the terminal, browser and notebook show their diagnostics.
+Other platform-operation failures have no runtime presentation because the operation profile is draft.
 
 ### Security Properties
 
@@ -509,7 +584,7 @@ The classes are not an ordered permission hierarchy, an allowance for one class 
 | `gateway.openapi.json` | Gateway routes, bodies, streams and the capability security scheme | Current |
 | `capabilities.schema.json` | The platform capability manifest served at `GET /project/capabilities` | Current |
 | `policy-profile.schema.json` | `heartwood.policy-profile.v1`, the policy in the deployment manifest, including permitted data destinations | Current |
-| `model-connections.schema.json` | `heartwood.model-connections.v1`, including data-handling descriptors; startup does not load it | Current |
+| `model-connections.schema.json` | `heartwood.model-connections.v1`, including data-handling descriptors | Current |
 | `usage-summary.schema.json` | `heartwood.project-usage-summary.v1`, content-free project counts and outcomes served at `GET /project/usage-summary` | Current |
 | `model-metadata.schema.json` | Model protocol, capability and eligibility declarations | Draft |
 | `data-classification.schema.json` | The data-class vocabulary | Draft |
@@ -563,6 +638,126 @@ Annotations and output schemas are optional upstream but required by this profil
 An empty catalog or tool list is valid for an identity with nothing available.
 The same checks are available in Python as `validate_model_catalog`, `validate_mcp_tools_list` and `validate_platform_message(schema_filename, response)` in `heartwood.adapters.service_conformance`, and `validate_mcp_task_exchange(request, response, server_capabilities=..., result_schema="platform-estimate.schema.json")` in `heartwood.adapters.mcp_tasks_conformance`.
 A passing check never makes a parsed `authorized` field, tool hint or decision record an authorization token.
+
+### Check Live Endpoints
+
+Run the same checks against the platform's own endpoints, with credentials it issued to a synthetic test identity:
+
+```bash
+uv run python packages/gateway/scripts/check_platform_endpoints.py \
+  --inference-url https://inference.example.org/v1 --inference-key-env PLATFORM_INFERENCE_KEY \
+  --mcp-profile data-service.json --mcp-token-env PLATFORM_DATA_TOKEN \
+  --mcp-profile job-service.json --mcp-token-env PLATFORM_JOB_TOKEN
+uv run python packages/gateway/scripts/check_platform_endpoints.py --fakes
+```
+
+Each `--mcp-profile` is a `heartwood.platform-mcp-service.v1` document, and each `--mcp-token-env` names the variable that holds the bearer token for the profile in the same position.
+`--fakes` runs the identical checks against the [deterministic service fakes](#deterministic-service-fakes).
+The script prints one JSON result per capability and exits with status 1 unless every result passed.
+It reads credentials from the named variables and never prints them.
+
+| Check | Validates | Does not validate |
+|---|---|---|
+| Inference | `model-catalog` checks on the model list, then one streamed Chat Completion with a tool definition that returns output and a finish reason | Model metadata, eligibility, Responses support, other pages |
+| Platform tools | A Streamable HTTP connection with the token, a negotiated MCP revision listed in the profile, and `mcp-tools` checks on the tool list | Tool calls, authorization decisions, safety claims |
+
+Inference and each service are checked independently, so an unavailable inference route does not stop the tool checks, and an unavailable service does not stop the inference check.
+An inference failure reports the diagnostic Heartwood shows for it, HW-AGENT-008 to HW-AGENT-012 in [Failure States](#failure-states), classified with the agent runtime's failure vocabulary.
+A platform tool failure reports `unavailable` without the server's response text.
+The same checks are available in Python as `run_platform_conformance`, `check_inference` and `check_mcp_service` in `heartwood.gateway.platform_conformance`.
+
+### Deterministic Service Fakes
+
+`heartwood.gateway.platform_fakes` serves fake platform services on loopback inside the test process, without credentials, a cluster or outside network access.
+Every pull request runs the endpoint checks, the failure states and the scenarios below against them.
+The fakes hold synthetic data only and are not reference implementations of a platform or of the GA4GH interfaces they are shaped after.
+
+| Fake | Shape | Covered behavior |
+|---|---|---|
+| Inference | OpenAI-compatible model list and streaming Chat Completions | A reply that completes an agent turn; a rejected credential, an exhausted quota, a rate limit, an unknown model and an unavailable service |
+| Token issuer | Exchanged, audience-restricted JWT access tokens with a project claim | Valid, expired, wrong-audience and wrong-project tokens |
+| Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
+| Budget service | MCP tools `get_budgets` and `estimate_workload`, returning `heartwood.budget-observation.v1` and `heartwood.platform-estimate.v1` priced from a synthetic price sheet | Allocations changed by other work or an administrator, estimates for a whole plan or for named elements, unsupported workload kinds and unpriced runtime profiles reported as unknown cost, a prediction for another project context and an unavailable service |
+| Job service | MCP tools `create_task`, `get_task` and `cancel_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations | Submission, status, cancellation, a lost reply that reconciles to one task, a conflicting resubmission, a denied GPU request and a task that fails after it started |
+
+The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
+Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
+`running_platform_fakes()` starts the inference, data, job and budget fakes with one token issuer and returns their endpoints and service profiles.
+
+### Research MCP Servers
+
+The gateway connects to research services as an MCP client, with OpenHands' public `MCPClient` over Streamable HTTP.
+The agent receives no MCP configuration and no credential.
+A session's worker sees each enabled tool as a fixed client tool, and a call to it becomes an [outside operation](#outside-operation-admission).
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant G as Gateway
+    participant R as Researcher
+    participant S as Research service
+    W->>G: Client tool call with arguments
+    G->>R: Outside operation review
+    R->>G: Approve
+    G->>S: tools/list, then tools/call with project_id and operation_id
+    S->>G: Operation observation
+    G->>R: Result release review
+    R->>G: Approve
+    G->>W: Released result as message content
+```
+
+The deployment manifest lists each allowed origin under [`mcp_destinations`](../reference/configuration.md#mcp-destinations), with the tools researchers may select there.
+Researchers add servers at those origins, test them, select tools and enable them through the gateway, the CLI or the browser.
+Project configuration keeps each server's URL and the reviewed definition of each selected tool.
+It holds no credential and no credential reference.
+
+| Control | Behavior |
+|---|---|
+| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection, including their NAT64, IPv4-compatible and IPv4-translated forms. Private addresses are permitted only at an origin whose destination sets `private_address`, such as a cluster service. Only public addresses, and private ones with the opt-in, are permitted; link-local addresses and `fd00:ec2::/32` are always refused. Public metadata addresses, such as `168.63.129.16`, are not recognized. The client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
+| Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
+| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
+| Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. A token entered with a test or a selection is kept only after the server accepted it. The service still verifies the token. |
+| Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. A test shows each tool's complete definition, the parameters the agent fills in and the definition's digest. The researcher selects a tool together with that digest, and the gateway lists the tools again and refuses a selection whose definition differs. |
+| Tool changes | Each selected tool keeps the SHA-256 of its reviewed definition. A test that lists a different definition removes the tool from the enabled set, and the gateway compares the definition again before it sends a call. A changed definition needs a new selection. |
+| Result size | A result larger than the destination's `max_result_bytes`, at most 32 KiB, is refused after it is read. Event-stream frames are limited during transfer. |
+| Resources and prompts | Not used. A test reports whether the server advertises them. |
+| Sessions | Tools are bound to sessions with an isolated worker only. Other sessions get none. |
+
+A service on this path must enforce Heartwood's operation binding, as the [adapter contract](#outside-operation-admission) requires.
+It scopes each call to the project its credential allows, treats a repeated `operation_id` as the same operation, and returns `heartwood.platform-operation-observation.v1` as structured content.
+A read-only tool named as the destination's `observation_tool` reports an operation by `project_id` and `operation_id`.
+For an identifier it never received, it reports the status `failed` and refuses any later call with that identifier, so an operation whose request never arrived can be settled.
+
+Every call needs an outside operation review and a separate result release review; no review mode decides either.
+Disabling or disconnecting a server, changing its tools, or an expired token refuses pending calls, and completed remote work is not undone.
+A call whose reply is lost or times out is recorded with an unknown outcome.
+The gateway reconciles it through the observation tool, and until then it neither opens review of another call to the same service nor sends one already reviewed.
+An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered on the next check after that.
+
+Heartwood cancels no remote work.
+Denying a review sends nothing.
+A call still running at the destination's `call_timeout_seconds` is abandoned and recorded with an unknown outcome, and the service may still complete it.
+Pausing the session waits for a call in progress to end.
+The service's own cancel tool can be selected like any other tool, but it receives the new call's `operation_id`, so it cannot name an earlier operation.
+
+### MCP Client Behavior
+
+`packages/gateway/tests/test_mcp_compatibility.py` runs OpenHands' public MCP client against explicitly configured Streamable HTTP servers built on these fakes.
+It records what the client does with such a server.
+The agent's OpenHands settings contain no MCP server.
+Tests marked as expected failures state behavior that Heartwood requires and the client does not provide.
+
+| Area | Client behavior |
+|---|---|
+| Discovery | Lists tools with their annotations. Never reads resources or prompts. Follows a redirect within the same origin. A redirect to another origin is not followed and receives no request. |
+| Tool-set changes | A change announced with `notifications/tools/list_changed` reaches a client that the gateway owns through its `on_tools_reconciled` callback. An agent configured with `mcp_config` registers the announced tools at once. |
+| Credentials | A rejected credential fails discovery with the same generic error as an unavailable service. With a bearer header configured, the session journal, the audit log and the persisted conversation files contain no credential. |
+| Results | A result reaches the agent as text, without a size limit. Heartwood truncates the result it records in the session. |
+| Errors | A `ToolError` message from the server reaches the agent unchanged. A malformed result or an unavailable service becomes an error observation. No call is retried. |
+| Timeouts | When the tool executor's timeout expires, the client sends `notifications/cancelled`. A server with a session stops the call. A stateless server cannot receive the notification and completes it. When the per-request timeout of the server entry expires, the session records the call as failed. |
+| Pausing | Pausing a session does not cancel a running MCP request. The call continues and the session records it as interrupted. |
+| Arguments | References such as `$NAME` in tool arguments are replaced with values from the conversation's secret registry before the call. |
+| Review | Under Heartwood's confirmation policy every MCP call waits for review, including calls to read-only tools. A client tool only acknowledges the call. Outside operation review holds the proposal, and a trusted adapter calls the service through the MCP client only after approval. |
 
 ### Runtime Conformance
 
