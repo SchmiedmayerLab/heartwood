@@ -918,6 +918,19 @@ def _correction_outcome(
     )
 
 
+def attempt_error_recorded(events: Sequence[SessionEvent], started_sequence: int) -> bool:
+    """Return whether an error that ends the agent's run was recorded after an attempt began.
+
+    A refused outside review and a worker call that waits for review leave the run going.
+    """
+    return any(
+        event.sequence > started_sequence
+        and event.kind == EventKind.ERROR_RECORDED
+        and event.payload.get("affects_lifecycle") is not False
+        for event in events
+    )
+
+
 def settle_workflow_correction(
     service: SessionService,
     evaluator: WorkflowEvaluator | None,
@@ -947,9 +960,8 @@ def settle_workflow_correction(
         ),
         None,
     )
-    failed_without_lifecycle = lifecycle is None and any(
-        event.sequence > attempt.started_sequence and event.kind == EventKind.ERROR_RECORDED
-        for event in events
+    failed_without_lifecycle = lifecycle is None and attempt_error_recorded(
+        events, attempt.started_sequence
     )
     if lifecycle not in {"finished", "error"} and not failed_without_lifecycle:
         return ()

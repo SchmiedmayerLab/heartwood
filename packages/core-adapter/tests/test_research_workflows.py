@@ -21,7 +21,8 @@ from heartwood.core_adapter.research_workflows import (
     workflow_reproduction_spec,
 )
 from heartwood.core_adapter.workflow_evidence import assess_workflow_stage
-from heartwood.core_adapter.workflow_runtime import workflow_stage_prompt
+from heartwood.core_adapter.workflow_runtime import attempt_error_recorded, workflow_stage_prompt
+from heartwood.schemas import JsonValue
 from heartwood.schemas.execution import ExecutionUsage
 from heartwood.schemas.workflows import (
     WorkflowBoundInput,
@@ -32,6 +33,7 @@ from heartwood.schemas.workflows import (
     WorkflowRun,
     WorkflowValueFingerprint,
 )
+from heartwood.session import EventKind, SessionEvent
 
 
 @pytest.mark.parametrize("definition", research_workflows(), ids=lambda item: item.workflow_id)
@@ -394,3 +396,20 @@ def test_ambiguous_evidence_identity_is_rejected(duplicate: str) -> None:
             checks=checks,
             model_status="success",
         )
+
+
+def test_only_an_error_that_ends_the_run_fails_a_correction_attempt() -> None:
+    def event(sequence: int, **payload: JsonValue) -> SessionEvent:
+        return SessionEvent(
+            event_id=f"event-{sequence}",
+            session_id="research",
+            sequence=sequence,
+            kind=EventKind.ERROR_RECORDED,
+            occurred_at="2026-07-01T00:00:00Z",
+            payload=payload,
+        )
+
+    # A worker call waiting for review, or a refused outside review, leaves the run going.
+    notice = event(5, code="HW-INGRESS-004", pending_call="call", affects_lifecycle=False)
+    assert not attempt_error_recorded((event(2, reason="earlier"), notice), started_sequence=3)
+    assert attempt_error_recorded((notice, event(6, reason="run failed")), started_sequence=3)
