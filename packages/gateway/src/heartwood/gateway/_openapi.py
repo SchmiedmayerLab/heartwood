@@ -562,6 +562,19 @@ def gateway_openapi(*, api_version: str | None = None) -> dict[str, Any]:
             },
         }
         parameters = _parameters(operation.path)
+        if operation.path == "/sessions/{session_id}/events":
+            parameters.append(
+                {
+                    "name": "settled",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False},
+                    "description": (
+                        "Read the owning gateway's settled run. "
+                        "Returns 409 without a local run or during publication."
+                    ),
+                }
+            )
         if parameters:
             description["parameters"] = parameters
         if operation.request is not None:

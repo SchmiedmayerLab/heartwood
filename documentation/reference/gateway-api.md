@@ -141,6 +141,7 @@ See [Automatic Evidence Boundaries](../operate/audit-checkpoints.md#automatic-ev
 ## Replay and Streaming
 
 `GET /sessions/{session_id}/events?after=N` returns the durable events after sequence `N` and the current projection; omit `after` for a full replay.
+With `settled=true`, the gateway that runs the session returns the replay only after it has recorded the current command and its final callbacks; it returns `409` while that recording is in progress and when it does not run the session.
 Projection fields use their serialized names, such as `groupId` and `revision`; follow the generated schemas.
 Transient text can change the projection without a durable event, so track the last durable sequence and deduplicate across command responses, replay, and streams.
 

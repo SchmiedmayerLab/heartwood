@@ -2026,6 +2026,31 @@ def test_rest_event_replay_supports_reconnect_after_sequence(tmp_path: Path) -> 
     assert [event.sequence for event in stream.receive()] == [1, 2, 3, 4, 5]
 
 
+def test_settled_event_replay_waits_for_final_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+    request = RestRequest(method="GET", path="/sessions/session-1/events?settled=true")
+    assert rest.handle(request).body == {"error": "No locally owned session run"}
+    rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.CHAT, prompt="summarize"),
+        )
+    )
+    service = gateway._services["session-1"]
+    with gateway._session_commands("session-1"):
+        assert rest.handle(request).status_code == 409
+    settled = iter((False, True))
+    monkeypatch.setattr(service, "wait_for_idle", lambda _: next(settled))
+    busy = rest.handle(request)
+    assert busy.status_code == 409
+    assert busy.body == {"error": "session execution is still settling"}
+    assert rest.handle(request).status_code == 200
+
+
 def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) -> None:
     response = RestGateway(_gateway(tmp_path)).handle(
         RestRequest(method="GET", path="/sessions/invalid!session/events")

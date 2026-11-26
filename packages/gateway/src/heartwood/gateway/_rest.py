@@ -447,16 +447,25 @@ class RestGateway:
                 body=_json_object(projection.safe_dict()),
             )
         if request.method == "GET" and resource == "events":
-            query = parse_qs(parsed.query)
+            query = parse_qs(parsed.query, keep_blank_values=True)
             try:
                 after = _optional_int(query.get("after", [None])[0])
             except ValueError:
                 return _error(400, "after query parameter must be an integer")
             try:
-                snapshot = self.gateway.session_snapshot(
-                    session_id=session_id,
-                    after_sequence=after,
-                )
+                settled = query.get("settled", ["false"])
+                if settled not in (["true"], ["false"]):
+                    return _error(400, "settled query parameter must be true or false")
+                if settled == ["true"]:
+                    snapshot = self.gateway.settled_session_snapshot(
+                        session_id=session_id, after_sequence=after
+                    )
+                    if snapshot is None:
+                        return _error(409, "session execution is still settling")
+                else:
+                    snapshot = self.gateway.session_snapshot(
+                        session_id=session_id, after_sequence=after
+                    )
             except (SessionOwnershipError, SessionRecoveryError) as error:
                 return _error(409, error)
             return RestResponse(

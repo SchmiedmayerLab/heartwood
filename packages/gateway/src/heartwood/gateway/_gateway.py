@@ -1681,6 +1681,32 @@ class SessionGateway:
         )
 
     @gateway_operation
+    def settled_session_snapshot(
+        self, *, session_id: str, after_sequence: int | None = None
+    ) -> GatewaySessionSnapshot | None:
+        """Read the owning gateway's journal after command and final callback publication."""
+        with self._session_command_locks_lock:
+            command_lock = self._session_command_locks.get(session_id)
+        if command_lock is None:
+            raise SessionRecoveryError("No locally owned session run")
+        if not command_lock.acquire(blocking=False):
+            return None
+        try:
+            with self._state_lock:
+                service = self._services.get(session_id)
+                if service is None or not service.store.owns_writer:
+                    raise SessionRecoveryError("No locally owned session run")
+                if not service.wait_for_idle(0):
+                    return None
+                return self._snapshot_from_events_locked(
+                    session_id=session_id,
+                    all_events=service.replay_complete_reports(),
+                    after_sequence=after_sequence,
+                )
+        finally:
+            command_lock.release()
+
+    @gateway_operation
     def websocket(
         self,
         *,
