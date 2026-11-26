@@ -37,6 +37,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "litellm") | nindent 14 }}
       ports:
         - protocol: TCP
           port: 5432

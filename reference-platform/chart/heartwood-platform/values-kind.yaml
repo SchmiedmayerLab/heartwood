@@ -14,11 +14,25 @@ projects:
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002
+    budgets:
+      inference: "5"
+      compute: "50"
   - id: other
     billingAttributionRef: synthetic-grant-other
     policyRef: synthetic-policy-1
     members:
       - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+    budgets:
+      inference: "1.5"
+  # A session in this project reserves its whole budget, which ends the session key's
+  # budget after two requests to the synthetic model.
+  - id: small
+    billingAttributionRef: synthetic-grant-small
+    policyRef: synthetic-policy-1
+    members:
+      - 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
+    budgets:
+      inference: "0.012"
 
 researchers:
   - subject: 6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001
@@ -49,6 +63,54 @@ hub:
   worker:
     # The staging stand-in above in place of the worker image.
     image: registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+  # The program of the stand-in worker image. An installation with the worker image
+  # passes its interpreter, which deploy/qualify-kubernetes-worker.py images reports as
+  # worker_interpreter.
+  modelRoute:
+    binaries:
+      - /agnhost
+
+# The deterministic synthetic model as the route's only model. One request reports 1000
+# input and 500 output tokens.
+inference:
+  models:
+    # OpenHands refuses a model whose input window is below 16384 tokens.
+    - name: synthetic-coder
+      maxInputTokens: 16384
+      maxOutputTokens: 1024
+      supportsToolCalls: true
+      litellmParams:
+        model: openai/synthetic-coder
+        api_base: https://synthetic-model.heartwood-platform.svc.cluster.local:8443/v1
+      apiKeySecret:
+        name: synthetic-model
+        key: api-key
+    # Stories 260K, the llama.cpp test model that images/generic/local-runtime pins,
+    # served by llama-server on the CPU with a context of 4096 tokens.
+    - name: local-model
+      maxInputTokens: 3072
+      maxOutputTokens: 1024
+      litellmParams:
+        model: openai/local-model
+        api_base: https://llama-server.heartwood-platform.svc.cluster.local:8443/v1
+      apiKeySecret:
+        name: llama-server
+        key: api-key
+  # Each session deletion waits for a settlement; LiteLLM writes the spending every one
+  # to six seconds, so the settlement waits eight seconds.
+  spendWriteSeconds: 1
+  settleWaitSeconds: 8
+  syntheticModel:
+    enabled: true
+  localModel:
+    enabled: true
+    model:
+      url: https://huggingface.co/ggml-org/models-moved/resolve/96f460f/tinyllamas/stories260K.gguf
+      sha256: 270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d
+    threads: 1
+    resources:
+      cpu: "1"
+      memory: 512Mi
 
 jupyterhub:
   # Short enough for the cluster tests to observe a cull.

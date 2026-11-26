@@ -43,6 +43,7 @@ from heartwood.gateway._deployment import ProjectDeployment
 from heartwood.gateway.platform_fakes import INFERENCE_API_KEY, FakeInference, serve
 from heartwood.notebook import NotebookSession
 from heartwood.session import CommandKind, EventKind, SessionCommand
+from packages.gateway.tests.tls_fixtures import certificate_authority, serve_tls
 
 _ROOT = Path(__file__).resolve().parents[3]
 _STATES = json.loads(
@@ -612,3 +613,62 @@ def test_a_changed_model_declaration_stops_dispatch_until_restart(tmp_path: Path
         assert str(gateway.effective_policy().change_refused).startswith("HW-DEPLOY-004")
     finally:
         gateway.stop()
+
+
+def test_discovery_trusts_the_connection_certificate_authorities_alone(tmp_path: Path) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+    other = certificate_authority(tmp_path, "other")
+    fake = FakeInference(models=_MODELS)
+    with serve_tls(fake.app, tmp_path / "served", platform) as origin:
+        base_url = f"{origin}/v1"
+        for authority, expected in ((platform, set(_MODELS)), (other, None)):
+            directory = tmp_path / authority[0].stem
+            directory.mkdir()
+            record = _record(directory, base_url)
+            connections = cast(dict[str, list[dict[str, object]]], record["model_connections"])
+            connections["connections"][0]["ca_file"] = str(authority[0])
+            gateway = _gateway(_deployment(directory, record))
+            try:
+                if expected is None:
+                    with pytest.raises(ModelCatalogError, match="HW-AGENT-012"):
+                        gateway.discover_models(_CONNECTION, refresh=True)
+                else:
+                    catalog = gateway.discover_models(_CONNECTION, refresh=True)
+                    assert {item["model_id"] for item in catalog["models"]} == expected
+            finally:
+                gateway.stop()
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"ca_file": "platform-ca.crt"}, "ca_file is an absolute path"),
+        ({"ca_file": "/nonexistent/platform-ca.crt"}, None),
+    ],
+)
+def test_a_connection_certificate_authority_file_is_checked_at_load(
+    tmp_path: Path, change: dict[str, object], message: str | None
+) -> None:
+    record = _record(tmp_path, "https://models.example.invalid/v1")
+    connections = cast(dict[str, list[dict[str, object]]], record["model_connections"])
+    connections["connections"][0].update(change)
+    with pytest.raises(ProjectStateError, match=message) as caught:
+        _deployment(tmp_path, record)
+    assert str(caught.value).startswith(("HW-DEPLOY-001: ", "HW-DEPLOY-"))
+
+
+def test_model_discovery_rejects_an_unusable_operator_ca_before_launch(tmp_path: Path) -> None:
+    record = _record(tmp_path, "https://models.example.invalid/v1")
+    authority = tmp_path / "inference-ca.pem"
+    authority.write_text("incomplete synthetic certificate bundle\n")
+    authority.chmod(0o600)
+    connections = cast(dict[str, list[dict[str, object]]], record["model_connections"])
+    connection = connections["connections"][0]
+    connection["ca_file"] = str(authority)
+
+    with pytest.raises(ProjectStateError) as refused:
+        _deployment(tmp_path, record)
+
+    assert str(refused.value) == (
+        f"HW-DEPLOY-001: model connection {connection['connection_id']} has an unusable ca_file"
+    )

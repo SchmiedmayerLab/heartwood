@@ -13,7 +13,8 @@
     "control",
     "researchers",
     "syntheticPrices",
-    "hub"
+    "hub",
+    "inference"
   ],
   "$defs": {
     "image": {
@@ -50,7 +51,9 @@
         "platformServices",
         "openshellGateway",
         "openshellRepository",
-        "hostedGateway"
+        "hostedGateway",
+        "litellm",
+        "modelRuntime"
       ],
       "properties": {
         "postgresql": {
@@ -75,6 +78,20 @@
         },
         "hostedGateway": {
           "$ref": "#/$defs/image"
+        },
+        "litellm": {
+          "$ref": "#/$defs/image"
+        },
+        "modelRuntime": {
+          "description": "The runtime image by digest; empty without a local model.",
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "$ref": "#/$defs/image"
+            }
+          ]
         }
       }
     },
@@ -108,6 +125,19 @@
               "minLength": 1,
               "maxLength": 255,
               "pattern": "^[^\\s\\p{Cc}\\p{Cf}\\p{Cs}\\p{Z}]([^\\p{Cc}\\p{Cf}\\p{Cs}]*[^\\s\\p{Cc}\\p{Cf}\\p{Cs}\\p{Z}])?$"
+            }
+          },
+          "budgets": {
+            "description": "Amounts allocated to each category of the project's work, in the currency of the price sheet.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "inference": {
+                "$ref": "#/$defs/decimal"
+              },
+              "compute": {
+                "$ref": "#/$defs/decimal"
+              }
             }
           }
         }
@@ -264,7 +294,8 @@
         "platformId",
         "storage",
         "serviceCallers",
-        "operatorCallers"
+        "operatorCallers",
+        "inference"
       ],
       "properties": {
         "platformId": {
@@ -285,6 +316,19 @@
           "items": {
             "type": "string",
             "pattern": "^system:serviceaccount:[a-z0-9-]+:[a-z0-9-]+$"
+          }
+        },
+        "inference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sessionReservation"
+          ],
+          "properties": {
+            "sessionReservation": {
+              "description": "Amount of its project's inference budget that each session reserves at its first launch, or what is left of it.",
+              "$ref": "#/$defs/decimal"
+            }
           }
         }
       }
@@ -549,7 +593,6 @@
           "additionalProperties": false,
           "required": [
             "image",
-            "sandboxPolicySha256",
             "policy",
             "cpu",
             "memory"
@@ -565,10 +608,6 @@
                   "const": ""
                 }
               ]
-            },
-            "sandboxPolicySha256": {
-              "type": "string",
-              "pattern": "^[0-9a-f]{64}$"
             },
             "policy": {
               "type": "object"
@@ -589,24 +628,20 @@
           "required": [
             "profileId",
             "model",
-            "endpoint",
             "provider",
-            "placeholderEnv"
+            "placeholderEnv",
+            "binaries",
+            "dataHandling"
           ],
           "properties": {
             "profileId": {
               "type": "string",
-              "minLength": 1,
-              "maxLength": 128
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
             },
             "model": {
+              "description": "A name of inference.models; empty selects the first.",
               "type": "string",
-              "minLength": 1,
-              "maxLength": 256
-            },
-            "endpoint": {
-              "type": "string",
-              "pattern": "^https://[^\\s?#]+$"
+              "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]{0,127})?$"
             },
             "provider": {
               "type": "string",
@@ -615,6 +650,47 @@
             "placeholderEnv": {
               "type": "string",
               "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "binaries": {
+              "description": "Programs of the worker image that may send the key, by resolved path; the chart refuses an empty list.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/\\S+$"
+              }
+            },
+            "dataHandling": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "destination",
+                "retentionAuthority",
+                "route"
+              ],
+              "properties": {
+                "destination": {
+                  "enum": [
+                    "same-compute",
+                    "institution-managed",
+                    "provider",
+                    "operator-defined"
+                  ]
+                },
+                "retentionAuthority": {
+                  "enum": [
+                    "deployment",
+                    "institution",
+                    "provider",
+                    "service-operator"
+                  ]
+                },
+                "route": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240,
+                  "pattern": "\\S"
+                }
+              }
             }
           }
         }
@@ -623,6 +699,219 @@
     "jupyterhub": {
       "description": "Values of the JupyterHub chart.",
       "type": "object"
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models",
+        "environment",
+        "trustPublicRoots",
+        "spendWriteSeconds",
+        "settleWaitSeconds",
+        "syntheticModel",
+        "localModel"
+      ],
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "maxInputTokens",
+              "maxOutputTokens",
+              "litellmParams"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "maxInputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "maxOutputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000000
+              },
+              "supportsToolCalls": {
+                "type": "boolean"
+              },
+              "litellmParams": {
+                "description": "LiteLLM parameters of the model; api_key is set from apiKeySecret.",
+                "type": "object",
+                "required": [
+                  "model"
+                ],
+                "not": {
+                  "required": [
+                    "api_key"
+                  ]
+                }
+              },
+              "apiKeySecret": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                  },
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[-._a-zA-Z0-9]+$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "environment": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "secretKeyRef"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z_][A-Z0-9_]*$",
+                "not": {
+                  "pattern": "^(LITELLM_|DATABASE_URL$|HW_MODEL_KEY_)"
+                }
+              },
+              "secretKeyRef": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+                  },
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[-._a-zA-Z0-9]+$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "trustPublicRoots": {
+          "type": "boolean"
+        },
+        "spendWriteSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "settleWaitSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 600
+        },
+        "syntheticModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "localModel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "alias",
+            "model",
+            "contextSize",
+            "threads",
+            "resources"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "alias": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url",
+                "sha256",
+                "maxBytes"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "pattern": "^(https://\\S+)?$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^([0-9a-f]{64})?$"
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8589934592
+                }
+              }
+            },
+            "contextSize": {
+              "type": "integer",
+              "minimum": 256,
+              "maximum": 1048576
+            },
+            "threads": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*m?$"
+                },
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]*(Mi|Gi)$"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -106,7 +106,9 @@ RUN set -eux; \
         "${HEARTWOOD_RUNTIME_HOME}" "${HEARTWOOD_WORKDIR}"; \
     fi; \
     missing_packages=""; \
-    for package in ca-certificates curl git jq libgomp1 tmux; do \
+    . /etc/os-release; \
+    case "${VERSION_CODENAME}" in jammy) openssl_package=libssl3 ;; *) openssl_package=libssl3t64 ;; esac; \
+    for package in ca-certificates curl git jq libgomp1 "${openssl_package}" tmux; do \
       if ! dpkg-query --show --showformat='${db:Status-Abbrev}' "${package}" 2>/dev/null \
         | grep --quiet '^ii '; then \
         missing_packages="${missing_packages} ${package}"; \
@@ -252,6 +254,7 @@ RUN --mount=type=bind,from=hosted-openshell-cli,target=/mnt/openshell \
     tar --extract --gzip --file /mnt/openshell/openshell.tar.gz --directory /usr/local/bin openshell \
     && chown root:root /usr/local/bin/openshell && chmod 0555 /usr/local/bin/openshell
 COPY --chmod=0555 images/hosted/configure.sh /usr/local/libexec/heartwood-hosted-configure
+COPY --chmod=0444 images/hosted/policy.py /usr/local/libexec/heartwood-hosted-policy
 RUN install -d --mode=0755 /etc/heartwood /var/lib/heartwood /research
 
 USER heartwood

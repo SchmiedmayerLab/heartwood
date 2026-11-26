@@ -189,8 +189,9 @@ class Browser:
         path: str,
         capability: str | None,
         body: dict[str, Any] | None = None,
+        max_time: int = 60,
     ) -> tuple[int, Any]:
-        """Call the gateway's API through the proxy."""
+        """Call the gateway's API through the proxy, waiting at most ``max_time`` seconds."""
         lines = ["Accept: application/json"]
         if capability is not None:
             lines.append(f"X-Heartwood-Capability: {capability}")
@@ -213,6 +214,7 @@ class Browser:
             *arguments,
             f"{ORIGIN}{base}{path}",
             text_input=json.dumps(body) if body is not None else "",
+            max_time=max_time,
         )
         text, _, status = output.rpartition("\n")
         try:

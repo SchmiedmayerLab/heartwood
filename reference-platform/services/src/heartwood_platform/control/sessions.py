@@ -159,6 +159,17 @@ class Sessions:
             },
             "podSelector": {"matchLabels": {_SESSION_LABEL: session}},
         }
+        control = {
+            "namespaceSelector": {
+                "matchLabels": {"kubernetes.io/metadata.name": settings.control_namespace}
+            },
+            "podSelector": {
+                "matchLabels": {
+                    "app.kubernetes.io/name": "heartwood-platform",
+                    "app.kubernetes.io/component": "control",
+                }
+            },
+        }
         return [
             # The ServiceAccount of the staging pods that the Heartwood gateway creates.
             # It grants nothing, and staging pods mount no token.
@@ -201,8 +212,9 @@ class Sessions:
                 "hw-default-deny",
                 {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]},
             ),
-            # The OpenShell gateway serves the supervisors of its sandboxes and the
-            # Heartwood gateway of this session.
+            # The OpenShell gateway serves the supervisors of its sandboxes, the
+            # Heartwood gateway of this session and the control service, which keeps the
+            # provider of the model route.
             _policy(
                 namespace,
                 "hw-openshell-gateway-ingress",
@@ -211,7 +223,7 @@ class Sessions:
                     "policyTypes": ["Ingress"],
                     "ingress": [
                         {
-                            "from": [supervisors, gateway],
+                            "from": [supervisors, gateway, control],
                             "ports": [{"protocol": "TCP", "port": 8080}],
                         }
                     ],

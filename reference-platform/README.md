@@ -53,12 +53,15 @@ The platform is for synthetic and open data only.
 
 | Component | Content |
 |---|---|
-| PostgreSQL | One StatefulSet with a role and a database for Keycloak |
+| PostgreSQL | One StatefulSet with a role and a database for Keycloak and for LiteLLM |
 | Keycloak | One Deployment that serves HTTPS on port 8443 and imports the realm `heartwood` at its first start |
 | Control service | One StatefulSet that serves HTTPS on port 8443, with the project registry, the launch interface and the provisioning of session namespaces |
+| LiteLLM | The proxy of the model route, one Deployment that serves HTTPS on port 4000, with one virtual key for each session's workers |
+| Synthetic model | With `inference.syntheticModel.enabled`, a deterministic model behind LiteLLM for tests |
+| Local model | With `inference.localModel.enabled`, `llama-server` from `images.modelRuntime` behind LiteLLM |
 | versitygw | S3-compatible object store with one bucket `hw-project-<id>` for each entry in `projects` |
 | JupyterHub | The Hub, its HTTPS proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
-| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls` and `proxy-tls` with the serving certificates of Keycloak, the control service and the Hub's proxy |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `litellm-tls`, `synthetic-model-tls`, `llama-server-tls` and `proxy-tls` with the serving certificates of those services |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
 | Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services` and `heartwood-hub-pods` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
@@ -67,13 +70,14 @@ Every image in `values.yaml` is pinned by digest or has no default, and `values.
 `images.platformServices` has no default and is set at installation to the image built from `services/Dockerfile`.
 `images.openshellGateway` and `images.hostedGateway` have no default either.
 `images.hostedGateway` is the `hosted-gateway-image` stage of `images/Dockerfile`, and `hub.worker.image` names the worker image by digest.
-`values-kind.yaml` sets `images.openshellGateway` to the published OpenShell 0.1.9 gateway, and `sessions.stagingImages` and `hub.worker.image` to a pinned agnhost test image.
-These three values are stand-ins, used when the chart is rendered or installed without the images that the qualification builds; `images.platformServices` and `images.hostedGateway` are still set at installation.
+`values-kind.yaml` sets `images.openshellGateway` to the published OpenShell 0.1.9 gateway, `sessions.stagingImages` and `hub.worker.image` to a pinned agnhost test image, and `hub.modelRoute.binaries` to that image's program `/agnhost`.
+These four values are stand-ins, used when the chart is rendered or installed without the images that the qualification builds; `images.platformServices` and `images.hostedGateway` are still set at installation.
 The [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with the gateway that `images/worker/candidate/gateway.json` builds with its recorded patches, the built hosted gateway image, the worker image of the qualification in `hub.worker.image`, and that worker image and the replacement worker image by digest in `sessions.stagingImages`.
 `images.openshellRepository` names a repository, such as a mirror, from which session pods pull the OpenShell supervisor and sandbox runtime images under their upstream names and digests; empty pulls them from `ghcr.io/nvidia/openshell`.
 Helm generates every credential at the first installation and keeps the existing value on an upgrade.
 The chart renders no credential from a fixed value.
 PostgreSQL keeps the credentials of the first installation and the Keycloak realm on its volume, so a new installation after `helm uninstall` needs the volume claims of the old one deleted first.
+It creates the roles and databases of Keycloak and LiteLLM only when its volume is new.
 
 ### Keycloak
 
@@ -126,9 +130,10 @@ A Heartwood gateway reaches its MCP endpoint as the planning service of its `[pl
 | `GET /v1/researchers/{researcher}/projects` | Platform component | The projects that the researcher is a member of |
 | `PUT /v1/researchers/{researcher}/projects/{project}/launch` | Platform component | The session with its namespace, the project client and the launch context; the session is created at the first launch |
 | `DELETE /v1/researchers/{researcher}/projects/{project}/launch` | Platform component | The session, its namespace and its redirect URI are removed |
+| `POST /v1/researchers/{researcher}/projects/{project}/model-key` | Platform operator | A new worker key of the session's model route with the remaining budget, see [Model Route](#model-route) |
 | `POST /v1/projects/{project}/client-secret` | Platform operator | A new secret of the project client, generated by Keycloak and written to the gateway Secrets of the members' sessions; the reply lists the rewritten sessions and those that could not be prepared, see [Recovery and Client Secret Rotation](#recovery-and-client-secret-rotation) |
 | `GET /v1/launch-context` | Heartwood gateway | The launch context of the researcher and project that the token names |
-| `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only tool `estimate_workload` |
+| `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only tools `get_budgets` and `estimate_workload` |
 
 A platform component sends a projected service account token with the audience `heartwood-control`.
 The service verifies it with a TokenReview and accepts the service accounts in `control.serviceCallers`.
@@ -156,8 +161,26 @@ A prediction has at most 500 elements, and estimates are not stored.
 
 Every MCP request carries an exchanged token, verified like the token of `GET /v1/launch-context`, and the researcher must be a member of the token's project.
 A request without such a token receives HTTP 401, and a request during which the keys of Keycloak cannot be fetched receives HTTP 502.
-The tool refuses a `project_id` other than the token's project, a researcher without a session in the project, and a prediction whose `project_context_id` is not the launch context of that session.
+Both tools refuse a `project_id` other than the token's project and a researcher without a session in the project, and `estimate_workload` refuses a prediction whose `project_context_id` is not the launch context of that session.
 Every price applies to every project, because `SkuPriceEligibility` must be `{"IsGlobalScope": true}`.
+
+### Budgets
+
+Each project has one budget for each category of its work, `inference` and `compute`, with the amount that `projects[].budgets` allocates to it in the currency of the price sheet.
+The service keeps the budgets in its database together with the reservations of running work and the spending of settled work.
+A budget's available amount is its allocation minus its reservations and its spending.
+The service sets the allocations to the chart values at each start, so a changed value changes the availability of the budget, and a budget that is no longer listed has nothing allocated.
+
+A session reserves `control.inference.sessionReservation` of its project's inference budget at its first launch, or the available amount when less is left, and keeps the reservation until it is deleted.
+A launch of a session without a reservation is refused with HTTP 409 when the budget has nothing available, before anything is provisioned, and the Hub refuses the start.
+Each reservation is one database transaction that checks the available amount, so concurrent launches cannot reserve more than a budget holds.
+Deleting a session settles its reservation: the service records what the session incurred, also when it exceeds the reservation, and releases the rest.
+
+The MCP tool `get_budgets` takes `project_id` and returns `{"budgets": [...]}`, one `heartwood.budget-observation.v1` document for each budget of the project, with the allocated, reserved, spent and available amounts, the observation time and the launch context of the researcher's session.
+Its `platform_record_ref` changes with every change of the budget.
+Reading the budgets reserves nothing and admits no work.
+
+### Project Clients
 
 At a launch the service creates the Keycloak client `hw-proj-<project>` unless it exists: a confidential client with the authorization code flow and standard token exchange, without direct access grants and without a service account, and with the optional scopes `svc-control`, `svc-data` and `svc-jobs`.
 It adds the redirect URI of the researcher's gateway, `<hub.publicOrigin>/user/<researcher>/<project>/oauth_callback`, and serializes the updates of one client, because Keycloak replaces the whole client on an update.
@@ -170,13 +193,14 @@ At each launch the control service brings the namespace `hw-s-<session>` to the 
 1. It creates the namespace with the labels `heartwood.platform/session` and `pod-security.kubernetes.io/enforce=restricted`, or reuses a namespace that carries them and `pod-security.kubernetes.io/enforce-version=latest`.
 2. It binds `heartwood-session-control` to itself there, and applies the ResourceQuota and LimitRange from `sessions.quota`, `sessions.containerDefaults` and `sessions.containerDefaultRequests`.
    It also applies the ServiceAccount `hw-staging` without a mounted token, for the staging pods of the Heartwood gateway, and the ConfigMap `platform-ca` with the platform CA certificate.
-3. It applies the network policies: no ingress and no egress by default; ingress to the OpenShell gateway on port 8080 from the supervisors of its sandboxes and from pods in `heartwood-sessions` that carry the session label; egress of the OpenShell gateway and its certificate Job to DNS and to the Kubernetes API server.
+3. It applies the network policies: no ingress and no egress by default; ingress to the OpenShell gateway on port 8080 from the supervisors of its sandboxes, from pods in `heartwood-sessions` that carry the session label and from the control service; egress of the OpenShell gateway and its certificate Job to DNS and to the Kubernetes API server.
 4. It creates the Secret `openshell-kek` with a new 32-byte key, unless the session has one. OpenShell encrypts the provider credentials of the session with it.
 5. It binds the other fixed ClusterRoles with RoleBindings and applies the OpenShell objects with server-side apply, with the namespace and `images.openshellGateway` in place of the placeholders, and `images.openshellRepository`, when set, in place of the repository of the supervisor and sandbox runtime images.
 6. It sets the subjects of `heartwood-openshell-node-reader` to the OpenShell ServiceAccounts of all sessions in the registry whose removal has not begun.
-7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions`, waits until the OpenShell gateway is ready, and replaces the Secret `hw-gw-<session>`.
+7. It creates the ServiceAccount `hw-gw-<session>` in `heartwood-sessions` and waits until the OpenShell gateway is ready.
+8. It gives the session its keys of the model route, see [Model Route](#model-route), and replaces the Secret `hw-gw-<session>`.
 
-The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, the platform CA certificate `platform-ca.crt`, and the deployment's actor key `actor-key`.
+The Secret `hw-gw-<session>` holds the gateway's deployment manifest `deployment.toml`, a `kubeconfig` for the session namespace that authenticates with the pod's ServiceAccount token, the worker policy `worker-policy.json`, the launch context `launch-context.json`, `launch.json`, the secret of the project client, the OpenShell client certificate, key and CA certificate, the platform CA certificate `platform-ca.crt`, the deployment's actor key `actor-key`, and the session's discovery key `model-discovery-key`.
 `launch.json` is the reply to the launch request: the session, the launch context, the namespace with its UID, the UID of `kube-system`, the gateway ServiceAccount and the OpenShell endpoint.
 The reply carries no credential.
 
@@ -225,9 +249,11 @@ The control service reads the key when it starts and copies it into each gateway
 Back up the Secret with the deployment's other credentials: a lost or replaced key gives every researcher new actors that nothing links to earlier records.
 After replacing the key, restart the control service; a gateway keeps recording under the earlier key until its server starts again, which writes the new key into its Secret.
 
-The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, and the control service as the `[planning]` service.
-`hub.worker` sets the worker image, its sandbox policy and the policy's effective digest from qualification, and `hub.modelRoute` the model route; the default route names an address that does not resolve.
-The default policy digest matches no policy, so no worker is admitted until qualified values are set.
+The control service writes the gateway's deployment manifest into the Secret: the identity of the researcher and the project client, the worker on the Kubernetes driver in the session namespace, the model route, and the control service as the `[planning]` service.
+`hub.worker` sets the worker image and its sandbox policy, and `hub.modelRoute` the model route of the worker, see [Model Route](#model-route).
+The OpenShell gateway admits a worker with the digest of its effective policy, which covers the endpoint of the route's provider and the identity of the provider in the session's OpenShell gateway.
+At each start of the gateway pod, the init container runs `heartwood-hosted-policy`: it creates a sandbox with the worker image, the policy and the provider, writes the digest of its admission into the manifest's `[worker]` table and removes the sandbox, so the gateway admits only workers of that policy.
+The digest is learned from the session's own OpenShell gateway, which is trusted for the session: the check then shows that every worker runs with the effective policy of the probe, and the policy file is checked against the manifest's `policy_file_sha256` first.
 
 The idle culler stops a server after `jupyterhub.cull.timeout` seconds without traffic through the proxy.
 The server's volume claim, the session namespace and the OpenShell gateway stay, and the next start runs the same session; the researcher signs in again, because tokens live in the gateway's memory only.
@@ -278,12 +304,102 @@ The control service logs which operator account rotated which project.
 
 Attempt keys are generated for each worker attempt, so a new attempt never reuses the key of an earlier one.
 
+### Model Route
+
+Workers reach models only through LiteLLM, which the chart installs with `images.litellm`, the non-root image of the LiteLLM release, pinned by digest.
+LiteLLM serves only HTTPS on port 4000, with a certificate that the platform CA signs for the names of its Service, and keeps its keys in its own PostgreSQL database.
+It runs as one replica, because it counts the spending of keys in memory before it records it.
+Its administration interface is off, and only the control service holds its master key, which Helm generates into the Secret `litellm`.
+
+`inference.models` lists the route's models and has no default.
+Each model's `name` is the model name that LiteLLM offers and the runtime profile of `syntheticPrices` that prices its input and output tokens; LiteLLM records the cost of each request from these prices.
+`litellmParams` are the model's LiteLLM parameters, and `apiKeySecret` names a Secret key that LiteLLM sends to the model as its API key.
+`maxInputTokens` and `maxOutputTokens` are the largest input and output of one request that the model accepts, and `supportsToolCalls` declares tool support to the gateways.
+LiteLLM does not enforce these limits, so they must not be lower than the limits the model itself enforces.
+LiteLLM trusts the platform CA alone for the models it calls.
+
+A hosted model, such as one on Vertex AI or Amazon Bedrock, is a model of the route with the LiteLLM parameters of its provider, the provider's credentials from a Secret through `inference.environment`, and `inference.trustPublicRoots`, with which LiteLLM also trusts the public roots of its image:
+
+```yaml
+inference:
+  trustPublicRoots: true
+  environment:
+    - name: VERTEX_CREDENTIALS
+      secretKeyRef: {name: vertex-credentials, key: credentials.json}
+    - name: AWS_ACCESS_KEY_ID
+      secretKeyRef: {name: bedrock-credentials, key: access-key-id}
+    - name: AWS_SECRET_ACCESS_KEY
+      secretKeyRef: {name: bedrock-credentials, key: secret-access-key}
+  models:
+    - name: hosted-gemini
+      maxInputTokens: 131072
+      maxOutputTokens: 8192
+      supportsToolCalls: true
+      litellmParams:
+        model: vertex_ai/gemini-2.5-pro
+        vertex_project: example-project
+        vertex_location: us-central1
+        vertex_credentials: os.environ/VERTEX_CREDENTIALS
+    - name: hosted-claude
+      maxInputTokens: 200000
+      maxOutputTokens: 8192
+      supportsToolCalls: true
+      litellmParams:
+        model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+        aws_region_name: us-east-1
+```
+
+Each name needs input and output token prices in `syntheticPrices`, and LiteLLM needs egress to the provider's endpoints.
+The models of a deployment and their data handling are the operator's choice; the route records their declared data handling in `hub.modelRoute.dataHandling`.
+
+At its first launch a session gets one virtual key for its workers.
+The key lists the route's models and only the routes `/v1/chat/completions` and `/v1/models`, so it cannot read other keys, the models' addresses or their health.
+Its budget is the session's reservation minus the largest cost of one request to any model of the route, because LiteLLM checks a key's spending before each request and the last admitted request can end above the budget.
+The key allows one request at a time, so only one request can be admitted below the budget and end above it.
+A session whose project has no more than that cost available is refused.
+The control service creates the provider `hub.modelRoute.provider` in the workspace `research` of the session's OpenShell gateway with the key, through the pinned OpenShell command-line tool in the platform services image, and keeps only the key's SHA-256 hash.
+The provider's profile allows the key only in `POST` requests to LiteLLM's chat completions endpoint from `hub.modelRoute.binaries` of the worker image; a worker that attaches the provider sees a placeholder in `hub.modelRoute.placeholderEnv`.
+OpenShell identifies a program by the path that its links resolve to, so `hub.modelRoute.binaries` names the worker image's interpreter by that path, which depends on the architecture; `deploy/qualify-kubernetes-worker.py images` reports it as `worker_interpreter`, and the [Kubernetes Qualification workflow](../.github/workflows/kubernetes-qualification.yml) installs the chart with it.
+The value has no default, and the chart refuses to render without it, or with the stand-in program `/agnhost` of `values-kind.yaml` together with another `hub.worker.image`.
+Each launch also gives the session a new discovery key, which may only list the route's models; the previous key stays valid for a gateway started before the launch, and the key before it is deleted.
+The gateway lists models with it through the model connection `hub.modelRoute.profileId` of its manifest, trusting the platform CA alone, and the manifest declares each model's limits and tool support.
+At a later launch the worker key keeps its budget and gets the route's current models, so a model removed from `inference.models` is refused from then on; a session whose OpenShell gateway lost the provider gets a rotated key.
+Only the gateway's answer that the provider is not found counts as a lost provider.
+While the tool cannot connect to the session's OpenShell gateway, as right after the gateway starts or restarts, the control service repeats the request with pauses that grow from half a second to eight seconds, for at most 60 seconds; a gateway it cannot reach in that time, or any other failure of the lookup, fails the launch with HTTP 502 and leaves the session's key unchanged.
+
+LiteLLM refuses a request beyond a key's budget with HTTP 422 and the error type `budget_exceeded`, and a model outside the key's list with HTTP 403 and the error type `key_model_access_denied`.
+
+Deleting a session settles its key: the control service sets the key's budget to its recorded spending, which blocks it, waits `inference.settleWaitSeconds` for LiteLLM to record the spending of the last requests, reads the spending until it stops changing, records it with the spending of earlier keys of the session as what the session incurred, and deletes the keys.
+LiteLLM writes the spending every `inference.spendWriteSeconds` plus up to five seconds, and `inference.settleWaitSeconds` must exceed that.
+The same interval drives LiteLLM's other periodic database jobs, so a low value is meant for test clusters.
+The recorded amount can exceed the key's budget by up to one request.
+When the spending does not stop changing, the deletion fails and is repeated.
+A session whose deletion settled its key and then failed is not launched again until the deletion completes.
+
+A platform operator rotates the worker key of a session with `POST /v1/researchers/{researcher}/projects/{project}/model-key`, accepted only from `control.operatorCallers`.
+The control service measures the old key's spending as at a deletion, creates a key with the remaining budget, replaces the provider's credential with it, deletes the old key and rewrites the gateway Secret.
+A worker attached to the old key fails at its next request, and the next worker uses the new key.
+
+### Local Model
+
+`inference.localModel` serves a model on the cluster's CPUs with `llama-server` from `images.modelRuntime`, the `runtime-image` stage of `images/Dockerfile`, which has no default.
+The image holds no weights: an init container downloads `inference.localModel.model.url` over HTTPS at each start, up to `inference.localModel.model.maxBytes`, and checks its SHA-256 digest against `inference.localModel.model.sha256`.
+`llama-server` serves HTTPS on port 8443 with a certificate that the platform CA signs for the names of its Service, and LiteLLM verifies it against the platform CA, so a server without that certificate receives no request.
+It requires the API key that Helm generates into the Secret `llama-server`, read with `--api-key-file`, and only LiteLLM receives the key; it runs with `--no-webui`.
+Its health and model list answer without the key, so the network policy admits only LiteLLM.
+The model is a model of the route, listed in `inference.models` with the name `inference.localModel.alias`, `api_base` `https://llama-server.<namespace>.svc.cluster.local:8443/v1` and `apiKeySecret` `{name: llama-server, key: api-key}`.
+When the runtime is not running, LiteLLM answers the model's requests with an error.
+
+`values-kind.yaml` serves Stories 260K, the small test model that `images/generic/local-runtime/models/stories260k.toml` pins, with a context of 4096 tokens.
+It exists to test the route and is not suited to research tasks.
+
 ### Network Policies
 
 Both namespaces deny ingress by default.
-PostgreSQL accepts connections from Keycloak.
+PostgreSQL accepts connections from Keycloak and LiteLLM.
 Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service and from its bootstrap Job.
 The control service accepts connections from `heartwood-sessions` and from the Hub.
+LiteLLM accepts connections on port 4000 from the control service, from the supervisors of session sandboxes and from the gateway pods in `heartwood-sessions`, and the synthetic model and `llama-server` accept connections from LiteLLM.
 versitygw accepts connections from its bootstrap Job.
 The proxy accepts researchers' HTTPS connections on port 8443 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
@@ -378,14 +494,18 @@ docker build --file reference-platform/services/Dockerfile --tag heartwood-platf
 image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-platform-services:candidate)"
 docker build --file images/Dockerfile --target hosted-gateway-image --tag heartwood-hosted-gateway:candidate .
 hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:candidate)"
+docker build --file images/Dockerfile --target runtime-image --tag heartwood-runtime:candidate .
+runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-runtime:candidate)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
-  --set "images.hostedGateway=${hosted}"
+  --set "images.hostedGateway=${hosted}" --set "images.modelRuntime=${runtime}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
-  --ignore ../tests/cluster/test_hub_spawning.py)
+  --ignore ../tests/cluster/test_hub_spawning.py --ignore ../tests/cluster/test_hosted_recovery.py \
+  --ignore ../tests/cluster/test_hosted_worker.py)
 bash reference-platform/cluster/delete-cluster.sh heartwood
 ```
 
-The Hub's tests in `test_hub_spawning.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+The Hub's tests in `test_hub_spawning.py`, `test_hosted_recovery.py` and `test_hosted_worker.py` start Heartwood gateways, which require an OpenShell gateway with the recorded patches, so they run with the images of [Worker Qualification](#worker-qualification).
+`test_hosted_worker.py` also needs the worker image in `hub.worker.image` and its interpreter in `hub.modelRoute.binaries`.
 
 `create-cluster.sh` installs Calico and the Agent Sandbox controller from pinned manifests whose SHA-256 digests it verifies.
 It also starts a registry on the kind network.
@@ -410,6 +530,7 @@ The command line client's device sign-in with the scope `project-demo` gives a t
 The tests check that the control service refuses the researcher's own token, a token for another service, and a researcher who is not a member of the client's project.
 With an exchanged token the estimate tool prices a synthetic plan from the chart's price sheet.
 The tests check that it refuses a request without a token for the control service, another project, and the launch context of another project.
+The budget overview shows the chart's allocations and the reservation of each launched session, a launch and a deletion change it, and it answers only for the project of the token.
 
 ### Worker Qualification
 
@@ -427,11 +548,14 @@ worker="$(jq --raw-output .image_references.worker test-results/kubernetes-quali
 openshell="$(jq --raw-output .openshell_repository test-results/kubernetes-qualification/worker/images.json)"
 staging="$(jq --compact-output '[.image_references.worker, .image_references.replacement_worker]' \
   test-results/kubernetes-qualification/worker/images.json)"
+interpreter="$(jq --compact-output '[.worker_interpreter]' test-results/kubernetes-qualification/worker/images.json)"
 hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:qualification)"
+runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-runtime:qualification)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
+  --set "images.modelRuntime=${runtime}" \
   --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
   --set "images.hostedGateway=${hosted}" --set "hub.worker.image=${worker}" \
-  --set-json "sessions.stagingImages=${staging}"
+  --set-json "sessions.stagingImages=${staging}" --set-json "hub.modelRoute.binaries=${interpreter}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
   --cluster-context kind-heartwood --staging-image "${worker}")
 python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood \

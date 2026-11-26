@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import ValidationError
 
 from heartwood.core_adapter import BackendErrorCode, backend_error_message
@@ -117,6 +119,8 @@ class ModelConnection:
     aws_profile_name: str | None = None
     description: str = ""
     static_models: tuple[str, ...] = ()
+    # Certificate authorities that replace the default bundle for model discovery.
+    ca_file: str | None = None
     subscription_vendor: str | None = None
     data_handling: ModelDataHandling | None = None
     # Deployment declarations for models the OpenHands model table may not recognize.
@@ -164,6 +168,15 @@ class ModelConnection:
                         "base_url, catalog_endpoint, and policy_endpoint must use the same origin"
                     )
         self._validate_credentials(configurable=configurable)
+        if self.ca_file is not None and (
+            not Path(self.ca_file).is_absolute()
+            or self.protocol not in {"openai", "openai-compatible"}
+            or self.catalog_endpoint is None
+            or not self.catalog_endpoint.startswith("https://")
+        ):
+            raise ModelCatalogError(
+                "ca_file is an absolute path for discovery over https by an OpenAI protocol"
+            )
         if self.protocol == "subscription":
             if self.subscription_vendor != "openai":
                 raise ModelCatalogError(
@@ -349,9 +362,11 @@ class ModelConnection:
         }
 
     def safe_dict(self, env: Mapping[str, str]) -> dict[str, object]:
-        """Return API-safe connection metadata."""
+        """Return API-safe connection metadata, without the operator's file paths."""
+        manifest = self.manifest_dict()
+        manifest.pop("ca_file")
         return {
-            **self.manifest_dict(),
+            **manifest,
             "data_handling_summary": data_handling_summary(self.data_handling),
             "group": self.group,
             "group_label": _CONNECTION_GROUP_LABELS[self.group],
@@ -803,6 +818,7 @@ def _connection_from_manifest(value: ModelConnectionManifest) -> ModelConnection
         static_models=tuple(value.static_models),
         subscription_vendor=value.subscription_vendor,
         data_handling=value.data_handling,
+        ca_file=value.ca_file,
     )
     connection.validate()
     return connection
@@ -825,6 +841,14 @@ def _list_openai_models(
     if connection.connection_id == "heartwood":
         require_managed_base_url(connection.base_url)
         options["http_client"] = managed_inference_client(os.environ if env is None else env)
+    elif connection.ca_file is not None:
+        # The connection's authorities alone, without proxies from the environment.
+        options["http_client"] = httpx.Client(
+            verify=ssl.create_default_context(cafile=connection.ca_file),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=_CATALOG_TIMEOUT_SECONDS,
+        )
     client = module.OpenAI(**options)
     try:
         return tuple(

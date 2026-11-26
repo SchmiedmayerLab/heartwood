@@ -27,8 +27,14 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from heartwood.schemas import PlatformLaunchContext
+from heartwood_platform.control.inference import RouteModel
 
 _DEPLOYMENT = "/etc/heartwood/deployment"
+# The OpenShell workspace of the session's workers, in which its provider lives.
+WORKER_WORKSPACE = "research"
+# The model connection of the route, whose identifier is the worker's profile.
+_MODELS_PATH = "/chat/completions"
+_PENDING_DIGEST = "0" * 64
 # Session gateways derive their Heartwood project identity from the session in this
 # namespace, so a restarted gateway keeps its project state.
 _PROJECT_NAMESPACE = uuid.UUID("1f9b6c2e-6d35-4f1e-9a52-4e0b8a7c3d21")
@@ -46,21 +52,38 @@ class HostedWorkerSettings(_Settings):
     """The worker that a hosted gateway launches in its session namespace."""
 
     image: ImageReference
-    # The effective sandbox policy digest and the policy file, from qualification.
-    sandbox_policy_sha256: Digest
+    # The sandbox policy of the workers.
     policy: dict[str, Any]
     cpu: str = Field(pattern=r"^[1-9][0-9]*m?$")
     memory: str = Field(pattern=r"^[1-9][0-9]*(Mi|Gi)$")
 
 
-class ModelRouteSettings(_Settings):
-    """The model route that the manifest names for the worker."""
+class DataHandlingSettings(_Settings):
+    """The declared recipient and retention authority of the route."""
 
-    profile_id: str = Field(min_length=1, max_length=128)
-    model: str = Field(min_length=1, max_length=256)
-    endpoint: str = Field(pattern=r"^https://[^\s?#]+$")
+    destination: str = Field(
+        pattern=r"^(same-compute|institution-managed|provider|operator-defined)$"
+    )
+    retention_authority: str = Field(
+        pattern=r"^(deployment|institution|provider|service-operator)$"
+    )
+    route: str = Field(min_length=1, max_length=240, pattern=r"\S")
+
+
+class ModelRouteSettings(_Settings):
+    """The model route that the manifest names for the worker and for model discovery."""
+
+    # The model connection's identifier and the worker's model profile.
+    profile_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    # The model of the worker: a model name of the route's LiteLLM proxy.
+    model: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    # The proxy's chat completions endpoint.
+    endpoint: str = Field(pattern=r"^https://[^\s?#]+/chat/completions$")
     provider: str = Field(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
     placeholder_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # Programs in the worker image that may send the route's key.
+    binaries: tuple[Annotated[str, StringConstraints(pattern=r"^/\S+$")], ...] = Field(min_length=1)
+    data_handling: DataHandlingSettings
 
 
 class HostedGatewaySettings(_Settings):
@@ -95,13 +118,74 @@ class HostedGateway:
     """Render the files of the hosted gateway of one session."""
 
     def __init__(
-        self, settings: HostedGatewaySettings, *, issuer: str, supervisor: str, sandbox: str
+        self,
+        settings: HostedGatewaySettings,
+        *,
+        issuer: str,
+        supervisor: str,
+        sandbox: str,
+        models: tuple[RouteModel, ...],
     ) -> None:
-        """Configure gateways for ``issuer`` and the OpenShell images of the sessions."""
+        """Configure gateways for ``issuer`` and the OpenShell images of the sessions.
+
+        ``models`` are the models of the route, which the manifest declares.
+        """
         self._settings = settings
+        self._models = models
         self._issuer = issuer
         self._supervisor = supervisor
         self._sandbox = sandbox
+
+    def _connections(self, base_url: str, catalog: str, discovery_key: str) -> str:
+        """Return the model connection of the route and the declarations of its models.
+
+        The gateway discovers the models with the session's discovery key, which may only
+        list them, and trusts the platform CA alone for it.
+        """
+        route = self._settings.model_route
+        handling = route.data_handling
+        connection: dict[str, object] = {
+            "connection_id": route.profile_id,
+            "label": "Platform models",
+            "protocol": "openai-compatible",
+            "model_prefix": "openai/",
+            "credential_kind": "file",
+            "api_key_file": discovery_key,
+            "ca_file": f"{_DEPLOYMENT}/platform-ca.crt",
+            "base_url": base_url,
+            "catalog_endpoint": catalog,
+            "policy_endpoint": route.endpoint,
+        }
+        sections = [
+            _table("model_connections", {"schema_version": "heartwood.model-connections.v1"}),
+            "[[model_connections.connections]]\n" + _table("", connection),
+            _table(
+                "model_connections.connections.data_handling",
+                {
+                    "destination": handling.destination,
+                    "retention_authority": handling.retention_authority,
+                    "route": handling.route,
+                },
+            ),
+            _table("model_metadata", {"schema_version": "heartwood.platform-model-metadata.v1"}),
+        ]
+        for model in self._models:
+            sections.append(
+                "[[model_metadata.models]]\n"
+                + _table(
+                    "",
+                    {
+                        "connection_id": route.profile_id,
+                        "model_id": model.name,
+                        "protocols": ["chat"],
+                        "context_window_tokens": model.max_input_tokens + model.max_output_tokens,
+                        "max_input_tokens": model.max_input_tokens,
+                        "max_output_tokens": model.max_output_tokens,
+                        "supports_tool_calls": model.supports_tool_calls,
+                    },
+                )
+            )
+        return "\n".join(sections)
 
     def files(
         self,
@@ -116,6 +200,9 @@ class HostedGateway:
         settings = self._settings
         worker, route = settings.worker, settings.model_route
         project_id = str(uuid.uuid5(_PROJECT_NAMESPACE, session))
+        base_url = route.endpoint.removesuffix(_MODELS_PATH)
+        catalog = f"{base_url}/models"
+        discovery_key = f"{_DEPLOYMENT}/model-discovery-key"
         policy = json.dumps(worker.policy, sort_keys=True, separators=(",", ":"))
         repository, _, digest = worker.image.partition("@")
         # Pods reference the worker by digest alone, so a tag in the reference is dropped.
@@ -139,12 +226,14 @@ class HostedGateway:
                         "platform_id": "generic",
                         "deny_egress_by_default": True,
                         "allowed_model_endpoints": [route.endpoint],
-                        "allowed_model_catalog_endpoints": [],
+                        "allowed_model_catalog_endpoints": [catalog],
                         "allowed_capability_tiers": ["supervised"],
                         "allowed_action_review_modes": ["review-all"],
-                        "credential_allowlist": [],
+                        "credential_allowlist": [discovery_key],
+                        "allowed_data_destinations": [route.data_handling.destination],
                     },
                 ),
+                self._connections(base_url, catalog, discovery_key),
                 _table(
                     "identity",
                     {
@@ -171,11 +260,13 @@ class HostedGateway:
                         "supervisor_image_digest": self._supervisor,
                         "sandbox_image_digest": self._sandbox,
                         "workspace": "research",
-                        "sandbox_policy_sha256": worker.sandbox_policy_sha256,
+                        # The init container of the gateway pod replaces it with the
+                        # digest that the session's OpenShell gateway admits the policy with.
+                        "sandbox_policy_sha256": _PENDING_DIGEST,
                         "policy_path": f"{_DEPLOYMENT}/worker-policy.json",
                         "policy_file_sha256": hashlib.sha256(policy.encode()).hexdigest(),
                         "profile_id": route.profile_id,
-                        "model": route.model,
+                        "model": f"openai/{route.model}",
                         "model_endpoint": route.endpoint,
                         "provider": route.provider,
                         "placeholder_env": route.placeholder_env,

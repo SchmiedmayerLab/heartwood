@@ -87,6 +87,13 @@ class ModelConnectionManifest(BaseModel):
     api_key_file: _NonEmptyString | None = Field(
         default=None, description="Absolute mounted credential-file path, never its contents."
     )
+    ca_file: _NonEmptyString | None = Field(
+        default=None,
+        description=(
+            "Absolute PEM file of certificate authorities that replaces the default bundle "
+            "for model discovery over HTTPS, never its contents."
+        ),
+    )
     api_version: _NonEmptyString | None = Field(default=None, pattern=r"\S")
     aws_region_name: _NonEmptyString | None = Field(default=None, pattern=r"\S")
     aws_profile_name: _NonEmptyString | None = Field(default=None, pattern=r"\S")

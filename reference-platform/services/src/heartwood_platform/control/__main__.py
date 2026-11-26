@@ -11,8 +11,11 @@ from __future__ import annotations
 import logging
 import ssl
 import sys
+import tempfile
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Self
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -22,9 +25,23 @@ from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
 from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, create_app
-from heartwood_platform.control.hosted import HostedGateway, HostedGatewaySettings, sandbox_digests
+from heartwood_platform.control.budgets import Allocation, Category, Ledger
+from heartwood_platform.control.hosted import (
+    WORKER_WORKSPACE,
+    HostedGateway,
+    HostedGatewaySettings,
+    sandbox_digests,
+)
+from heartwood_platform.control.inference import (
+    InferenceSetupError,
+    ManagedInference,
+    RouteModel,
+    request_headroom,
+)
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
+from heartwood_platform.control.litellm import LiteLLM
+from heartwood_platform.control.openshell import OpenShellProviders, ProviderRoute
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.researchers import Subject, read_key, researcher_id
@@ -32,6 +49,9 @@ from heartwood_platform.control.sessions import ApiServerAddress, Sessions, Sess
 
 # The form of the references in a launch context.
 Reference = Annotated[str, StringConstraints(pattern=r"^\S{1,512}$")]
+# An amount in the denomination of the price sheet, with at most 18 integer and 12
+# fractional digits.
+Amount = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,12})?$")]
 
 
 class _Settings(BaseModel):
@@ -57,6 +77,37 @@ class ProjectSettings(_Settings):
     billing_attribution_ref: Reference
     policy_ref: Reference
     members: frozenset[Subject] = frozenset()
+    # The amounts allocated to each category of the project's work.
+    budgets: dict[Category, Amount] = Field(default_factory=dict)
+
+
+class RouteModelSettings(_Settings):
+    """A model of the route, named like its runtime profile in the price sheet."""
+
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    max_input_tokens: int = Field(gt=0, le=10_000_000)
+    max_output_tokens: int = Field(gt=0, le=10_000_000)
+    supports_tool_calls: bool = False
+
+
+class InferenceSettings(_Settings):
+    """The model route of sessions and how much of its budget each session reserves."""
+
+    session_reservation: Amount
+    # The LiteLLM proxy, reached over HTTPS with a certificate of the platform CA.
+    litellm_url: str = Field(pattern=r"^https://[^/\s]+$")
+    master_key_file: Path
+    models: tuple[RouteModelSettings, ...] = Field(min_length=1)
+    # How long a settlement waits for the proxy to record the last requests' spending.
+    settle_wait_seconds: float = Field(default=25.0, ge=0, le=600)
+    # The pinned OpenShell command-line tool, which manages the sessions' providers.
+    openshell_cli: Path
+
+    @model_validator(mode="after")
+    def _validate(self) -> Self:
+        if Decimal(self.session_reservation) == 0:
+            raise ValueError("session_reservation must be positive")
+        return self
 
 
 class ApiServerSettings(_Settings):
@@ -104,17 +155,78 @@ class Settings(_Settings):
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
+    inference: InferenceSettings
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
         identifiers = [project.id for project in self.projects]
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("project identifiers must be unique")
+        names = [model.name for model in self.inference.models]
+        if len(set(names)) != len(names):
+            raise ValueError("model names must be unique")
+        if self.hosted.model_route.model not in names:
+            raise ValueError("the worker's model is not a model of the route")
+        try:
+            headroom = request_headroom(route_models(self), self.synthetic_prices)
+        except InferenceSetupError as error:
+            raise ValueError(str(error)) from None
+        if Decimal(self.inference.session_reservation) <= headroom:
+            raise ValueError(
+                "session_reservation must exceed the largest cost of one request, "
+                f"{headroom} for the route's models"
+            )
         try:
             self.redirect_uri_template.format(researcher="researcher", project="project")
         except (IndexError, KeyError) as error:
             raise ValueError("redirect_uri_template has an unknown field") from error
         return self
+
+
+def route_models(settings: Settings) -> tuple[RouteModel, ...]:
+    """Return the models of the route."""
+    return tuple(
+        RouteModel(
+            model.name, model.max_input_tokens, model.max_output_tokens, model.supports_tool_calls
+        )
+        for model in settings.inference.models
+    )
+
+
+def _inference(settings: Settings, ca_file: Path) -> ManagedInference:
+    route = settings.hosted.model_route
+    endpoint = urlsplit(route.endpoint)
+    assert endpoint.hostname is not None
+    master_key = settings.inference.master_key_file
+    proxy = LiteLLM(
+        httpx.Client(
+            base_url=settings.inference.litellm_url,
+            timeout=30,
+            verify=ssl.create_default_context(cafile=ca_file),
+        ),
+        lambda: master_key.read_text(encoding="utf-8").strip(),
+    )
+    providers = OpenShellProviders(
+        settings.inference.openshell_cli,
+        ProviderRoute(
+            name=route.provider,
+            workspace=WORKER_WORKSPACE,
+            placeholder_env=route.placeholder_env,
+            host=endpoint.hostname,
+            port=endpoint.port or 443,
+            path=endpoint.path,
+            binaries=route.binaries,
+        ),
+        Path(tempfile.gettempdir()),
+    )
+    return ManagedInference(
+        settings.database,
+        proxy,
+        providers,
+        route_models(settings),
+        settings.synthetic_prices,
+        settle_wait_seconds=settings.inference.settle_wait_seconds,
+    )
 
 
 def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
@@ -123,6 +235,12 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
     registry.synchronize(
         Project(project.id, project.billing_attribution_ref, project.policy_ref, project.members)
         for project in settings.projects
+    )
+    ledger = Ledger(settings.database)
+    ledger.synchronize(
+        Allocation(project.id, category, Decimal(amount))
+        for project in settings.projects
+        for category, amount in project.budgets.items()
     )
     client = httpx.Client(
         base_url=settings.keycloak.url,
@@ -173,6 +291,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         issuer=settings.keycloak.issuer,
         supervisor=supervisor,
         sandbox=sandbox,
+        models=route_models(settings),
     )
     researcher_key = read_key(settings.researcher_id_key_file).encode()
     issuer = settings.keycloak.issuer
@@ -184,12 +303,16 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         settings.redirect_uri_template,
         lambda subject: researcher_id(issuer, subject, researcher_key),
         hosted=hosted,
+        ledger=ledger,
+        session_reservation=Decimal(settings.inference.session_reservation),
+        inference=_inference(settings, settings.sessions.platform_ca_file),
     )
     return create_app(
         launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
         settings.synthetic_prices,
+        ledger,
         operators=ServiceTokens(
             kubernetes.review_token, settings.audience, settings.operator_callers
         )

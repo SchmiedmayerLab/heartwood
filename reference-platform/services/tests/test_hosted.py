@@ -22,6 +22,7 @@ from heartwood_platform.control.hosted import (
     _table,
     sandbox_digests,
 )
+from heartwood_platform.control.inference import RouteModel
 
 from heartwood.schemas import PlatformLaunchContext
 
@@ -36,19 +37,25 @@ HOSTED: dict[str, Any] = {
     "control_url": "https://heartwood-control.heartwood-platform.svc.cluster.local:8443",
     "worker": {
         "image": "registry.example.test:5000/heartwood-worker:candidate@sha256:" + "2" * 64,
-        "sandbox_policy_sha256": "3" * 64,
         "policy": {"version": 1, "process": {"runAsUser": "10001"}},
         "cpu": "1",
         "memory": "2Gi",
     },
     "model_route": {
         "profile_id": "platform-route",
-        "model": "platform/no-route",
-        "endpoint": "https://model-route.invalid/v1/chat/completions",
+        "model": "synthetic-coder",
+        "endpoint": "https://litellm.heartwood-platform.svc.cluster.local:4000/v1/chat/completions",
         "provider": "platform-route",
         "placeholder_env": "HEARTWOOD_PLATFORM_MODEL_KEY",
+        "binaries": ["/usr/local/bin/python3.12"],
+        "data_handling": {
+            "destination": "operator-defined",
+            "retention_authority": "service-operator",
+            "route": "The platform's LiteLLM proxy and the model behind it",
+        },
     },
 }
+MODELS = (RouteModel("synthetic-coder", 32768, 4096, supports_tool_calls=True),)
 _LAUNCH = PlatformLaunchContext(
     project_context_id="abc123",
     platform_id="reference-platform",
@@ -69,6 +76,7 @@ def _files(
         issuer="https://keycloak.example.test/realms/heartwood",
         supervisor=supervisor,
         sandbox=sandbox,
+        models=MODELS,
     )
     return gateway.files(
         session=session,
@@ -105,8 +113,36 @@ def test_manifest_binds_the_researcher_the_session_worker_and_the_planning_servi
         == hashlib.sha256(files["worker-policy.json"].encode()).hexdigest()
     )
     assert worker["inputs"] == {"schema_version": "heartwood.worker-inputs.v1", "files": []}
-    # The model route names an address that does not resolve, and the policy allows only it.
-    assert worker["model_endpoint"] in manifest["policy"]["allowed_model_endpoints"]
+    # The worker calls the route's model through LiteLLM, and the policy allows only that.
+    endpoint = "https://litellm.heartwood-platform.svc.cluster.local:4000/v1"
+    assert (worker["profile_id"], worker["model"]) == ("platform-route", "openai/synthetic-coder")
+    assert worker["model_endpoint"] == f"{endpoint}/chat/completions"
+    assert worker["provider"] == "platform-route"
+    policy = manifest["policy"]
+    assert policy["allowed_model_endpoints"] == [f"{endpoint}/chat/completions"]
+    assert policy["allowed_model_catalog_endpoints"] == [f"{endpoint}/models"]
+    assert policy["allowed_data_destinations"] == ["operator-defined"]
+    # The gateway lists the models with the session's discovery key and the platform CA.
+    (connection,) = manifest["model_connections"]["connections"]
+    assert connection["connection_id"] == worker["profile_id"]
+    assert connection["api_key_file"] == "/etc/heartwood/deployment/model-discovery-key"
+    assert policy["credential_allowlist"] == [connection["api_key_file"]]
+    assert connection["ca_file"] == "/etc/heartwood/deployment/platform-ca.crt"
+    assert (connection["catalog_endpoint"], connection["policy_endpoint"]) == (
+        f"{endpoint}/models",
+        f"{endpoint}/chat/completions",
+    )
+    assert connection["data_handling"]["destination"] == "operator-defined"
+    (declared,) = manifest["model_metadata"]["models"]
+    assert declared == {
+        "connection_id": "platform-route",
+        "model_id": "synthetic-coder",
+        "protocols": ["chat"],
+        "context_window_tokens": 36864,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
+        "supports_tool_calls": True,
+    }
     assert manifest["planning"] == {
         "url": "https://heartwood-control.heartwood-platform.svc.cluster.local:8443/mcp",
         "ca_file": "/etc/heartwood/deployment/platform-ca.crt",
@@ -144,6 +180,7 @@ def test_a_worker_image_without_a_registry_path_keeps_its_name() -> None:
         issuer="https://keycloak.example.test/realms/heartwood",
         supervisor=supervisor,
         sandbox=sandbox,
+        models=MODELS,
     )
     files = gateway.files(
         session="abc123",

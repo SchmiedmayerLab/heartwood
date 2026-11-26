@@ -11,6 +11,7 @@ import json
 import secrets
 import threading
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,6 +31,8 @@ from heartwood_platform.common.kubernetes import Kubernetes
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
+from heartwood_platform.control.budgets import Allocation, Ledger
+from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
@@ -61,6 +64,41 @@ _ACTOR_KEY = secrets.token_urlsafe(32)
 def _id(subject: str) -> str:
     """Return the researcher identifier that names a subject in paths and URLs."""
     return researcher_id(ISSUER, subject, _RESEARCHER_KEY)
+
+
+class FakeInference:
+    """The model route: records the keys it gives and what each session incurred."""
+
+    headroom = Decimal("0.25")
+
+    def __init__(self) -> None:
+        self.incurred: dict[str, Decimal] = {}
+        self.settlements: list[str] = []
+        self.budgets: dict[str, Decimal] = {}
+        self.rotated: list[str] = []
+        self.forgotten: list[str] = []
+
+    def prepare(
+        self, session: str, project: str, reservation: Decimal, route: SessionRoute
+    ) -> dict[str, str]:
+        del project
+        assert route.endpoint.startswith("https://openshell.")
+        self.budgets[session] = reservation - self.headroom
+        return {"model-discovery-key": f"discovery-key-of-{session}"}
+
+    def rotate(self, session: str, project: str, route: SessionRoute) -> None:
+        del project, route
+        self.rotated.append(session)
+
+    def settle(self, session: str) -> Decimal:
+        self.settlements.append(session)
+        return self.incurred.get(session, Decimal(0))
+
+    def settled(self, session: str) -> bool:
+        return session in self.settlements and session not in self.forgotten
+
+    def forget(self, session: str) -> None:
+        self.forgotten.append(session)
 
 
 class Platform:
@@ -96,6 +134,15 @@ class Platform:
             ),
             self.registry.session_ids,
         )
+        self.ledger = Ledger(directory / "control.sqlite3", clock=lambda: _NOW)
+        self.ledger.synchronize(
+            [
+                Allocation("demo", "inference", Decimal(5)),
+                Allocation("demo", "compute", Decimal(50)),
+                Allocation("other", "inference", Decimal("1.5")),
+            ]
+        )
+        self.inference = FakeInference()
         launches = LaunchService(
             self.registry,
             keycloak,
@@ -104,6 +151,9 @@ class Platform:
             _TEMPLATE,
             _id,
             clock=lambda: _NOW,
+            ledger=self.ledger,
+            session_reservation=Decimal(1),
+            inference=self.inference,
         )
         self.client = TestClient(
             create_app(
@@ -111,6 +161,7 @@ class Platform:
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
                 PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
+                self.ledger,
                 clock=lambda: _NOW,
                 operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
             )
@@ -190,6 +241,7 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
     files = {name: base64.b64decode(value).decode() for name, value in secret["data"].items()}
     assert json.loads(files.pop("launch.json")) == launch
     assert files == {
+        "model-discovery-key": f"discovery-key-of-{launch['session']}",
         "keycloak-client-secret": "secret-of-uuid-1",
         "openshell-ca.crt": f"ca.crt of hw-s-{launch['session']}",
         "openshell-tls.crt": f"tls.crt of hw-s-{launch['session']}",
@@ -337,6 +389,15 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         "client_id": "heartwood-control",
         "client_secret_file": "/nonexistent",
     }
+    inference: dict[str, Any] = {
+        "session_reservation": "1",
+        "litellm_url": "https://litellm.heartwood-platform.svc.cluster.local:4000",
+        "master_key_file": "/etc/heartwood-control/litellm/master-key",
+        "models": [
+            {"name": "synthetic-coder", "max_input_tokens": 32768, "max_output_tokens": 4096}
+        ],
+        "openshell_cli": "/usr/local/bin/openshell",
+    }
     settings = {
         "platform_id": "reference-platform",
         "database": str(tmp_path / "control.sqlite3"),
@@ -365,6 +426,7 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         },
         "projects": [project],
         "synthetic_prices": SYNTHETIC_PRICES,
+        "inference": inference,
     }
     assert Settings.model_validate_json(json.dumps(settings)).projects[0].id == "demo"
     members = {**project, "members": ["auth0|64ab", "synthetic@example.test", _BOB]}
@@ -384,6 +446,20 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
         # The service serves only HTTPS, so its certificate and key are required.
         {"tls": {"certificate_file": "/etc/heartwood-control/tls/tls.crt"}},
+        # A session reserves more than one request can cost, and budgets are amounts of
+        # known kinds.
+        {"inference": {**inference, "session_reservation": "0"}},
+        {"inference": {**inference, "session_reservation": "0.0225"}},
+        # Every model of the route has token prices, and the worker uses one of them.
+        {
+            "inference": {
+                **inference,
+                "models": [{"name": "unpriced", "max_input_tokens": 1, "max_output_tokens": 1}],
+            }
+        },
+        {"hosted": {**HOSTED, "model_route": {**HOSTED["model_route"], "model": "other"}}},
+        {"projects": [{**project, "budgets": {"inference": "-1"}}]},
+        {"projects": [{**project, "budgets": {"storage": "1"}}]},
     ):
         with pytest.raises(ValueError, match="validation error"):
             Settings.model_validate_json(json.dumps({**settings, **change}))
@@ -422,7 +498,18 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     sessions = SlowSessions()
     keycloak = FakeKeycloak()
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
-    launches = LaunchService(registry, clients, sessions, "reference-platform", _TEMPLATE, _id)
+    ledger = Ledger(tmp_path / "control.sqlite3")
+    ledger.synchronize([Allocation("demo", "inference", Decimal(5))])
+    launches = LaunchService(
+        registry,
+        clients,
+        sessions,
+        "reference-platform",
+        _TEMPLATE,
+        _id,
+        ledger=ledger,
+        session_reservation=Decimal(1),
+    )
 
     launches.prepare(_BOB, "demo")
     sessions.deletion.join()
@@ -608,7 +695,14 @@ def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> 
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
     shared = "r" + "0" * 32
     launches = LaunchService(
-        registry, clients, cast(Any, None), "reference-platform", _TEMPLATE, lambda _: shared
+        registry,
+        clients,
+        cast(Any, None),
+        "reference-platform",
+        _TEMPLATE,
+        lambda _: shared,
+        ledger=Ledger(tmp_path / "control.sqlite3"),
+        session_reservation=Decimal(1),
     )
 
     with pytest.raises(NotAMemberError):

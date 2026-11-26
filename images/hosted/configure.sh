@@ -18,7 +18,8 @@ home=/var/lib/heartwood-home
 # A restarted init container starts again from empty directories.
 rm -rf "${work}/deployment" "${work}/native"
 mkdir -p "${work}/deployment" "${work}/native" "${home}/research" "${home}/state"
-for name in deployment.toml platform-ca.crt actor-key kubeconfig worker-policy.json launch-context.json; do
+for name in deployment.toml platform-ca.crt actor-key kubeconfig worker-policy.json \
+  launch-context.json model-discovery-key; do
   cp "${source}/${name}" "${work}/deployment/${name}"
 done
 cp "${source}/keycloak-client-secret" "${work}/deployment/client-secret"
@@ -37,3 +38,8 @@ XDG_CONFIG_HOME="${work}/native" /usr/local/bin/openshell gateway add "${endpoin
 find "${work}" -mindepth 1 -type d -exec chmod 0700 {} +
 find "${work}" -mindepth 1 -type f -exec chmod 0600 {} +
 chmod 0700 "${home}/research" "${home}/state"
+# The digest of the workers' effective sandbox policy is particular to this session's
+# OpenShell gateway, so it is learned there and written into the manifest, which the
+# modes above leave writable for its owner.
+/opt/heartwood/.venv/bin/python -I -B /usr/local/libexec/heartwood-hosted-policy \
+  "${work}/deployment" "${work}/native"
