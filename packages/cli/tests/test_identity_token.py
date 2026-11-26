@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,13 +17,18 @@ from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from heartwood.cli import main
+from heartwood.gateway import IdentityAccess, IdentityDeployment, IngressPolicy
+from heartwood.gateway._identity import researcher_actor
 
 _ISSUER = "https://id.example.test/realms/research"
 _PROVIDER_TEXT = "synthetic provider detail"
 _TOKEN = "synthetic.access.token"
+_ACTOR_KEY = b"synthetic-actor-key-0123456789abcdef"
 
 
 class _Provider:
@@ -254,3 +261,74 @@ def test_device_sign_in_reads_a_certificate_authority_file(
     loopback = ["identity", "token", "--issuer", "http://127.0.0.1:9", "--client-id", "cli"]
     assert main(loopback) == 1
     assert "could not be reached" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+        "auth0|64ab12cd34ef56ab78cd90ef",
+        "109876543210987654321",
+        "AAAAAAAAAAAAAAAAAAAAAIkzqFVrSaSaFHy782bbtaQ",
+        "synthetic.researcher@example.test",
+    ],
+)
+def test_a_device_sign_in_token_reaches_the_gateway_as_the_derived_actor(
+    provider: _Provider, capsys: pytest.CaptureFixture[str], tmp_path: Path, subject: str
+) -> None:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    keys = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))
+
+    def token(sub: str) -> str:
+        now = int(time.time())
+        claims = {
+            "iss": _ISSUER,
+            "sub": sub,
+            "aud": ["hw-proj-demo", "account"],
+            "azp": "heartwood-cli",
+            "iat": now,
+            "exp": now + 300,
+        }
+        return jwt.encode(claims, key, "RS256", headers={"kid": "key-1"})
+
+    def gateway_provider(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/keys"):
+            return httpx.Response(200, json={"keys": [{**keys, "kid": "key-1", "use": "sig"}]})
+        return httpx.Response(
+            200,
+            json={
+                "issuer": _ISSUER,
+                "authorization_endpoint": f"{_ISSUER}/auth",
+                "token_endpoint": f"{_ISSUER}/token",
+                "jwks_uri": f"{_ISSUER}/keys",
+            },
+        )
+
+    provider.pending = []
+    provider.answer = {"access_token": token(subject)}
+    assert main(_arguments()) == 0
+    printed = capsys.readouterr().out.strip()
+    access = IdentityAccess(
+        IdentityDeployment(
+            issuer=_ISSUER,
+            client_id="hw-proj-demo",
+            client_secret_file=tmp_path / "client-secret",
+            actor_key_file=tmp_path / "actor-key",
+            subject=subject,
+        ),
+        IngressPolicy.create(
+            mode="identity-proxy",
+            bind_host="0.0.0.0",
+            external_origin="https://research.example.test",
+            trusted_proxy_sources=("10.0.0.0/24",),
+        ),
+        client_secret="synthetic-client-secret",
+        actor_key=_ACTOR_KEY,
+        http=httpx.Client(transport=httpx.MockTransport(gateway_provider)),
+    )
+
+    actor = access.principal({"authorization": (f"Bearer {printed}",)})
+    assert actor == researcher_actor(_ISSUER, subject, _ACTOR_KEY)
+    assert subject not in actor
+    other = token("auth0|another-synthetic-researcher")
+    assert access.principal({"authorization": (f"Bearer {other}",)}) is None

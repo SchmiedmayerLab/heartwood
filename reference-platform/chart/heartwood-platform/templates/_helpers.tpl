@@ -33,6 +33,11 @@ upgrade does not rotate it. Arguments: context, name, key.
 {{- end -}}
 {{- end }}
 
+{{- /* The issuer of the realm's tokens, from which the Hub and the control service derive researcher identifiers. */ -}}
+{{- define "heartwood.issuer" -}}
+{{- printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .) -}}
+{{- end }}
+
 {{- define "heartwood.keycloakUrl" -}}
 {{- .Values.keycloak.url | default (printf "https://keycloak.%s.svc.cluster.local:8443" .Release.Namespace) -}}
 {{- end }}

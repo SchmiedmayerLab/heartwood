@@ -156,6 +156,7 @@ export type SkillSummary = Api.SkillSummaryResponse;
 export type SkillSettings = Api.SkillSettingsResponse;
 export type SpecialistRole = Api.SpecialistRoleResponse;
 export type SpecialistSettings = Api.SpecialistSettingsResponse;
+export type SignInDisplay = Api.SignInDisplayResponse;
 export type WorkspaceTree = Api.WorkspaceTreeResponse;
 export type WorkspaceTreeEntry = Api.WorkspaceTreeEntryResponse;
 export type WorkspaceFile = Api.WorkspaceFileResponse;

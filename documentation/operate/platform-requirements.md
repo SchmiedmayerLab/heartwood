@@ -16,7 +16,7 @@ Hosting, isolated workers, inference and research services are independent capab
 | Capability | Requested from the platform | Heartwood status |
 |---|---|---|
 | Run the application | A release artifact, durable storage and an authenticated researcher route | Current; interfaces depend on the platform adapter |
-| Isolate complete workers | A Docker engine or a Kubernetes namespace, and a sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress | Current for the OpenShell Docker reference adapter and for the OpenShell Kubernetes driver under the [Kubernetes worker path](#kubernetes-worker-path) requirements; qualified only against the qualification-only gateway build, the Kubernetes driver on a kind cluster |
+| Isolate complete workers | A Docker engine or a Kubernetes namespace, and a sandbox gateway under operator control, protected state, selected read-only inputs, bounded writable storage and enforced egress | Current for the OpenShell Docker reference adapter and for the OpenShell Kubernetes driver under the [Kubernetes worker path](#kubernetes-worker-path) requirements; qualified only against the [sandbox gateway build](#sandbox-gateway), the Kubernetes driver on a kind cluster |
 | Use approved inference | Authorized model discovery and an inference endpoint with streaming and native tool calls | Current through built-in and configured routes; connection-manifest startup unavailable |
 | Inspect research metadata | Authorized project, dataset, file and workflow descriptions | Draft profile and offline checks; no built-in connector |
 | Execute research workflows | Native submission, status, results and cancellation with independent authorization | Draft profile; [platform job operations](platform-contract.md#platform-job-operations) through an MCP job service, otherwise the trusted Python [outside operation](platform-contract.md#outside-operation-admission) interface with a platform-specific adapter |
@@ -162,7 +162,7 @@ The reference adapter needs an operator-controlled Docker engine; it does not ha
 
 With `driver = "openshell-kubernetes"`, the worker of a session runs as pods that the OpenShell Kubernetes driver creates in one namespace.
 Heartwood reads those pods, their NetworkPolicies and the namespace through the Kubernetes API before it admits a worker; the [accepted values](../architecture/system.md#kubernetes-worker-admission) are listed with the Docker values.
-The worker's `/workspace` on this driver does not persist across a container restart ([Managed Native Worker](../architecture/system.md#managed-native-worker)).
+The worker's `/workspace` on this driver lives on the container's writable layer; the workload pod never restarts its container, so the directory lasts as long as the worker ([Managed Native Worker](../architecture/system.md#managed-native-worker)).
 The platform provides what follows.
 The reference platform chart in `reference-platform/chart` provides each namespace and gateway item for a session, and the [Kubernetes driver qualification](../architecture/testing.md#kubernetes-driver-qualification) runs against it on a kind cluster.
 
@@ -196,8 +196,10 @@ The credential of the Heartwood gateway holds the permissions listed for the [`k
 An admission policy limits what it creates there to pods of the staging shape, which carry only the labels `heartwood.project`, `heartwood.attempt` and `heartwood.role`, and claims named `hw-attempt-*` with the StorageClass `heartwood-attempt`, and admits exec sessions only into pods named `hw-staging-*`.
 The staging pod runs the worker image, so the policy admits each worker image the deployment manifests name, the current and the next one during a change of the image.
 The reference platform ships this as the ValidatingAdmissionPolicy `heartwood-staging-shape`.
+Because such exec sessions are admitted by pod name, no other ServiceAccount may create a pod or a Sandbox resource whose name begins with `hw-staging` in the namespace; the reference platform ships this as the ValidatingAdmissionPolicy `heartwood-staging-names`.
+The policy applies only to requests of ServiceAccounts, so the cluster's controllers must create pods with their own ServiceAccount credentials, as `kube-controller-manager --use-service-account-credentials=true` does.
 
-The sandbox gateway, beyond the [behavior of the qualification build](#gateway-behavior-behind-native-qualification):
+The [sandbox gateway](#sandbox-gateway), with these settings:
 
 | Setting of the OpenShell chart | Value | Reason |
 |---|---|---|
@@ -207,49 +209,109 @@ The sandbox gateway, beyond the [behavior of the qualification build](#gateway-b
 | `server.drivers.kubernetes.workspaceMode` | `shared` | Sandboxes run in the gateway's own namespace, which is the namespace the manifest names. |
 | `supervisor.image.digest` and `sandboxRuntime.image.digest` | The digests in the manifest keys `supervisor_image_digest` and `sandbox_image_digest` | Admission compares the images the pods run. |
 | `replicaCount` | `1` | The driver serializes the operations on one sandbox inside one gateway process, and the deletion behavior it reports was examined and qualified with one replica. |
+| `mutation_admission_limit_per_caller` under `openshell.gateway` in `gatewayConfig` | `100000`, at most what the gateway's data volume holds | Heartwood sends each creation with a request identifier, and a creation without a recorded outcome keeps its admission slot for the life of the gateway's store. |
 | `supervisor.network.additionalCaConfigMapName` | A ConfigMap with the certificate authority of the model route, when that authority is not publicly trusted | The supervisor makes the TLS connection to each destination the sandbox policy allows. |
 
 Each sandbox has its own supervisor pod; the shared supervisor topology is not qualified.
 The driver's policy `openshell-sandbox-supervisors` allows supervisor pods all egress, so the namespaces of other services deny ingress by default and admit supervisor pods only where a route is intended.
 
-### Gateway Behavior Behind Native Qualification
+### Sandbox Gateway
 
-Heartwood does not distribute a production sandbox gateway.
-Native qualification runs against a gateway built only for qualification from the upstream OpenShell revision and the patches recorded in `images/worker/candidate/gateway.json`.
-Its revocation and cleanup evidence depends on two behaviors of that build that the unmodified upstream release at the same revision lacks:
+Heartwood provides a sandbox gateway build: the upstream OpenShell gateway at the revision recorded in `images/worker/candidate/gateway.json`, with the patches listed there, both the Docker and the Kubernetes compute drivers, and version `0.1.9+heartwood.3`, a local version that no upstream release uses.
+Native qualification runs against this build on both drivers, and revocation and cleanup claims apply to this build only.
+The patches, their purpose and the upstream change that allows their removal are listed in [Testing and Evidence](../architecture/testing.md#candidate-builds).
 
-- The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task; without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
-  The driver reports it as capability `openshell.compute.delete-awaits-provisioning`.
-- An explicit delete of a sandbox already marked as deleting calls the driver again; without it, a failed deletion stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
-  The gateway reports it as capability `openshell.compute.delete-retries-deleting` on its compute driver.
+#### Obtain and Verify
 
-A deployment's gateway must provide both behaviors before qualification results for revocation or cleanup apply to it.
+Build the gateway from the release's commit with the shared build script, as described in [Testing and Evidence](../architecture/testing.md#candidate-builds):
+
+```bash
+uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
+  --gateway --gateway-tests --output gateway-build --cache gateway-cache
+```
+
+The script verifies every source, patch and image input against its recorded digest, runs the gateway's deletion tests and the Kubernetes driver's tests, and writes `gateway-build-record.json`.
+The record holds the purpose `deployable`, the version, the upstream source revision, the enabled driver features, the digests of the manifest and the build script, the binary digests and the image identifier.
+The image carries the labels `org.opencontainers.image.title=heartwood-sandbox-gateway`, `org.opencontainers.image.version` and `org.opencontainers.image.revision` with the same version and source revision.
+
+The build establishes provenance, and a rebuild can produce other binary digests.
+The `gateway_build` entry of each [qualification evidence](../architecture/testing.md#native-qualification-evidence) records the exact build that the run qualified: the Docker run's evidence for `openshell-docker` and the [Kubernetes qualification](../architecture/testing.md#kubernetes-driver-qualification) evidence for `openshell-kubernetes`.
+That evidence covers a gateway whose version, source revision, manifest digest, features and binary digests equal the entry, packaged with OpenShell's `deploy/docker/Dockerfile.gateway` at that source revision, whose digest the entry records as `dockerfile_sha256`, on the base image `images.gateway_base` of `gateway.json`.
+A deployment whose gateway differs from that runs native qualification against its own build and retains the evidence: the Docker qualification for `openshell-docker` and the Kubernetes qualification for `openshell-kubernetes`.
+
+To compare a running gateway with the evidence, copy `/usr/local/bin/openshell-gateway` out of the image it runs, for example with `docker create` and `docker cp`, because the image has no shell, and compare its SHA-256 with the `openshell-gateway` entry of the `gateway_build` entry's `binaries`.
+Compare the leading entries of the image's layers, `docker image inspect --format '{{json .RootFS.Layers}}' IMAGE`, with the layers of `images.gateway_base` for the entry's `architecture`, `docker buildx imagetools inspect BASE --format '{{json (index .Image "linux/ARCH").RootFS.DiffIDs}}'`, and the version the running gateway reports with the entry's `version`.
+Each worker attempt's evidence records the version, driver and capabilities the running gateway reported.
+
+#### Register
+
+Register the gateway's endpoint and mutual TLS identity with `openshell gateway add` under the manifest's `native_config_home`, and name it in the deployment manifest's [`gateway` key](../reference/configuration.md#managed-worker).
+In the gateway's own configuration file, set exactly one compute driver under `[openshell.gateway]`: `compute_driver = "docker"` for `openshell-docker` or `compute_driver = "kubernetes"` for `openshell-kubernetes`, because a gateway with both drivers and no selection chooses one by detection.
+The reference platform deploys the image per session namespace from its `images.openshellGateway` value, by digest.
+
 Before it serves, launches a worker or reconciles a retained attempt, Heartwood reads the registered gateway's info through the `GetGatewayInfo` API.
-It requires exactly one compute driver whose negotiated capabilities include both, and otherwise stops with `HW-WORKER-001` before any sandbox, volume or deletion request.
+It requires exactly one compute driver whose negotiated capabilities include the three capabilities listed under [Behavior](#behavior), and otherwise stops with `HW-WORKER-001` before any sandbox, volume or deletion request.
 The driver must be the implementation the manifest's `driver` selects: `openshell/docker` for `openshell-docker` and `openshell/kubernetes` for `openshell-kubernetes`.
 A gateway that reports the other implementation, or both, is refused.
 The gateway version does not satisfy the check.
 The decision is retained, with the reported version, driver and capabilities, in each worker attempt's evidence: an accepted gateway in the runtime binding and revocation evidence, a refused launch in the evidence that recorded the attempt as not created.
 The check relies on the gateway's own report: a gateway that reports a capability it does not implement passes, and Heartwood does not test the deletion behavior of the registered gateway.
-Both capability names come from the qualification build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
-The qualification build also reports `0.1.9+heartwood.2`, a local version that no upstream release uses, and the `gateway_build` entry of the [qualification evidence](../architecture/testing.md#native-qualification-evidence) records that version, its source revision and binary digests.
-Compare the deployed gateway with that record, or repeat native qualification against it and retain the evidence.
+The capability names come from this build's patches; no upstream release reports them, so an unmodified upstream gateway is refused.
 
-The qualification build has two further behaviors that the unmodified upstream release lacks.
+#### Behavior
 
+The revocation and cleanup evidence depends on these behaviors, which the unmodified upstream release at the same revision lacks:
+
+- The Docker driver rejects deletion of a sandbox whose provisioning has not settled, instead of abandoning the provisioning task; without it, a container request already sent to Docker can produce a worker after the gateway reported the sandbox deleted and Heartwood recorded its absence.
+  The driver reports it as capability `openshell.compute.delete-awaits-provisioning`.
+- An explicit delete of a sandbox already marked as deleting calls the driver again; without it, a failed deletion stays marked as deleting, later requests are acknowledged without cleanup, and revocation times out without evidence of absence.
+  The gateway reports it as capability `openshell.compute.delete-retries-deleting` on its compute driver.
 - The Kubernetes driver reports a delete that the Kubernetes API answers with a conflict as an error, because the Sandbox resource may still exist; the upstream release reports that delete as absence.
   A missing Sandbox resource is still reported as absent.
   The driver reports capability `openshell.compute.delete-awaits-provisioning`, which Heartwood's check requires under an `openshell-kubernetes` manifest.
   Revocation through the Kubernetes driver sends such a deletion again.
-- A deletion that finds no sandbox under a workspace and name records that name in the gateway's store.
-  For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox.
-  The rejection has status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT` once the cleanup of the rejected creation's record completes; otherwise the error can have another status or lack the reason.
+- A deletion that finds no sandbox under a workspace and name records that name in the gateway's store and answers `ALREADY_ABSENT`.
+  For 24 hours after the last such deletion, the gateway rejects a creation under that name before it asks the compute driver to create the sandbox, with status `FAILED_PRECONDITION` and reason `SANDBOX_NAME_CONFIRMED_ABSENT`.
   A creation request that was still in flight when the deletion answered therefore creates no sandbox.
-  A deletion that is refused before the name is looked up, such as for a missing workspace or a missing role, records nothing.
-  The deletion of a sandbox that exists when the deletion starts leaves its name available.
-  The record lasts across a gateway restart as long as the store does.
-  The gateway reports it as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
-  With the Kubernetes driver, Heartwood records an unanswered creation as never created only through a gateway that reports this capability; without it the attempt stays fenced.
+  The record lasts across a gateway restart as long as the store does, and the gateway removes expired records.
+  A deletion that finds a sandbox answers `COMPLETED`, `ACCEPTED` or an error for that sandbox and leaves its name available.
+  Only `ALREADY_ABSENT` is evidence that a name is absent; `NOT_FOUND` is never evidence, whether or not the deletion recorded the name, and a deletion by a caller without the required role in the workspace records nothing.
+  In a workspace that does not exist yet, only a caller who may create that workspace records the name.
+  A replayed `ALREADY_ABSENT` answer renews the record, and the gateway refuses the replay once a sandbox has the name.
+  A creation that the gateway recorded but had not sent to its driver when the gateway stopped is never started while its name is recorded, and the gateway's record sweep deletes it while the record is retained.
+  Names longer than 19 bytes are never recorded; the gateway also refuses to create them.
+  The gateway reports this behavior as capability `openshell.compute.create-rejects-deleted-name` on its compute driver.
+  Heartwood records an unanswered creation as never created only when this gateway answers `ALREADY_ABSENT` to a deletion of the attempt's name.
+
+Heartwood sends the worker attempt's identifier as the `request_id` of its creation request.
+Within the gateway's replay window, counted from the completion of the first delivery, the gateway executes that request once: a repeated delivery receives the original result while the sandbox exists and is refused after its deletion.
+A creation delivered again after a revocation within that window therefore creates no sandbox.
+The window is the gateway setting `mutation_replay_window_seconds`, 24 hours by default, the same time for which a name confirmed absent stays rejected; a repeated delivery after the window is executed again, so do not shorten it.
+This request admission needs the gateway's JWT signing key, or its TLS private key when it has no JWT signing key, to be readable, and the same on every gateway that shares a store; a rotated key makes earlier requests unreplayable.
+It also needs a caller with a user identity, such as the mutual TLS client identity.
+Otherwise every creation is refused before any work.
+Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000.
+A completed creation holds its slot until its replay window ends.
+A creation whose outcome the gateway did not record, such as a failed creation or a creation refused under a name confirmed absent, holds its slot for as long as the gateway's store keeps it, and OpenShell provides no operation that releases it.
+The slots count every mutation with a request identifier from the same caller identity, also those of other clients that use the identity Heartwood uses at the sandbox gateway.
+When the slots are used up, the gateway refuses every such request with `RESOURCE_EXHAUSTED` before any work; it gives the same status in other cases before any work, such as while its admission workers are busy.
+Size the limit for the completed creations within the window plus every creation without a recorded outcome over the lifetime of the gateway's store.
+The reference platform sets `mutation_admission_limit_per_caller = 100000` in each session's sandbox gateway, because one researcher and project use one gateway and its store for the life of the session, and every creation without a recorded outcome stays counted.
+An admission is a store row of under a kilobyte, so 100,000 rows fit well within the gateway's 1 GiB data volume.
+
+Some cases keep a name rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, contention on the record that outlasts the gateway's eight attempts, a store outage longer than the gateway's retries, an error on the deletion's second read, and a gateway crash between the record and its withdrawal.
+A sandbox that passed its own check and later meets the record of a deletion that found it cannot be started until that record expires.
+These cases delay a name or a sandbox until the record expires and never report a sandbox absent.
+Gateway clocks that differ by more than 5 minutes, or that jump, can end a record's 24 hours early; a creation still in flight can then create a sandbox after its name was confirmed absent, so gateways that share a store need synchronized clocks.
+The gateway removes at most 1,000 expired records per minute, so a caller that deletes absent names faster than that grows the store.
+
+#### Update Policy
+
+The Heartwood maintainers own the sandbox gateway build and its security updates.
+They rebuild it with a new local version for a security fix in the upstream gateway, its Rust dependencies, the build toolchain or the base image, for a change of a patch, and for a new upstream release that the project adopts.
+Each rebuild passes native qualification on both drivers before a release names it.
+A patch is removed when an upstream release provides its behavior, following the removal rule in [Testing and Evidence](../architecture/testing.md#candidate-builds); the build is removed when no patch remains, and deployments then use the upstream release.
+Report a security concern about the build through the repository [security policy](https://github.com/SchmiedmayerLab/heartwood/security/policy).
 
 ### Sensitive Data
 

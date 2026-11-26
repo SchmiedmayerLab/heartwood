@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
+import hmac
 import importlib.util
 import io
 import json
@@ -366,9 +368,24 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
     return {**launched, "launch_requests": attempts}
 
 
+def _researcher(cluster: Cluster) -> str:
+    """Return the researcher identifier that names the synthetic researcher in platform paths.
+
+    The platform derives it from the issuer and the subject under the key of the Secret
+    heartwood-researcher-ids, so the subject itself appears in no URL.
+    """
+    hub = cluster.json("configmap", "heartwood-hub", "--namespace", _PLATFORM)
+    issuer = json.loads(hub["data"]["settings.json"])["issuer"]
+    secret = cluster.json("secret", "heartwood-researcher-ids", "--namespace", _PLATFORM)
+    key = base64.b64decode(secret["data"]["key"]).decode().removesuffix("\n").encode()
+    digest = hmac.new(key, f"{issuer}\0{_SUBJECT}".encode(), hashlib.sha256).hexdigest()
+    return f"r{digest[:32]}"
+
+
 def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
     """Send one launch request; input that reached the pod incomplete is sent again."""
     authority = cluster.json("configmap", "platform-ca", "--namespace", _PLATFORM)["data"]["ca.crt"]
+    researcher = _researcher(cluster)
     payload = json.dumps({"token": token.strip(), "ca": authority})
     for attempt in range(1, 6):
         try:
@@ -384,7 +401,7 @@ def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
                 "-c",
                 _LAUNCH,
                 method,
-                f"{_CONTROL}/v1/researchers/{_SUBJECT}/projects/{_PROJECT}/launch",
+                f"{_CONTROL}/v1/researchers/{researcher}/projects/{_PROJECT}/launch",
                 str(len(payload.encode())),
                 stdin=payload,
             )

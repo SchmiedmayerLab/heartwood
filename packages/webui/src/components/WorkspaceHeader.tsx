@@ -33,6 +33,7 @@ interface WorkspaceHeaderProps {
   researcherStatus: ProjectionResearcherStatus | null;
   requestStatus: "idle" | "busy" | "error";
   session: SessionSummary | null;
+  signInName: string | null;
   theme: ColorTheme;
   onOpenActionReview: () => void;
   onOpenMenu: () => void;
@@ -50,6 +51,7 @@ export const WorkspaceHeader = ({
   researcherStatus,
   requestStatus,
   session,
+  signInName,
   theme,
   onOpenActionReview,
   onOpenMenu,
@@ -139,6 +141,13 @@ export const WorkspaceHeader = ({
 
       <dl className="context-strip" aria-label="Session context">
         <ContextFact label="Project" value={projectLabel} />
+        {signInName ?
+          <ContextFact
+            label="Signed in as"
+            value={signInName}
+            detail="Display name from your sign-in. Records name a derived identifier instead."
+          />
+        : null}
         <ContextFact label="Platform" value={platformLabel} />
         <ContextFact
           label="Model"

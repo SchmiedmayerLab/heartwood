@@ -168,6 +168,7 @@ The `[identity]` table binds a gateway that runs with `--ingress-mode identity-p
 issuer = "https://id.example.org/realms/research"
 client_id = "hw-proj-demo"
 client_secret_file = "/etc/heartwood/identity/client-secret"
+actor_key_file = "/etc/heartwood/identity/actor-key"
 subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 ```
 
@@ -176,18 +177,20 @@ subject = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 | `issuer` | Exact `iss` value of the provider's tokens and the origin the browser is sent to for sign-in |
 | `client_id` | The gateway's client at the provider; accepted tokens name it in `aud` |
 | `client_secret_file` | Absolute file that holds the client secret: printable ASCII without spaces, at most 4096 bytes, one trailing newline allowed |
-| `subject` | The only `sub` value the gateway accepts: a letter or digit followed by at most 127 letters, digits, `_`, `.`, `:` or `-`; `gateway`, `human` and `deployment-operator` are reserved |
+| `actor_key_file` | Absolute file that holds the deployment's actor key: a UTF-8 file of at most 4096 bytes whose content without one trailing newline is the key, at least 32 bytes long; the gateway does not start without it |
+| `subject` | The only `sub` value the gateway accepts, exactly as the provider issues it: 1 to 255 characters without control or format characters and without leading or trailing whitespace |
 | `provider_url` | Optional base URL where the gateway itself reaches the provider's discovery document, token endpoint and keys; default `issuer` |
 | `ca_file` | Optional absolute PEM file of certificate authorities that replaces the default certificate bundle for requests to the provider |
 
-`issuer` and `provider_url` are `http` or `https` URLs without credentials, query or fragment.
+Commands record an actor derived from `issuer` and `subject` under the actor key, as [Researcher Identity](../operate/security.md#researcher-identity) describes, so a change of either value or of the key changes the actor of later records.
+`issuer` and `provider_url` are `http` or `https` URLs without credentials, query, fragment, whitespace or control characters.
 Both use `https`, or `http` to a loopback address.
 A provider whose certificate comes from a private authority, such as a platform CA, is trusted through `ca_file`.
 The gateway reads `<provider_url>/.well-known/openid-configuration`, and the document's `issuer` must equal the configured `issuer`.
 The document's endpoints must lie on the origin of `issuer` or of `provider_url`.
 The gateway sends the browser to the authorization endpoint on the `issuer` origin and requests tokens and keys on the `provider_url` origin.
-`client_secret_file` and `ca_file` follow the rules for operator files: outside the research directory and the state root, no symbolic link in the path, owned by root or the gateway user, and not writable by group or others.
-`client_secret_file` must also be unreadable by group and others.
+`client_secret_file`, `actor_key_file` and `ca_file` follow the rules for operator files: outside the research directory and the state root, no symbolic link in the path, owned by root or the gateway user, and not writable by group or others.
+`client_secret_file` and `actor_key_file` must also be unreadable by group and others.
 [Researcher Identity](../operate/security.md#researcher-identity) describes sign-in and token handling.
 
 ### Managed Worker
@@ -245,7 +248,7 @@ files = []
 Every path is absolute and canonical, outside the research directory and state root, and every native tool, configuration, policy file, and certificate is owned by root or the gateway user, not group- or world-writable, and singly linked.
 The socket must be owned by root or the gateway user and not world-writable; a group-writable socket needs `docker_socket_group`, and when that is set the socket's group must match it.
 Membership in the socket's group grants Docker control-plane authority; never add a worker identity to it.
-The registered sandbox gateway must report the two [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) native revocation depends on; the gateway version is not configured and does not satisfy the check.
+The registered sandbox gateway must report the three [capabilities](../operate/platform-requirements.md#sandbox-gateway) native revocation depends on; the gateway version is not configured and does not satisfy the check.
 The inference endpoint must enforce approved models and tenant scope itself; the manifest adds no model router.
 
 #### Kubernetes Driver
@@ -276,7 +279,7 @@ sandbox_image_digest = "sha256:0000000000000000000000000000000000000000000000000
 A key of the other driver is rejected with `HW-DEPLOY-001`.
 With this driver, `image_digest` is the registry digest by which a pod references the worker image; with `openshell-docker` it is the image identifier the Docker engine reports.
 `kubectl_cli` and `kubeconfig` follow the same ownership and location rules as the other native tools and configuration files.
-The registered sandbox gateway must report one `openshell/kubernetes` compute driver with both deletion capabilities.
+The registered sandbox gateway must report one `openshell/kubernetes` compute driver with the three required capabilities.
 The policy file must also list `/workspace` under `filesystem.read_write`, because the driver confines the worker to the listed paths and the worker's working directory is `/workspace`.
 The credential in `kubeconfig` needs these permissions in `namespace` and no others: create, delete, get, and list pods and persistent volume claims, create `pods/exec`, get and list NetworkPolicies, get and list `sandboxes.agents.x-k8s.io`, and get the namespace.
 The namespace must provide what [staging](../architecture/system.md#kubernetes-worker-staging) uses: a service account `hw-staging`, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pod all traffic.

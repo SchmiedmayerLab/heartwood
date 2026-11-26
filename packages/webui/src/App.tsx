@@ -201,6 +201,8 @@ export const App = ({ client, initialSessionId }: AppProps) => {
   );
   const [specialistSettings, setSpecialistSettings] =
     useState<SpecialistSettings | null>(null);
+  // A display value from the sign-in; the gateway records nothing of it.
+  const [signInName, setSignInName] = useState<string | null>(null);
   const [skillCandidate, setSkillCandidate] = useState<SkillSummary | null>(
     null,
   );
@@ -338,6 +340,20 @@ export const App = ({ client, initialSessionId }: AppProps) => {
       ),
     );
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    // The name is optional decoration, so a failed read leaves the header without it.
+    resolvedClient
+      .getSignInDisplay()
+      .then((display) => {
+        if (active) setSignInName(display.display_name);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [resolvedClient]);
 
   useEffect(() => {
     let active = true;
@@ -920,6 +936,7 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             key={sessionId ?? "loading"}
             requestStatus={requestStatus}
             session={selectedSession}
+            signInName={signInName}
             theme={theme}
             onOpenActionReview={() => openPanel("action-review")}
             onOpenMenu={() => setMobileSessionsOpen(true)}

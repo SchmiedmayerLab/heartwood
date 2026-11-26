@@ -35,8 +35,8 @@ A deployment manifest with a `[worker]` table runs the complete OpenHands agent 
 The gateway, canonical state, deployment authority, provider credentials, signer material and management sockets stay outside the worker's mounts and process identity.
 The worker receives only the inputs selected in the manifest and verified Skills, both read-only, plus a private writable workspace, home and temporary directory.
 
-The isolated worker passes native qualification against a patched OpenShell gateway that exists only in the qualification build; see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
-Heartwood distributes no production sandbox gateway, and checks a deployment's sandbox gateway only by the deletion capabilities it reports, as described in [Gateway Behavior Behind Native Qualification](platform-requirements.md#gateway-behavior-behind-native-qualification).
+The isolated worker passes native qualification against Heartwood's patched OpenShell [sandbox gateway build](platform-requirements.md#sandbox-gateway); see [Testing and Evidence](../architecture/testing.md#installed-native-integration).
+Heartwood checks a deployment's sandbox gateway only by the capabilities it reports; the operator compares the deployed build with the qualification record.
 
 ## Sandbox Enforcement
 
@@ -64,7 +64,7 @@ In [`review-outside-effects`](#action-review), these controls are the only limit
 The gateway enforces everything that decides authority, independently of anything the worker reports:
 
 - the deployment manifest's paths, ownership and policy ceiling, before any store opens;
-- both deletion capabilities reported for the sandbox gateway's one compute driver, which must be the implementation the manifest's `driver` selects, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification);
+- the three required capabilities reported for the sandbox gateway's one compute driver, which must be the implementation the manifest's `driver` selects, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm that the deployed gateway is the [qualified build](platform-requirements.md#sandbox-gateway);
 - outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, any retained capability, a missing `no-new-privileges`, a shared host or container process, IPC, user or cgroup namespace, a device, a bind mount, mounts that expose withheld host paths, missing CPU and memory limits or process limit, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` type with individual categories;
 - admission of the sandbox's accepted policy hash and process generation against `sandbox_policy_sha256`;
 - worker attempts bound to project, session, image, policy and input-manifest identity, journaled and fenced so that only one attempt can write a session;
@@ -259,7 +259,8 @@ Use separate authenticated origins for mutually untrusted projects; in Jupyter p
 
 ## Researcher Identity
 
-With `identity-proxy` ingress the gateway is a confidential OpenID Connect client bound to one subject by the manifest's [`[identity]` table](../reference/configuration.md#identity).
+With `identity-proxy` ingress the gateway is a confidential OpenID Connect client bound to one subject of one issuer by the manifest's [`[identity]` table](../reference/configuration.md#identity).
+The subject may take any form the provider issues, such as a UUID, `auth0|...`, a number, an opaque string or an e-mail address.
 It replaces the launch link: every API request, server-sent event stream and WebSocket needs a sign-in capability or an access token, and a request with neither receives `HW-INGRESS-004`.
 
 A browser that opens the gateway's URL is redirected to `identity/login` and from there to the provider's authorization endpoint with a `state`, a `nonce` and a PKCE challenge.
@@ -273,7 +274,28 @@ A sign-in ends when its refresh token expires, when the provider reports that ti
 
 Other clients send `Authorization: Bearer` with an access token of the same issuer whose `aud` contains the gateway's client and whose `sub` is the bound subject.
 A token that carries a `nonce`, `at_hash` or `c_hash` claim, or a `typ` claim of `ID`, is an identity token and is refused as a bearer token.
-Every accepted command records the verified subject as its actor.
+The gateway compares the token's `iss` and `sub` claims with the bound issuer and subject exactly, character for character, for the browser sign-in and for bearer tokens.
+
+Every accepted command records the researcher's actor, `oidc-` followed by the hexadecimal HMAC-SHA-256 of the issuer, a zero byte and the subject, each encoded as UTF-8, under the deployment's actor key.
+The same subject at two issuers yields two actors, two deployments with different keys yield two actors for the same researcher, and a command cannot claim another actor.
+Session events, audit records and audit exports carry this actor and neither the subject nor the issuer.
+Skill installation, decision and removal records name the same actor.
+Without the key, knowing an issuer and a subject, such as an e-mail address, is not enough to compute the actor.
+Every gateway of the deployment holds the key in a file, so whoever can read a gateway's files can compute the actor of any researcher whose subject they know.
+
+The operator provides the key as a credential, the file that `actor_key_file` names in the [`[identity]` table](../reference/configuration.md#identity), and the gateway does not start without it.
+Keep a backup of the key with the deployment's other credentials.
+A lost key cannot be recovered: a gateway with a new key records new actors, and nothing links them to the earlier records of the same researcher.
+Replacing the key has the same effect, so a rotation starts a new series of actors for every researcher; keep the old key to compute the earlier actors when a researcher's records must be found.
+Of the gateway's files, only the deployment manifest, which the operator protects, contains the subject.
+A platform that places the subject in the gateway's base path or public origin exposes it in URLs, the redirect URI and proxy logs; the reference platform names researchers there by a derived identifier.
+
+After a browser sign-in, the session header shows **Signed in as** with the identity token's `name` claim, or else its `preferred_username` claim, as a display value.
+The gateway keeps that value in memory with the sign-in, removes control and format characters other than the zero-width joiners, shortens it to 128 characters, and never writes it to session records, audit records or exports; it identifies nobody and authorizes nothing.
+A request with a bearer token has no identity token, so it has no display value.
+
+Records that name the same researcher by another actor, such as the subject itself, remain readable and are not rewritten.
+An outside approval that was authorized under another actor and not dispatched is not dispatched for the current actor: a retry of that approval is refused with a message that it was recorded for another actor, and the researcher denies it to withdraw it.
 
 ### Service Tokens
 
@@ -294,7 +316,7 @@ They are not written to project files, protected state, events, audit exports or
 Without a [`[worker]`](../reference/configuration.md#deployment-manifest) table, agent tools run as the gateway's operating-system user and can read the client secret file and, where the operating system permits it, the gateway's memory.
 A deployment with `[identity]` should therefore also configure a worker.
 
-- One gateway accepts one subject; a token of any other person is refused.
+- One gateway accepts one subject of one issuer; a token of any other person, or of the same subject at another issuer, is refused.
 - A restart of the gateway ends every sign-in, and the researcher signs in again.
 - The gateway holds at most eight sign-ins and drops the oldest beyond that.
 - A sign-in completes only in the browser that started it; a second sign-in started in the same browser replaces the first.
@@ -356,7 +378,7 @@ Confirm each control before researchers add project data, and again after each u
 - deny network egress except reviewed model and package endpoints;
 - keep provider secrets in a keyring, mounted secret or managed identity, and production checkpoint keys in an independently authorized signer;
 - list `allowed_action_review_modes` explicitly, with only the modes evaluated for the deployment;
-- for an isolated worker, confirm that the sandbox gateway provides the [behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification) before declaring its version;
+- for an isolated worker, confirm that the sandbox gateway is the [qualified build](platform-requirements.md#sandbox-gateway) and record its version;
 - pin release artifacts, images, model revisions and Skill versions;
 - collect content-minimized operational logs outside project outputs;
 - validate backup, retention, deletion and incident-response procedures; and

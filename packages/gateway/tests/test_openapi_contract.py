@@ -51,6 +51,7 @@ _GATEWAY_METHODS = {
     ("POST", "/project/planning/refresh"): "refresh_planning",
     ("POST", "/project/planning/predictions"): "record_plan_prediction",
     ("POST", "/project/planning/estimates"): "request_plan_estimate",
+    ("GET", "/settings/identity"): "sign_in_display",
     ("GET", "/settings/specialists"): "specialist_settings",
     ("POST", "/settings/skills/inspect"): "inspect_skill",
     ("POST", "/settings/skills/install"): "install_skill",
@@ -264,7 +265,7 @@ def test_openapi_resolves_references_and_declares_path_parameters() -> None:
                 if parameter["in"] == "path" and parameter["required"]
             }
             assert declared == set(re.findall(r"{([^}]+)}", path))
-    assert len(operation_ids) == len(set(operation_ids)) == 65
+    assert len(operation_ids) == len(set(operation_ids)) == 66
     for schema in document["components"]["schemas"].values():
         Draft202012Validator.check_schema(schema)
     for reference in _references(document):

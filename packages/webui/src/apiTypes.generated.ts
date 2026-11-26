@@ -65,6 +65,7 @@ export type ApiResponse =
   | ProjectReadinessResponse
   | SessionListResponse
   | SessionSummaryResponse
+  | SignInDisplayResponse
   | McpServerResponse
   | McpServersResponse
   | McpServerTestResponse
@@ -667,6 +668,16 @@ export interface SessionSummaryResponse {
     "empty" | "idle" | "waiting" | "paused" | "error" | "recovery-required";
   title: string;
   updated_at: string;
+}
+/**
+ * A display value for the signed-in researcher, shown in the interface only.
+ *
+ * ``display_name`` comes from the identity token's ``name`` claim, or else its
+ * ``preferred_username`` claim. It identifies nobody, the gateway keeps it in memory
+ * only, and records never carry it.
+ */
+export interface SignInDisplayResponse {
+  display_name: string | null;
 }
 /**
  * One research MCP server without credential values or references.

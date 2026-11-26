@@ -91,7 +91,7 @@ spec:
         {{- range $index, $value := $fixed }}
         && object.spec.containers[0].args[{{ $index }}] == {{ $value | toJson }}
         {{- end }}
-        && object.spec.containers[0].args[14].matches('^/user/[a-z0-9-]{1,64}/[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$')
+        && object.spec.containers[0].args[14].matches('^/user/r[0-9a-f]{32}/[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$')
         {{- range $index, $source := $sources }}
         && object.spec.containers[0].args[{{ add 15 (mul 2 $index) }}] == '--trusted-proxy-source'
         && object.spec.containers[0].args[{{ add 16 (mul 2 $index) }}] == {{ $source | toJson }}

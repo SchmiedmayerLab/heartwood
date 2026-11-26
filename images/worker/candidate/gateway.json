@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "purpose": "qualification-only",
-  "version": "0.1.9+heartwood.2",
+  "purpose": "deployable",
+  "version": "0.1.9+heartwood.3",
   "source": {
     "url": "https://codeload.github.com/NVIDIA/OpenShell/tar.gz/ce58cf8e9b953281352d98a637e41616295b1318",
     "tree_sha256": "daf2239105deca6b3f07d7fe08b343ae84bdc4811f4ee371e5f8eb4199c1c6c0",
@@ -14,7 +14,7 @@
     },
     {
       "path": "gateway-delete-retry.patch",
-      "sha256": "206aab5e89fcb6f338781e3b51c2b54bb7502483a06fadca6f482aef9bcc41ee"
+      "sha256": "a9319c79ffbb8d4ad93575bdc0d54df1a070d0083e18a29ba31a378c6532ed3b"
     },
     {
       "path": "kubernetes-delete-conflict.patch",
@@ -22,7 +22,7 @@
     },
     {
       "path": "gateway-create-after-absence.patch",
-      "sha256": "17deeff1efc9f1791478b2e0e5104cf6cd4ef49d40bbdadd90d2c128a76fa6d0"
+      "sha256": "70bf2811f124c5cedb29a7b1add4ed69f513995ffbe455d09167d2c7f5ffde7d"
     }
   ],
   "images": {

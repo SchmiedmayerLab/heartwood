@@ -39,11 +39,7 @@ from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._remote_workspace import _client_tool_contract
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace, require_worker_event_hooks
 from heartwood.gateway._workspace import WorkspaceInspector
-from heartwood.gateway.worker_control import (
-    ABSENCE_REJECTS_CREATION,
-    NativeWorkerControl,
-    NativeWorkerForward,
-)
+from heartwood.gateway.worker_control import NativeWorkerControl, NativeWorkerForward
 from heartwood.gateway.worker_deployment import (
     KubernetesWorkerDeployment,
     OpenShellWorkerDeployment,
@@ -68,8 +64,10 @@ from heartwood.gateway.worker_volumes import (
 # driver creation error to another status; any other failure may still leave one created.
 # A credential store can also answer with one of them after the gateway recorded the sandbox
 # and before it asks the driver; the gateway then removes that record or marks it deleting,
-# and revocation deletes whatever the gateway still reports. They were checked against this
-# gateway source revision and patch digests; recheck on any change.
+# and revocation deletes whatever the gateway still reports. The request admission that the
+# attempt's `request_id` enables answers with them only before it looks up or writes an
+# admission, and Heartwood sends each creation once. They were checked against this gateway
+# source revision and patch digests; recheck on any change.
 _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
 # A deletion the sandbox gateway cannot complete yet is sent again after each of these pauses,
 # in seconds, inside the deletion's time limit: seven requests, the last one 31.5 seconds
@@ -80,9 +78,9 @@ _CREATION_REJECTED_GATEWAY = (
     "ce58cf8e9b953281352d98a637e41616295b1318",
     (
         "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1",
-        "206aab5e89fcb6f338781e3b51c2b54bb7502483a06fadca6f482aef9bcc41ee",
+        "a9319c79ffbb8d4ad93575bdc0d54df1a070d0083e18a29ba31a378c6532ed3b",
         "5cf974a3e13b892367adf3ab531780852f7a200b08bd947801de980ae7561e37",
-        "17deeff1efc9f1791478b2e0e5104cf6cd4ef49d40bbdadd90d2c128a76fa6d0",
+        "70bf2811f124c5cedb29a7b1add4ed69f513995ffbe455d09167d2c7f5ffde7d",
     ),
 )
 
@@ -117,7 +115,7 @@ def native_worker_plan_factory(
 
 
 def require_gateway_capabilities(settings: WorkerDeployment, project: ProjectContext) -> None:
-    """Require the registered gateway's deletion capabilities once before serving sessions."""
+    """Require the registered gateway's capabilities once before serving sessions."""
     control = NativeWorkerControl(settings, project)
     try:
         control.connect()
@@ -240,19 +238,13 @@ def _owned_sandbox(
 def _unresolved_creation(control: NativeWorkerControl, volumes: _Volumes) -> str | None:
     """Ask the sandbox gateway to confirm that an unresolved creation left no sandbox.
 
-    Only a Kubernetes gateway that rejects a creation after it confirmed the name absent
-    gives that evidence. Its deletion either finds nothing, and then nothing can be created
-    under the name, or removes the sandbox the creation made, whose identity it returns.
+    The required gateway rejects a creation under a name it confirmed absent to a deletion.
+    Its deletion either finds nothing, and then nothing can be created under the name, or
+    removes the sandbox the creation made, whose identity it returns.
     """
     unresolved = WorkerAttemptError(
         "native worker absence after an unresolved creation is not evidence of revocation"
     )
-    if (
-        not isinstance(volumes, KubernetesWorkerVolumes)
-        or control.gateway is None
-        or ABSENCE_REJECTS_CREATION not in control.gateway.capabilities
-    ):
-        raise unresolved from None
     try:
         result = control.client.delete(
             volumes.worker_name,
@@ -317,9 +309,14 @@ def _delete_sandbox(control: NativeWorkerControl, volumes: _Volumes, sandbox_id:
     if isinstance(volumes, KubernetesWorkerVolumes):
         _delete_with_retry(control, volumes, sandbox_id)
     else:
-        control.client.delete(
-            volumes.worker_name, workspace=workspace, timeout_seconds=_DELETION_SECONDS
-        )
+        try:
+            control.client.delete(
+                volumes.worker_name, workspace=workspace, timeout_seconds=_DELETION_SECONDS
+            )
+        except control.grpc.RpcError as error:
+            # A sandbox another deletion removed still needs the observed absence below.
+            if error.code() != control.grpc.StatusCode.NOT_FOUND:
+                raise
     control.client.wait_deleted(
         volumes.worker_name,
         workspace=workspace,
@@ -500,11 +497,15 @@ class _NativeWorkerAttempt:
             # Until the control plane answers, the creation may complete later.
             self._creation_uncertain = True
             try:
+                # With the attempt identifier as its request identifier, the gateway does not
+                # execute a repeated delivery of this request within its replay window, also
+                # after the sandbox's deletion.
                 created = self.control.client.create(
                     workspace=self.settings.workspace,
                     name=volumes.worker_name,
                     spec=spec,
                     labels=volumes.labels,
+                    request_id=str(intent.attempt_id),
                 )
             except self.control.grpc.RpcError as error:
                 status = self.control.grpc.StatusCode

@@ -105,7 +105,9 @@
             "type": "array",
             "items": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9-]{1,64}$"
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[^\\s\\p{Cc}\\p{Cf}\\p{Cs}\\p{Z}]([^\\p{Cc}\\p{Cf}\\p{Cs}]*[^\\s\\p{Cc}\\p{Cf}\\p{Cs}\\p{Z}])?$"
             }
           }
         }

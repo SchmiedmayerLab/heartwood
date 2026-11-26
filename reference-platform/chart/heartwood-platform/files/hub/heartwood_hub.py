@@ -14,17 +14,23 @@ pod in the sessions namespace with the session's ServiceAccount and Secret. The 
 reaches Keycloak, the control service and the proxy's API over HTTPS and trusts the
 platform CA alone.
 
+A researcher's user name is the researcher identifier that the control service also
+derives: ``r`` and 32 hexadecimal digits of the HMAC-SHA-256 of the issuer, a zero byte
+and the subject under the platform's researcher identifier key. So no subject appears
+in the Hub's URLs, the gateways' base paths, the redirect URIs or the logs.
+
 The functions above ``configure`` use only the standard library, so the chart's tests
 import this file without JupyterHub.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 # A directory mount of the chart's ConfigMap, which kubelet updates after an upgrade.
 SETTINGS = Path("/usr/local/etc/heartwood/hub/config/settings.json")
@@ -32,19 +38,25 @@ SESSION_LABEL = "heartwood.platform/session"
 ROLE_LABEL = "heartwood.platform/role"
 CONFIGURE = "/usr/local/libexec/heartwood-hosted-configure"
 _PROJECT = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
-# The subject form that the control service accepts in its paths.
-_SUBJECT = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+# The researcher identifier form that the control service accepts in its paths.
+_RESEARCHER = re.compile(r"^r[0-9a-f]{32}$")
 
 
-def launch_path(subject: str, project: str) -> str | None:
+def researcher_id(issuer: str, subject: str, key: bytes) -> str:
+    """Return the researcher identifier of a subject, as the control service derives it."""
+    digest = hmac.new(key, f"{issuer}\0{subject}".encode(), hashlib.sha256).hexdigest()
+    return f"r{digest[:32]}"
+
+
+def launch_path(researcher: str, project: str) -> str | None:
     """Return the control service's launch path of a researcher's project server.
 
     A server name may hold any character, including an encoded slash, so only names of
-    the project form, and subjects of the control service's form, reach a path.
+    the project form, and user names of the researcher identifier form, reach a path.
     """
-    if not _SUBJECT.fullmatch(subject) or not _PROJECT.fullmatch(project):
+    if not _RESEARCHER.fullmatch(researcher) or not _PROJECT.fullmatch(project):
         return None
-    return f"/v1/researchers/{quote(subject, safe='')}/projects/{quote(project, safe='')}/launch"
+    return f"/v1/researchers/{researcher}/projects/{project}/launch"
 
 
 def profiles(projects: list[str], server: str) -> list[dict[str, Any]]:
@@ -56,7 +68,7 @@ def profiles(projects: list[str], server: str) -> list[dict[str, Any]]:
     ]
 
 
-def gateway_arguments(settings: dict[str, Any], subject: str, project: str) -> list[str]:
+def gateway_arguments(settings: dict[str, Any], researcher: str, project: str) -> list[str]:
     """Return the arguments of ``heartwood gateway serve`` for one named server."""
     arguments = [
         "--deployment",
@@ -70,7 +82,7 @@ def gateway_arguments(settings: dict[str, Any], subject: str, project: str) -> l
         "--public-origin",
         settings["public_origin"],
         "--base-path",
-        f"/user/{subject}/{project}",
+        f"/user/{researcher}/{project}",
     ]
     for source in settings["trusted_proxy_sources"]:
         arguments += ["--trusted-proxy-source", source]
@@ -150,10 +162,10 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
         except ValueError:
             return response.code, None
 
-    async def projects(subject: str) -> list[str]:
-        if not _SUBJECT.fullmatch(subject):
+    async def projects(researcher: str) -> list[str]:
+        if not _RESEARCHER.fullmatch(researcher):
             return []
-        status, answer = await control("GET", f"/v1/researchers/{quote(subject, safe='')}/projects")
+        status, answer = await control("GET", f"/v1/researchers/{researcher}/projects")
         if status != 200 or not isinstance(answer, dict):
             return []
         return [item for item in answer.get("projects", []) if isinstance(item, str)]
@@ -164,15 +176,15 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     async def pre_spawn_hook(spawner: Any) -> None:  # noqa: ANN401
         # The current settings, so a spawn after an upgrade uses the upgraded values.
         current = json.loads(SETTINGS.read_text(encoding="utf-8"))
-        subject, project = spawner.user.name, spawner.name
-        if not _SUBJECT.fullmatch(subject):
+        researcher, project = spawner.user.name, spawner.name
+        if not _RESEARCHER.fullmatch(researcher):
             raise web.HTTPError(403, "This account cannot start servers.")
         if not _PROJECT.fullmatch(project or ""):
             raise web.HTTPError(400, "Start a named server for one of your projects.")
         chosen = (spawner.user_options or {}).get("profile")
         if chosen not in (None, project):
             raise web.HTTPError(400, "The server name must be the chosen project.")
-        path = launch_path(subject, project)
+        path = launch_path(researcher, project)
         if path is None:
             raise web.HTTPError(400, "Start a named server for one of your projects.")
         status, launch = await control("PUT", path)
@@ -208,7 +220,7 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
                 "resources": current["init_resources"],
             }
         ]
-        spawner.args = gateway_arguments(current, subject, project)
+        spawner.args = gateway_arguments(current, researcher, project)
 
     proxy_clients: list[Any] = []
 
@@ -263,7 +275,18 @@ def configure(c: Any, settings: dict[str, Any]) -> None:  # noqa: ANN401
     c.GenericOAuthenticator.token_url = f"{issuer}/protocol/openid-connect/token"
     c.GenericOAuthenticator.userdata_url = f"{issuer}/protocol/openid-connect/userinfo"
     c.GenericOAuthenticator.scope = ["openid"]
-    c.GenericOAuthenticator.username_claim = "sub"
+    # Read as bytes, as the control service reads the key, so both use the same key.
+    researcher_key = Path(settings["researcher_id_key_file"]).read_bytes().removesuffix(b"\n")
+
+    def username(user_info: dict[str, Any]) -> str:
+        """Name a signed-in researcher by identifier; the subject stays out of the Hub."""
+        subject = user_info.get("sub")
+        if not isinstance(subject, str) or not subject:
+            # The error names nothing of the user's data, so none of it reaches the log.
+            raise web.HTTPError(403, "The sign-in names no subject.")
+        return researcher_id(issuer, subject, researcher_key)
+
+    c.GenericOAuthenticator.username_claim = username
     c.GenericOAuthenticator.validate_server_cert = True
     c.GenericOAuthenticator.http_request_kwargs = {
         "ca_certs": settings["ca_file"],

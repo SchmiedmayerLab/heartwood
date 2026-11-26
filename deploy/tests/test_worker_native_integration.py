@@ -50,6 +50,7 @@ from heartwood.gateway.worker_native import (
     native_worker_plan_factory,
     native_worker_reconciler,
 )
+from heartwood.gateway.worker_volumes import attachable_labels
 from heartwood.schemas import ActionReviewMode, PolicyProfile
 from heartwood.session import CommandKind, EventKind, SessionCommand
 
@@ -948,6 +949,97 @@ def test_lost_create_retains_writer_until_native_revocation(
                     "attempt_id": str(attempt.intent.attempt_id),
                     "lost_create_fenced": True,
                     "revoked_before_writer_release": True,
+                    "attempt_resources_absent": True,
+                    "provider_requests": 0,
+                    "sensitive_data_ready": False,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+    finally:
+        _stop(application)
+
+
+def test_native_unsent_creation_is_confirmed_absent(
+    infrastructure: NativeFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A creation that never arrived is recorded as not created only on the gateway's word."""
+    import grpc
+    from openshell import SandboxClient
+
+    fixture = infrastructure
+    create = SandboxClient.create
+    unsent: dict[str, Any] = {}
+
+    def lose(_client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
+        if "heartwood.attempt" not in request.get("labels", {}):
+            raise AssertionError("Only the attempt's creation is expected here")
+        unsent.update(request)
+        raise TimeoutError("synthetic unsent creation")
+
+    application = _application(fixture)
+    service = application._service("composition")
+    monkeypatch.setattr(SandboxClient, "create", lose)
+    try:
+        _submit(application, CommandKind.CHAT, {"prompt": "Synthetic unsent creation."})
+        attempt = service.worker_attempt()
+        assert attempt is not None
+        assert attempt.phase == "fenced"
+        assert attempt.runtime is None
+        attempt_id = str(attempt.intent.attempt_id)
+        _stop(application)
+        settled = service.worker_attempt()
+        assert settled is not None
+        assert settled.phase == "revoked"
+        assert settled.revocation is not None
+        assert settled.revocation.outcome == "not-created"
+        assert not service.store.owns_writer
+        _assert_absent(attempt_id)
+        # The gateway keeps its answer: the name it reported absent cannot be created.
+        # The Docker driver refuses a creation whose volumes do not exist before the gateway
+        # reads the name, and revocation removed them. Volumes under the same names, as
+        # during a creation still in flight, leave the name as the only reason to refuse.
+        # They carry the attempt's labels, so the absence check below also covers them.
+        mounts = unsent["spec"].template.driver_config["docker"]["mounts"]
+        volumes = [str(mount["source"]) for mount in mounts]
+        assert len(volumes) == 2
+        monkeypatch.setattr(SandboxClient, "create", create)
+        try:
+            for volume in volumes:
+                command(
+                    [
+                        "docker",
+                        "volume",
+                        "create",
+                        *(
+                            argument
+                            for label, value in {
+                                **unsent["labels"],
+                                **attachable_labels(unsent["workspace"]),
+                            }.items()
+                            for argument in ("--label", f"{label}={value}")
+                        ),
+                        volume,
+                    ]
+                )
+            with pytest.raises(grpc.RpcError) as refused:
+                fixture.control.create(**unsent)
+        finally:
+            command(["docker", "volume", "rm", "--force", *volumes])
+        assert refused.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+        assert "confirmed absent" in refused.value.details()
+        _assert_absent(attempt_id)
+        assert not fixture.provider.observations
+        (fixture.output / "evidence.json").write_text(
+            json.dumps(
+                {
+                    "drill_id": "native-unsent-creation.v1",
+                    "worker_image": fixture.worker,
+                    "gateway_image": fixture.gateway_image,
+                    "attempt_id": attempt_id,
+                    "revocation_outcome": "not-created",
+                    "later_creation": refused.value.code().name,
                     "attempt_resources_absent": True,
                     "provider_requests": 0,
                     "sensitive_data_ready": False,

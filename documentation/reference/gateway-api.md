@@ -44,9 +44,9 @@ The capability arrives in one of two ways:
 - The researcher opens the launch link; the page sends its one-time token to `POST /launch` as `{"token":"…"}` and receives `{"capability":"…"}`. The route still validates ingress, and the token works once.
 - The operator starts the gateway with [`--capability-fd`](cli.md#gateway-serve), and an authenticated proxy adds the header only for the owning researcher.
 
-With [`identity-proxy` ingress](../operate/security.md#researcher-identity) the gateway verifies the researcher itself and records the verified subject as the actor.
+With [`identity-proxy` ingress](../operate/security.md#researcher-identity) the gateway verifies the researcher itself and records an actor derived from the verified issuer and subject, `oidc-` followed by an HMAC-SHA-256 under the deployment's actor key.
 A browser signs in at `GET /identity/login`, returns through `GET /oauth_callback`, and exchanges the launch token of that sign-in at `POST /launch`.
-Other clients send `Authorization: Bearer` with an access token whose audience contains the gateway's client and whose subject is the bound researcher.
+Other clients send `Authorization: Bearer` with an access token whose audience contains the gateway's client and whose issuer and subject are the bound researcher's.
 
 Capability cookies and environment delivery are rejected.
 Keep tokens and capabilities out of URLs, logs, shared browser storage, and worker access.
@@ -67,6 +67,7 @@ Readiness and capabilities decide whether a route can do useful work in a deploy
 | Workspace | `GET /sessions/{session_id}/workspace/tree`, `/file`, `/changes`, `/diff` | Bounded project inspection; `file` and `diff` take a `path` query parameter |
 | Action review | `GET /settings/actions`; `PUT /settings/actions/review` | Review mode, default, scope, and selection |
 | Models | `/settings/models` and its `active`, `source`, `catalog`, `connect`, `repository`, `profiles`, `artifacts`, `downloads`, `imports`, `transfers`, `subscription/device`, and `validation` operations | Model selection, validation, and managed model files |
+| Sign-in display | `GET /settings/identity` | `{"display_name": ...}`: the display value of the request's browser sign-in with `identity-proxy` ingress, otherwise `null`; never recorded |
 | Credentials | `GET /settings/credentials`; `DELETE /settings/credentials/{connection_id}` | Credential status, or removal of a saved binding; removal does not revoke a provider key |
 | Skills and specialists | `/settings/skills` with `inspect`, `install`, `local/inspect`, `local/install`, `refresh`, and `DELETE /settings/skills/{name}`; `GET /settings/specialists` | Skill review and installation, specialist roles |
 | Research services | `GET`, `POST /settings/mcp-servers`; `DELETE /settings/mcp-servers/{server_id}`; `POST .../test`; `PUT .../tools`, `.../enabled` | [Research MCP servers](../operate/platform-contract.md#research-mcp-servers): list, add, test and list tools, select reviewed tools, enable or disable, disconnect |

@@ -368,10 +368,10 @@ Restart the gateway to apply the change under the operator's authority; restorin
 
 ### `HW-WORKER-001`: Sandbox Gateway Lacks a Required Deletion Capability
 
-`heartwood gateway serve --deployment` read the registered sandbox gateway's info, and it did not report exactly one compute driver of the implementation the manifest's `driver` selects with both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification), or the info could not be read.
+`heartwood gateway serve --deployment` read the registered sandbox gateway's info, and it did not report exactly one compute driver of the implementation the manifest's `driver` selects with the three required [capabilities](../operate/platform-requirements.md#sandbox-gateway), or the info could not be read.
 The message names the reported gateway version and each missing capability when the gateway answered.
 Confirm that the gateway named in the manifest is running and reachable with its registered mutual TLS identity.
-An upstream gateway release that does not provide both deletion behaviors is refused; register a gateway build that reports them.
+An upstream gateway release that does not provide these behaviors is refused; register the [sandbox gateway build](../operate/platform-requirements.md#sandbox-gateway) that reports them.
 The same condition after start stops the affected worker launch or reconciliation before any sandbox, volume or deletion request.
 A refused launch shows `HW-WORKER-001` in the session and needs no reconciliation: nothing was created, and the attempt is recorded as revoked together with what the gateway reported.
 The session cannot start another worker in the same gateway process; correct the gateway and restart `heartwood gateway serve`, which then replaces the attempt.
@@ -397,9 +397,9 @@ The gateway could not observe that a worker attempt an earlier gateway process l
 The attempt remains fenced, and the session refuses commands until revocation is observed; it stays readable.
 The gateway retries while it runs, with a growing interval of up to 10 minutes, so restoring the control plane is enough; restarting the gateway retries at once.
 A worker whose revocation fails while the gateway runs, including when its session's service is being closed, is handled the same way: the session stays fenced, refuses commands as retryable and stays readable until the retry observes revocation.
-When the gateway's request to create the worker failed or went unanswered, the attempt stays fenced even while the control plane answers, because absence does not show that the creation will not still complete; the retry deletes the worker if it appears.
-The only exception is a request the control plane rejected as invalid, unauthorized or unauthenticated, which the same gateway process then records as never created.
-With the Kubernetes driver, a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name` also resolves the attempt by confirming that the worker's name is absent.
+When the gateway's request to create the worker failed or went unanswered, revocation asks the sandbox gateway to confirm that the worker's name is absent, which also makes the gateway reject a later creation under that name; the attempt is then recorded as never created.
+A request the control plane rejected as invalid, unauthorized or unauthenticated is recorded as never created by the same gateway process without that question.
+Until the sandbox gateway answers, the attempt stays fenced, and the retry deletes the worker if it appears.
 A gateway process that ended after it prepared a worker and before it recorded the worker's runtime or its revocation leaves the attempt fenced the same way.
 Continue such a session's work in a new session.
 Do not delete the session's records or writer files to release it.

@@ -1304,6 +1304,19 @@ describe("GatewayClient", () => {
     await expect(
       new GatewayClient("/proxy/8767").getSpecialistSettings(),
     ).resolves.toEqual(settings);
+
+    const display = { display_name: "Synthetic Researcher" };
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify(display)));
+    await expect(
+      new GatewayClient("/proxy/8767").getSignInDisplay(),
+    ).resolves.toEqual(display);
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/proxy/8767/settings/identity",
+      expect.objectContaining({
+        credentials: "same-origin",
+        redirect: "error",
+      }),
+    );
     expect(fetch).toHaveBeenCalledWith(
       "/proxy/8767/settings/specialists",
       expect.objectContaining({

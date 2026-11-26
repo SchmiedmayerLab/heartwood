@@ -21,12 +21,13 @@ from starlette.applications import Starlette
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
 from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
-from heartwood_platform.control.app import ProjectId, Subject, create_app
+from heartwood_platform.control.app import ProjectId, create_app
 from heartwood_platform.control.hosted import HostedGateway, HostedGatewaySettings, sandbox_digests
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
+from heartwood_platform.control.researchers import Subject, read_key, researcher_id
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
 
 # The form of the references in a launch context.
@@ -78,6 +79,7 @@ class SessionNamespaceSettings(_Settings):
     container_defaults: dict[str, str]
     container_default_requests: dict[str, str]
     platform_ca_file: Path
+    actor_key_file: Path
     openshell_repository: str = ""
 
 
@@ -90,7 +92,10 @@ class Settings(_Settings):
     service_callers: frozenset[str]
     # Service accounts of platform operators, which may rotate project client secrets.
     operator_callers: frozenset[str] = frozenset()
+    # Contains ``{researcher}`` and ``{project}``; the researcher is a researcher identifier.
     redirect_uri_template: str
+    # The key of the researcher identifiers in paths, Hub user names and redirect URIs.
+    researcher_id_key_file: Path
     keycloak: KeycloakSettings
     # The serving certificate from the platform CA; the service serves only HTTPS.
     tls: TlsSettings
@@ -106,7 +111,7 @@ class Settings(_Settings):
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("project identifiers must be unique")
         try:
-            self.redirect_uri_template.format(subject="subject", project="project")
+            self.redirect_uri_template.format(researcher="researcher", project="project")
         except (IndexError, KeyError) as error:
             raise ValueError("redirect_uri_template has an unknown field") from error
         return self
@@ -157,6 +162,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
             container_defaults=namespaces.container_defaults,
             container_default_requests=namespaces.container_default_requests,
             platform_ca=namespaces.platform_ca_file.read_text(encoding="utf-8"),
+            actor_key=read_key(namespaces.actor_key_file),
             openshell_repository=namespaces.openshell_repository,
         ),
         registry.session_ids,
@@ -168,12 +174,15 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         supervisor=supervisor,
         sandbox=sandbox,
     )
+    researcher_key = read_key(settings.researcher_id_key_file).encode()
+    issuer = settings.keycloak.issuer
     launches = LaunchService(
         registry,
         keycloak,
         sessions,
         settings.platform_id,
         settings.redirect_uri_template,
+        lambda subject: researcher_id(issuer, subject, researcher_key),
         hosted=hosted,
     )
     return create_app(

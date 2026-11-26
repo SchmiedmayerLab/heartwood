@@ -12,6 +12,7 @@ the gateway, pod admission, staging into volume claims and deletion through the 
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import json
 import os
@@ -971,6 +972,140 @@ def test_kubernetes_unsent_creation_is_confirmed_absent(
         native._stop(application)
 
 
+def _reason(error: grpc.RpcError) -> str | None:
+    """The reason of the error details the gateway attaches to a refusal."""
+    from google.rpc import error_details_pb2, status_pb2
+
+    for key, value in error.trailing_metadata() or ():  # type: ignore[attr-defined]
+        if key == "grpc-status-details-bin":
+            status = status_pb2.Status.FromString(value)
+            for detail in status.details:
+                info = error_details_pb2.ErrorInfo()
+                if detail.Unpack(info):
+                    return str(info.reason)
+    return None
+
+
+def test_kubernetes_repeated_creation_is_not_executed_after_revocation(
+    infrastructure: KubernetesFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A creation delivered again after its sandbox was revoked creates nothing."""
+    from openshell import SandboxClient
+
+    fixture = infrastructure
+    create = SandboxClient.create
+    delivered: dict[str, Any] = {}
+
+    def lose_reply(client: SandboxClient, **request: Any) -> Never:  # noqa: ANN401
+        if "heartwood.attempt" not in request.get("labels", {}):
+            raise AssertionError("Only the attempt's creation is expected here")
+        delivered.update(request)
+        create(client, **request)
+        raise TimeoutError("synthetic lost creation reply")
+
+    application = native._application(fixture)
+    service = application._service("composition")
+    monkeypatch.setattr(SandboxClient, "create", lose_reply)
+    try:
+        native._submit(application, CommandKind.CHAT, {"prompt": "Synthetic repeated creation."})
+        attempt_id = _fenced_without_worker(service)
+        assert delivered["request_id"] == attempt_id
+        native._stop(application)
+        _settled(service, "revoked")
+        # The same request arrives again: the gateway refuses to execute it a second time.
+        monkeypatch.setattr(SandboxClient, "create", create)
+        with pytest.raises(grpc.RpcError) as refused:
+            fixture.control.create(**delivered)
+        assert refused.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+        assert _reason(refused.value) == "REQUEST_REPLAY_UNAVAILABLE"
+        time.sleep(10)
+        assert fixture.objects() == []
+        _evidence(
+            fixture,
+            {
+                "drill_id": "kubernetes-repeated-creation.v1",
+                "attempt_id": attempt_id,
+                "request_id": delivered["request_id"],
+                "revocation_outcome": "revoked",
+                "repeated_creation": refused.value.code().name,
+                "objects_after_repeated_creation": [],
+                "provider_requests": len(fixture.provider.observations),
+            },
+        )
+    finally:
+        native._stop(application)
+
+
+def test_kubernetes_staging_name_workspace_creates_no_pod(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """A sandbox in a workspace with a staging name never gets a pod of that name."""
+    from openshell import WorkspaceClient
+    from openshell._proto import openshell_pb2 as pb
+
+    fixture = infrastructure
+    # The gateway's client certificate can create a workspace; its sandboxes would carry
+    # the workspace name, which the gateway's credential may open exec sessions into.
+    workspace, name = "hw-staging-q", "case"
+    workspaces = WorkspaceClient.from_sandbox_client(fixture.control)
+    workspaces.create(workspace)
+    labels = {"heartwood.project": fixture.identity, "heartwood.attempt": name}
+    refusal: str | None = None
+    refusal_details = ""
+    try:
+        try:
+            fixture.control.create(
+                workspace=workspace,
+                name=name,
+                labels=labels,
+                spec=pb.SandboxSpec(
+                    template=pb.SandboxTemplate(
+                        image=fixture.worker,
+                        resources={"limits": {"cpu": "1", "memory": "2Gi"}},
+                        labels={**labels, "heartwood.role": "worker"},
+                    ),
+                    policy=fixture.policy,
+                    command=[PYTHON, "-I", "-c", "import time; time.sleep(600)"],
+                ),
+            )
+        except grpc.RpcError as error:
+            refusal, refusal_details = error.code().name, str(error.details())
+        staged: list[str] = []
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            listed = json.loads(
+                fixture.outside("get", "sandboxes.agents.x-k8s.io,pods", "--output=json")
+            )
+            staged = [
+                f"{item['kind']}/{item['metadata']['name']}"
+                for item in listed["items"]
+                if item["metadata"]["name"].startswith(workspace)
+            ]
+            assert staged == []
+            time.sleep(2)
+    finally:
+        with contextlib.suppress(grpc.RpcError):
+            fixture.control.delete(
+                name, workspace=workspace, allow_missing=True, timeout_seconds=90
+            )
+        with contextlib.suppress(grpc.RpcError):
+            workspaces.delete(workspace, allow_missing=True)
+    # The driver creates the Sandbox resource during the creation request, so the admission
+    # policy's refusal is the request's error.
+    assert refusal is not None
+    assert "heartwood-staging-names" in refusal_details, refusal_details
+    _evidence(
+        fixture,
+        {
+            "drill_id": "kubernetes-staging-name.v1",
+            "workspace": workspace,
+            "creation_refusal": refusal,
+            "creation_refusal_details": refusal_details,
+            "objects_of_the_workspace": staged,
+        },
+    )
+
+
 def _refused_launch(
     fixture: KubernetesFixture, method: str, **deployment: str
 ) -> tuple[SessionService, str, list[str]]:
@@ -1172,6 +1307,58 @@ def test_kubernetes_cancellation_settles_without_repeating_the_effect(
     infrastructure: KubernetesFixture,
 ) -> None:
     lifecycle.test_native_cancellation_settles_without_repeating_the_effect(infrastructure)
+
+
+# Fills memory past the container's limit, so the kernel ends the workload container.
+_EXHAUST_MEMORY = "chunks = []\nwhile True:\n    chunks.append(b'x' * (64 * 1024 * 1024))\n"
+
+
+def test_kubernetes_worker_container_is_never_restarted(
+    infrastructure: KubernetesFixture,
+) -> None:
+    """A workload container that ends through its memory limit is never restarted."""
+    from openshell._proto import openshell_pb2 as pb
+
+    fixture = infrastructure
+    name, sandbox_id = fixture.create_probe(fixture.worker)
+    pod = f"{WORKSPACE}--{name}"
+    try:
+        ready = fixture.control.wait_ready(name, workspace=WORKSPACE, timeout_seconds=240)
+        assert ready.id == sandbox_id
+        spec = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["spec"]
+        assert spec["restartPolicy"] == "Never"
+        with contextlib.suppress(grpc.RpcError):
+            fixture.exec(name, [PYTHON, "-I", "-c", _EXHAUST_MEMORY], timeout=120)
+        agent: dict[str, Any] = {}
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            status = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["status"]
+            (agent,) = [item for item in status["containerStatuses"] if item["name"] == "agent"]
+            if "terminated" in agent["state"]:
+                break
+            time.sleep(2)
+        assert "terminated" in agent["state"], agent
+        # The container stays ended, and the gateway no longer reports the sandbox ready.
+        time.sleep(30)
+        status = json.loads(fixture.outside("get", "pod", pod, "--output=json"))["status"]
+        (agent,) = [item for item in status["containerStatuses"] if item["name"] == "agent"]
+        assert agent["restartCount"] == 0, agent
+        assert agent["state"].get("terminated", {}).get("reason") == "OOMKilled", agent
+        phase = fixture.control.get(name, workspace=WORKSPACE).phase
+        assert phase != pb.SANDBOX_PHASE_READY, phase
+        _evidence(
+            fixture,
+            {
+                "drill_id": "kubernetes-worker-container-lifetime.v1",
+                "sandbox_id": sandbox_id,
+                "restart_policy": spec["restartPolicy"],
+                "agent_termination": agent["state"]["terminated"].get("reason"),
+                "agent_restarts": agent["restartCount"],
+                "sandbox_phase_after": phase,
+            },
+        )
+    finally:
+        fixture.revoke_probes()
 
 
 _SYMLINK_PROBE = """import json,os

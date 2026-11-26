@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from identity import load_researcher_identifiers
 from kube import PROBE_CA, Cluster
 
 _VALUES = Path(__file__).resolve().parents[2] / "chart" / "heartwood-platform" / "values-kind.yaml"
@@ -62,6 +63,12 @@ def staging_image(request: pytest.FixtureRequest) -> str:
 def probe_image() -> str:
     """The image of the pods that the tests run."""
     return _PROBE_IMAGE
+
+
+@pytest.fixture(scope="session", autouse=True)
+def researcher_identifiers(cluster: Cluster) -> None:
+    """Let the tests name researchers by the identifiers the platform derives."""
+    load_researcher_identifiers(cluster)
 
 
 @pytest.fixture(scope="session", autouse=True)

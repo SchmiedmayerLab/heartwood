@@ -23,11 +23,7 @@ from heartwood.core_adapter.worker_attempts import (
     WorkerControlPlaneError,
 )
 from heartwood.gateway import ProjectContext, ProjectStateError, worker_native
-from heartwood.gateway.worker_control import (
-    ABSENCE_REJECTS_CREATION,
-    REQUIRED_GATEWAY_CAPABILITIES,
-    NativeWorkerControl,
-)
+from heartwood.gateway.worker_control import REQUIRED_GATEWAY_CAPABILITIES, NativeWorkerControl
 from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
 from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes
 from heartwood.gateway.worker_native import native_worker_plan_factory
@@ -96,9 +92,6 @@ class _Kubernetes(_Native):
     def _remove(self, sandbox_id: str | None) -> None:
         self._event("remove")
         self.removed.append(sandbox_id)
-
-    def reports(self, *capabilities: str) -> None:
-        self.sandboxes.drivers = [("openshell/kubernetes", (*_CAPABILITIES, *capabilities))]
 
     def error(self, status: str, details: str = "") -> Exception:
         error = self.sandboxes.error(getattr(self.sandboxes.grpc.StatusCode, status))
@@ -493,26 +486,15 @@ def test_an_unresolved_creation_is_not_created_only_when_the_gateway_confirms_ab
 ) -> None:
     _lost_creation(kubernetes, monkeypatch)
     absent = SimpleNamespace(outcome=_outcome("ALREADY_ABSENT"), sandbox_id=None)
-    requests = kubernetes.answer_deletions(monkeypatch, absent, absent, absent)
-
-    def revoke() -> Any:  # noqa: ANN401
-        record = kubernetes.record("fenced", None)
-        if revocation == "owner":
-            return kubernetes.attempt.revoke(record)
-        return worker_native.native_worker_reconciler(kubernetes.kubernetes, kubernetes.project)(
-            record
-        )
-
-    # A gateway that does not reject a creation after confirming absence gives no evidence.
-    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
-        revoke()
-    assert requests == []
-    assert kubernetes.removed == []
+    requests = kubernetes.answer_deletions(monkeypatch, absent)
+    record = kubernetes.record("fenced", None)
     if revocation == "owner":
-        # The connected client keeps the capabilities it read at launch.
-        return
-    kubernetes.reports(ABSENCE_REJECTS_CREATION)
-    evidence = revoke()
+        evidence = kubernetes.attempt.revoke(record)
+    else:
+        reconcile = worker_native.native_worker_reconciler(
+            kubernetes.kubernetes, kubernetes.project
+        )
+        evidence = reconcile(record)
     assert evidence.outcome == "not-created"
     assert evidence.sandbox_id is None
     assert requests == [{"allow_missing": True, "timeout_seconds": 90}]
@@ -526,7 +508,6 @@ def test_an_unresolved_creation_is_not_created_only_when_the_gateway_confirms_ab
 def test_any_other_answer_to_the_absence_question_keeps_the_attempt_fenced(
     kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch, answer: str
 ) -> None:
-    kubernetes.reports(ABSENCE_REJECTS_CREATION)
     _lost_creation(kubernetes, monkeypatch)
     if answer == "UNSPECIFIED":
         scripted: object = SimpleNamespace(outcome=_outcome("UNSPECIFIED"), sandbox_id=None)
@@ -544,7 +525,6 @@ def test_any_other_answer_to_the_absence_question_keeps_the_attempt_fenced(
 def test_a_creation_that_arrived_before_the_absence_question_is_recorded_as_revoked(
     kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    kubernetes.reports(ABSENCE_REJECTS_CREATION)
     _lost_creation(kubernetes, monkeypatch)
     removed = SimpleNamespace(outcome=_outcome("COMPLETED"), sandbox_id="sandbox-late")
     requests = kubernetes.answer_deletions(
@@ -558,23 +538,9 @@ def test_a_creation_that_arrived_before_the_absence_question_is_recorded_as_revo
     assert kubernetes.removed == ["sandbox-late"]
 
 
-def test_the_owner_resolves_an_unresolved_creation_with_the_capability_read_at_launch(
-    kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    kubernetes.reports(ABSENCE_REJECTS_CREATION)
-    _lost_creation(kubernetes, monkeypatch)
-    absent = SimpleNamespace(outcome=_outcome("ALREADY_ABSENT"), sandbox_id=None)
-    requests = kubernetes.answer_deletions(monkeypatch, absent)
-    evidence = kubernetes.attempt.revoke(kubernetes.record("fenced", None))
-    assert evidence.outcome == "not-created"
-    assert requests == [{"allow_missing": True, "timeout_seconds": 90}]
-    assert kubernetes.removed == [None]
-
-
 def test_an_accepted_deletion_of_an_unresolved_creation_is_followed_until_absence(
     kubernetes: _Kubernetes, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    kubernetes.reports(ABSENCE_REJECTS_CREATION)
     _lost_creation(kubernetes, monkeypatch)
     accepted = SimpleNamespace(outcome=_outcome("ACCEPTED"), sandbox_id="sandbox-late")
     completed = SimpleNamespace(outcome=_outcome("COMPLETED"), sandbox_id="sandbox-late")
@@ -607,23 +573,3 @@ def test_a_sandbox_that_cannot_be_read_between_retries_keeps_the_attempt_fenced(
         kubernetes.attempt.revoke(kubernetes.record("fenced", runtime))
     assert len(requests) == 1
     assert kubernetes.removed == []
-
-
-def test_the_docker_driver_keeps_an_unresolved_creation_fenced_with_the_same_capability(
-    native: _Native, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    native.sandboxes.drivers = [("openshell/docker", (*_CAPABILITIES, ABSENCE_REJECTS_CREATION))]
-    deleted: list[object] = []
-    monkeypatch.setattr(
-        native.sandboxes, "create", lambda **_request: (_ for _ in ()).throw(TimeoutError())
-    )
-    monkeypatch.setattr(native.sandboxes, "delete", lambda *a, **k: deleted.append((a, k)))
-    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
-        native.attempt.launch(native.intent)
-    for revoke in (
-        native.attempt.revoke,
-        worker_native.native_worker_reconciler(native.settings, native.project),
-    ):
-        with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
-            revoke(native.record("fenced", None))
-    assert deleted == []

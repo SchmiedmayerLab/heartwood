@@ -282,6 +282,26 @@ def session(cluster: Cluster, probe_image: str) -> Iterator[None]:
     }
     wider_binding = _binding("wider-than-the-gateway-role", gateway, name="wider")
     wider_binding["roleRef"]["kind"] = "Role"
+    # Pod and Sandbox creation for the OpenShell gateway's account, which its sandbox role
+    # grants in a launched session, so that the staging name policy decides.
+    writers = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": "pod-and-sandbox-writers", "namespace": _NAMESPACE},
+        "rules": [
+            {"apiGroups": [""], "resources": ["pods"], "verbs": ["create"]},
+            {"apiGroups": ["agents.x-k8s.io"], "resources": ["sandboxes"], "verbs": ["create"]},
+        ],
+    }
+    writers_binding = _binding(
+        "pod-and-sandbox-writers",
+        _account("openshell", _NAMESPACE),
+        # Accounts that only look like a gateway account, for the namespace part of the rule.
+        _account("hw-gw-policytest", _NAMESPACE),
+        _account("other", "heartwood-sessions"),
+        name="writers",
+    )
+    writers_binding["roleRef"]["kind"] = "Role"
     # A Role without rules, which authorization lets anyone bind.
     empty = {**wider, "metadata": {"name": "heartwood-openshell-sandbox", "namespace": _NAMESPACE}}
     empty["rules"] = []
@@ -310,6 +330,8 @@ def session(cluster: Cluster, probe_image: str) -> Iterator[None]:
         ),
         wider,
         wider_binding,
+        writers,
+        writers_binding,
         empty,
         _RUNTIME_CLASS,
         probe,
@@ -1075,3 +1097,77 @@ def test_staging_shape_admits_exec_into_staging_pods_only(cluster: Cluster) -> N
         assert code != 0, arguments
         assert _STAGING_SHAPE in error, error
         assert _EXEC in error, error
+
+
+_STAGING_NAMES = "ValidatingAdmissionPolicy 'heartwood-staging-names'"
+_STAGING_NAME = (
+    "only a Heartwood gateway account creates a pod or Sandbox resource named hw-staging"
+)
+# The OpenShell gateway's account, which creates the Sandbox resources and the supervisor
+# pods of a session; the fixture grants it pod and Sandbox creation.
+_OPENSHELL_ACTOR = f"system:serviceaccount:{_NAMESPACE}:openshell"
+
+
+def _sandbox(image: str, name: str) -> dict[str, Any]:
+    return {
+        "apiVersion": "agents.x-k8s.io/v1beta1",
+        "kind": "Sandbox",
+        "metadata": {"name": name, "namespace": _NAMESPACE},
+        "spec": {"podTemplate": {"spec": {"containers": [{"name": "agent", "image": image}]}}},
+    }
+
+
+def test_staging_names_are_left_to_the_gateway_accounts(
+    cluster: Cluster, staging_image: str, probe_image: str
+) -> None:
+    pod = _pod(probe_image, namespace=_NAMESPACE)
+    pod["spec"]["volumes"] = []
+    cases: list[tuple[str, str, dict[str, Any], str | None]] = [
+        ("gateway-staging-pod", _GATEWAY, _pod(staging_image, namespace=_NAMESPACE), None),
+        ("openshell-workload-pod", _OPENSHELL_ACTOR, _changed(pod, "metadata.name", "hw--x"), None),
+        ("openshell-sandbox", _OPENSHELL_ACTOR, _sandbox(probe_image, "hw--case"), None),
+        ("openshell-staging-pod", _OPENSHELL_ACTOR, pod, _STAGING_NAME),
+        (
+            "openshell-staging-pod-exact-name",
+            _OPENSHELL_ACTOR,
+            _changed(pod, "metadata.name", "hw-staging"),
+            _STAGING_NAME,
+        ),
+        (
+            "openshell-staging-pod-generated-name",
+            _OPENSHELL_ACTOR,
+            _changed(_changed(pod, "metadata.name"), "metadata.generateName", "hw-staging-"),
+            _STAGING_NAME,
+        ),
+        (
+            "gateway-name-in-the-session-namespace",
+            f"system:serviceaccount:{_NAMESPACE}:hw-gw-policytest",
+            pod,
+            _STAGING_NAME,
+        ),
+        (
+            "other-account-in-the-sessions-namespace",
+            "system:serviceaccount:heartwood-sessions:other",
+            pod,
+            _STAGING_NAME,
+        ),
+        (
+            "openshell-staging-sandbox",
+            _OPENSHELL_ACTOR,
+            _sandbox(probe_image, "hw-staging-case"),
+            _STAGING_NAME,
+        ),
+        (
+            "openshell-workspace-staging-sandbox",
+            _OPENSHELL_ACTOR,
+            _sandbox(probe_image, "hw-staging-q--case"),
+            _STAGING_NAME,
+        ),
+    ]
+    failures = []
+    for name, actor, document, message in cases:
+        try:
+            _expect(cluster, actor, "create", document, _STAGING_NAMES, message)
+        except AssertionError as error:
+            failures.append(f"{name}: {error}")
+    assert failures == []

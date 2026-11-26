@@ -422,8 +422,12 @@ class _Sandboxes:
         self.pb = pytest.importorskip("openshell._proto.openshell_pb2")
         self.grpc = pytest.importorskip("grpc")
         self.spec: Any = None
+        self.request_ids: list[str] = []
         self.sandbox: SimpleNamespace | None = None
         self.deleted: list[str] = []
+        # Names a deletion found absent; the gateway rejects a creation under each of them.
+        self.confirmed_absent: set[str] = set()
+        self.absence_requests: list[str] = []
         self.closed = False
         self.probe: dict[str, object] = {
             "files": {
@@ -474,10 +478,19 @@ class _Sandboxes:
         )
 
     def create(
-        self, *, workspace: str, name: str, spec: object, labels: dict[str, str]
+        self,
+        *,
+        workspace: str,
+        name: str,
+        spec: object,
+        labels: dict[str, str],
+        request_id: str,
     ) -> SimpleNamespace:
         assert workspace == self.settings.workspace
         self.spec = spec
+        self.request_ids.append(request_id)
+        if name in self.confirmed_absent:
+            raise self.error(self.grpc.StatusCode.FAILED_PRECONDITION)
         if self.sandbox is None:
             self.place(name, labels)
         assert self.sandbox is not None
@@ -508,10 +521,19 @@ class _Sandboxes:
         self.after_probe(sandbox)
         return SimpleNamespace(exit_code=0, stdout=output)
 
-    def delete(self, name: str, *, workspace: str, **_options: object) -> None:
-        self.get(name, workspace=workspace)
+    def delete(
+        self, name: str, *, workspace: str, allow_missing: bool = False, **_options: object
+    ) -> SimpleNamespace:
+        outcome = pytest.importorskip("openshell").DeletionOutcome
+        if allow_missing:
+            self.absence_requests.append(name)
+            if self.sandbox is None or self.sandbox.name != name:
+                self.confirmed_absent.add(name)
+                return SimpleNamespace(outcome=outcome.ALREADY_ABSENT, sandbox_id=None)
+        sandbox = self.get(name, workspace=workspace)
         self.deleted.append(name)
         self.sandbox = None
+        return SimpleNamespace(outcome=outcome.COMPLETED, sandbox_id=sandbox.id)
 
     def wait_deleted(self, _name: str, **_options: object) -> None:
         assert self.sandbox is None
@@ -698,6 +720,9 @@ def test_launch_binds_the_observed_runtime_and_admits_only_the_native_placeholde
     assert runtime.generation == "generation-1"
     assert str(runtime.endpoint) == native.endpoint
     assert native.sandboxes.deleted == []
+    # Within its replay window, the gateway executes the creation under the attempt's
+    # identifier once.
+    assert native.sandboxes.request_ids == [str(native.intent.attempt_id)]
     spec = native.sandboxes.spec
     assert list(spec.providers) == [native.settings.provider]
     assert native.settings.placeholder_env not in spec.environment
@@ -785,10 +810,8 @@ def test_lost_creation_and_deletion_responses_are_still_recorded_as_revoked(
 ) -> None:
     create, delete = native.sandboxes.create, native.sandboxes.delete
 
-    def lost_create(
-        *, workspace: str, name: str, spec: object, labels: dict[str, str]
-    ) -> SimpleNamespace:
-        create(workspace=workspace, name=name, spec=spec, labels=labels)
+    def lost_create(**request: Any) -> SimpleNamespace:  # noqa: ANN401
+        create(**request)
         raise TimeoutError("synthetic lost response")
 
     def lost_delete(name: str, *, workspace: str, timeout_seconds: float) -> None:
@@ -976,13 +999,14 @@ def test_new_process_reconciles_an_attempt_its_owner_left_running(
     )
 
 
-def test_reconciliation_never_records_absence_after_a_launch_left_unresolved(
+def test_reconciliation_records_absence_after_a_launch_left_unresolved_only_on_the_gateways_word(
     native: _Native,
 ) -> None:
     reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
-    # The ended process may have sent a creation the control plane has not recorded yet.
-    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
-        reconcile(native.record("fenced", None))
+    # The ended process may have sent a creation the control plane has not recorded yet,
+    # so the gateway must confirm the name absent before absence is recorded.
+    assert reconcile(native.record("fenced", None)).outcome == "not-created"
+    assert native.sandboxes.absence_requests == ["hw-" + native.intent.attempt_id.hex[:16]]
     assert native.sandboxes.deleted == []
 
 
@@ -1103,6 +1127,7 @@ def test_forwarder_is_not_started_with_a_changed_gateway_identity(
 
 _DELETE_RETRY = "openshell.compute.delete-retries-deleting"
 _DELETE_AWAITS_PROVISIONING = "openshell.compute.delete-awaits-provisioning"
+_REJECTS_DELETED_NAME = "openshell.compute.create-rejects-deleted-name"
 
 
 _UNREADABLE = WorkerGatewayReport(decision="refused")
@@ -1133,6 +1158,11 @@ def _refused(driver: str | None, *capabilities: str) -> WorkerGatewayReport:
             id="no-retry",
         ),
         pytest.param(
+            [("openshell/docker", (_DELETE_AWAITS_PROVISIONING, _DELETE_RETRY))],
+            _refused("openshell/docker", _DELETE_AWAITS_PROVISIONING, _DELETE_RETRY),
+            id="no-absence-rejection",
+        ),
+        pytest.param(
             [("openshell/podman", _GATEWAY_CAPABILITIES)],
             _refused("openshell/podman", *_GATEWAY_CAPABILITIES),
             id="other-driver",
@@ -1157,11 +1187,11 @@ def test_gateway_without_deletion_capabilities_stops_launch_and_reconciliation(
         native.sandboxes.version = None
     else:
         native.sandboxes.drivers = drivers
-    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
+    with pytest.raises(WorkerGatewayCapabilityError, match="required capabilities"):
         worker_native.require_gateway_capabilities(native.settings, native.project)
     assert native.sandboxes.closed
     # The refusal keeps its diagnostic: nothing was created, so nothing needs reconciliation.
-    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
+    with pytest.raises(WorkerGatewayCapabilityError, match="required capabilities"):
         native.attempt.launch(native.intent)
     assert native.attempt.control.client is None
     assert native.sandboxes.spec is None
@@ -1183,7 +1213,9 @@ def test_missing_capability_diagnostic_names_version_and_capability(native: _Nat
     native.sandboxes.drivers = [("openshell/docker", (_DELETE_AWAITS_PROVISIONING,))]
     with pytest.raises(WorkerGatewayCapabilityError) as raised:
         worker_native.require_gateway_capabilities(native.settings, native.project)
-    assert str(raised.value).endswith(f"version {_GATEWAY_VERSION} lacks {_DELETE_RETRY}")
+    assert str(raised.value).endswith(
+        f"version {_GATEWAY_VERSION} lacks {_REJECTS_DELETED_NAME}, {_DELETE_RETRY}"
+    )
 
 
 @pytest.mark.parametrize("version", [_GATEWAY_VERSION, "9.9.9-unlisted"])
@@ -1525,7 +1557,7 @@ def test_kubernetes_manifest_refuses_every_other_driver_set_before_any_request(
         kubernetes_gateway.version = None
     else:
         kubernetes_gateway.drivers = drivers
-    with pytest.raises(WorkerGatewayCapabilityError, match="required deletion capabilities"):
+    with pytest.raises(WorkerGatewayCapabilityError, match="required capabilities"):
         worker_native.require_gateway_capabilities(settings, project)
     control = NativeWorkerControl(settings, project)
     with pytest.raises(WorkerGatewayCapabilityError):
@@ -1542,16 +1574,20 @@ def test_missing_capability_diagnostic_names_the_kubernetes_driver_version(
     kubernetes_deployment: tuple[KubernetesWorkerDeployment, ProjectContext],
     kubernetes_gateway: _Sandboxes,
 ) -> None:
-    kubernetes_gateway.drivers = [(_KUBERNETES, (_DELETE_RETRY,))]
+    kubernetes_gateway.drivers = [(_KUBERNETES, (_DELETE_RETRY, _REJECTS_DELETED_NAME))]
     with pytest.raises(WorkerGatewayCapabilityError) as raised:
         worker_native.require_gateway_capabilities(*kubernetes_deployment)
     assert str(raised.value).endswith(
         f"version {_GATEWAY_VERSION} lacks {_DELETE_AWAITS_PROVISIONING}"
     )
+    kubernetes_gateway.drivers = [(_KUBERNETES, (_DELETE_RETRY, _DELETE_AWAITS_PROVISIONING))]
+    with pytest.raises(WorkerGatewayCapabilityError) as raised:
+        worker_native.require_gateway_capabilities(*kubernetes_deployment)
+    assert str(raised.value).endswith(f"version {_GATEWAY_VERSION} lacks {_REJECTS_DELETED_NAME}")
     kubernetes_gateway.drivers = [("openshell/docker", ())]
     with pytest.raises(WorkerGatewayCapabilityError) as raised:
         worker_native.require_gateway_capabilities(*kubernetes_deployment)
-    assert str(raised.value).endswith("required deletion capabilities")
+    assert str(raised.value).endswith("required capabilities")
 
 
 def test_managed_worker_manifest_has_no_declared_gateway_version(
@@ -1605,23 +1641,24 @@ def test_launch_refuses_a_container_runtime_that_changed_after_preparation(
 def _lose_creation_response(native: _Native, monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
     """Time out the creation request; the returned callable completes it in the control plane."""
     create = native.sandboxes.create
-    pending: list[tuple[str, dict[str, str]]] = []
+    pending: list[tuple[str, dict[str, str], str]] = []
 
     def lost_create(
-        *, workspace: str, name: str, spec: object, labels: dict[str, str]
+        *, workspace: str, name: str, spec: object, labels: dict[str, str], request_id: str
     ) -> SimpleNamespace:
         assert workspace == native.settings.workspace
         native.sandboxes.spec = spec
-        pending.append((name, labels))
+        pending.append((name, labels, request_id))
         raise TimeoutError("synthetic creation timeout")
 
     def land() -> None:
-        name, labels = pending.pop()
+        name, labels, request_id = pending.pop()
         create(
             workspace=native.settings.workspace,
             name=name,
             spec=native.sandboxes.spec,
             labels=labels,
+            request_id=request_id,
         )
 
     monkeypatch.setattr(native.sandboxes, "create", lost_create)
@@ -1629,7 +1666,7 @@ def _lose_creation_response(native: _Native, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("revocation", ["owner", "reconciliation"])
-def test_absence_after_an_uncertain_creation_keeps_the_attempt_fenced_until_it_appears(
+def test_an_uncertain_creation_is_resolved_by_the_gateways_absence_answer(
     native: _Native, monkeypatch: pytest.MonkeyPatch, revocation: str
 ) -> None:
     land = _lose_creation_response(native, monkeypatch)
@@ -1640,18 +1677,113 @@ def test_absence_after_an_uncertain_creation_keeps_the_attempt_fenced_until_it_a
         if revocation == "owner"
         else worker_native.native_worker_reconciler(native.settings, native.project)
     )
-    # The creation may still be queued: absence is never recorded as `not-created`.
-    for _ in range(3):
-        with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
-            revoke(native.record("fenced", None))
+    # The gateway confirms the name absent to a deletion, so nothing can be created under it.
+    evidence = revoke(native.record("fenced", None))
+    assert evidence.outcome == "not-created"
+    assert evidence.sandbox_id is None
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    assert native.sandboxes.absence_requests == [name]
     assert native.sandboxes.deleted == []
-    # The control plane completes the creation, and the next revocation deletes it.
+    # The creation still in flight arrives later and is rejected.
+    with pytest.raises(native.sandboxes.grpc.RpcError):
+        land()
+    assert not native.sandboxes.running
+
+
+@pytest.mark.parametrize("revocation", ["owner", "reconciliation"])
+def test_an_uncertain_creation_that_arrived_first_is_deleted_and_revoked(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, revocation: str
+) -> None:
+    land = _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
     land()
+    revoke = (
+        native.attempt.revoke
+        if revocation == "owner"
+        else worker_native.native_worker_reconciler(native.settings, native.project)
+    )
     evidence = revoke(native.record("fenced", None))
     assert evidence.outcome == "revoked"
     assert evidence.sandbox_id == "sandbox-1"
     assert native.sandboxes.deleted == ["hw-" + native.intent.attempt_id.hex[:16]]
+    assert native.sandboxes.absence_requests == []
     assert not native.sandboxes.running
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "UNSPECIFIED",
+        "COMPLETED-without-identity",
+        "ACCEPTED-without-identity",
+        "NOT_FOUND",
+        "INTERNAL",
+    ],
+)
+def test_any_other_answer_to_the_absence_question_keeps_a_docker_attempt_fenced(
+    native: _Native, monkeypatch: pytest.MonkeyPatch, answer: str
+) -> None:
+    _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    outcome = pytest.importorskip("openshell").DeletionOutcome
+
+    def answered(_name: str, **_options: object) -> SimpleNamespace:
+        if answer == "UNSPECIFIED":
+            return SimpleNamespace(outcome=outcome.UNSPECIFIED, sandbox_id=None)
+        if answer == "COMPLETED-without-identity":
+            return SimpleNamespace(outcome=outcome.COMPLETED, sandbox_id=None)
+        if answer == "ACCEPTED-without-identity":
+            return SimpleNamespace(outcome=outcome.ACCEPTED, sandbox_id=None)
+        raise native.sandboxes.error(getattr(native.sandboxes.grpc.StatusCode, answer))
+
+    monkeypatch.setattr(native.sandboxes, "delete", answered)
+    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
+        native.attempt.revoke(native.record("fenced", None))
+    assert native.docker.volumes != {}
+
+
+def test_a_creation_that_arrives_before_the_absence_question_is_deleted_and_revoked(
+    native: _Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    land = _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    delete = native.sandboxes.delete
+
+    def arrives_first(name: str, **options: Any) -> SimpleNamespace:  # noqa: ANN401
+        # The creation lands after the lookup found nothing and before the deletion.
+        if options.get("allow_missing"):
+            land()
+        return delete(name, **options)
+
+    monkeypatch.setattr(native.sandboxes, "delete", arrives_first)
+    evidence = native.attempt.revoke(native.record("fenced", None))
+    # The gateway's deletion reports the sandbox it removed; the ordinary deletion that
+    # follows finds nothing, and absence is still observed before the attempt is revoked.
+    assert (evidence.outcome, evidence.sandbox_id) == ("revoked", "sandbox-1")
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    assert native.sandboxes.absence_requests == [name]
+    assert native.sandboxes.deleted == [name]
+    assert not native.sandboxes.running
+
+
+def test_a_worker_container_the_engine_still_lists_keeps_an_absent_attempt_fenced(
+    native: _Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _lose_creation_response(native, monkeypatch)
+    with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
+        native.attempt.launch(native.intent)
+    native.docker.containers.append("leftover-worker")
+    for revoke in (
+        native.attempt.revoke,
+        worker_native.native_worker_reconciler(native.settings, native.project),
+    ):
+        with pytest.raises(WorkerAttemptError, match="remains after control-plane revocation"):
+            revoke(native.record("fenced", None))
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    assert native.sandboxes.absence_requests == [name, name]
 
 
 @pytest.mark.parametrize(
@@ -1667,7 +1799,7 @@ def test_absence_after_an_uncertain_creation_keeps_the_attempt_fenced_until_it_a
         ("DEADLINE_EXCEEDED", False),
     ],
 )
-def test_only_a_creation_rejected_before_any_record_resolves_from_absence(
+def test_only_a_creation_rejected_before_any_record_resolves_without_asking_the_gateway(
     native: _Native, monkeypatch: pytest.MonkeyPatch, status: str, rejected: bool
 ) -> None:
     def failed_create(**_request: object) -> SimpleNamespace:
@@ -1676,15 +1808,14 @@ def test_only_a_creation_rejected_before_any_record_resolves_from_absence(
     monkeypatch.setattr(native.sandboxes, "create", failed_create)
     with pytest.raises(WorkerAttemptError, match="outside reconciliation"):
         native.attempt.launch(native.intent)
-    if rejected:
-        assert native.attempt.revoke(native.record("fenced", None)).outcome == "not-created"
-    else:
-        with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
-            native.attempt.revoke(native.record("fenced", None))
-    # Without a recorded runtime, an ended process cannot tell which outcome it had.
+    name = "hw-" + native.intent.attempt_id.hex[:16]
+    assert native.attempt.revoke(native.record("fenced", None)).outcome == "not-created"
+    assert native.sandboxes.absence_requests == ([] if rejected else [name])
+    # Without a recorded runtime, an ended process cannot tell which outcome it had and
+    # asks the gateway.
     reconcile = worker_native.native_worker_reconciler(native.settings, native.project)
-    with pytest.raises(WorkerAttemptError, match="absence after an unresolved creation"):
-        reconcile(native.record("fenced", None))
+    assert reconcile(native.record("fenced", None)).outcome == "not-created"
+    assert native.sandboxes.absence_requests[-1] == name
     assert native.sandboxes.deleted == []
 
 

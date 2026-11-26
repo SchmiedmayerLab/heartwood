@@ -20,7 +20,7 @@
       "diagnostic": "HW-INGRESS-002: request path is outside the configured gateway base path"
     },
     {
-      "condition": "Missing or refused identity with identity-proxy ingress",
+      "condition": "Missing identity, or the identity of another subject or issuer, with identity-proxy ingress",
       "code": "HW-INGRESS-004",
       "surface": "gateway-response",
       "diagnostic": "HW-INGRESS-004: Open the gateway's URL and sign in as the researcher it was started for."
