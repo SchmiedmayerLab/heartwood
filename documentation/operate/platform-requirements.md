@@ -209,7 +209,7 @@ The [sandbox gateway](#sandbox-gateway), with these settings:
 | `server.drivers.kubernetes.workspaceMode` | `shared` | Sandboxes run in the gateway's own namespace, which is the namespace the manifest names. |
 | `supervisor.image.digest` and `sandboxRuntime.image.digest` | The digests in the manifest keys `supervisor_image_digest` and `sandbox_image_digest` | Admission compares the images the pods run. |
 | `replicaCount` | `1` | The driver serializes the operations on one sandbox inside one gateway process, and the deletion behavior it reports was examined and qualified with one replica. |
-| `mutation_admission_limit_per_caller` under `openshell.gateway` in `gatewayConfig` | `100000`, at most what the gateway's data volume holds | Heartwood sends each creation with a request identifier, and a creation without a recorded outcome keeps its admission slot for the life of the gateway's store. |
+| `mutation_admission_limit_per_caller` under `openshell.gateway` in `gatewayConfig` | `100000`, at most what the gateway's data volume holds | Heartwood sends each creation with a request identifier. A failed creation keeps its admission slot for the replay window, and a creation without a recorded outcome keeps it for the life of the gateway's store. |
 | `supervisor.network.additionalCaConfigMapName` | A ConfigMap with the certificate authority of the model route, when that authority is not publicly trusted | The supervisor makes the TLS connection to each destination the sandbox policy allows. |
 
 Each sandbox has its own supervisor pod; the shared supervisor topology is not qualified.
