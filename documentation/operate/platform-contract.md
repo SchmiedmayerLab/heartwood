@@ -564,14 +564,15 @@ Every planning tool returns the overview as it stands after the call.
 
 Each call is an [outside operation](#outside-operation-admission) of the service `heartwood-planning`.
 The researcher reviews it before the gateway runs it, and its result reaches the model only through a separate result release.
-A call the gateway refuses, such as a prediction for another launch context or arguments the tool does not define, opens a review of the refusal that names the reason.
+A call the gateway refuses, such as a prediction for another launch context, arguments the tool does not define or a request over 64 KiB, opens a review of the refusal that names the reason.
 A refusal records nothing and contacts no service; once the researcher approves it and releases its result, the agent receives the reason as a failed call.
 A refused record, such as an estimate for an unrecorded revision, is reported as a failed call with the reason.
 The result leaves out reviewed proposals, decisions and the launch context's billing and authority references, and holds at most 48 KiB.
 A larger overview keeps only the latest revision of each plan, and then no revisions, with a limitation that says so; service status, budgets and outcomes remain, and the call fails only when they alone exceed the limit.
 The agent's records are ordinary planning records, so every interface shows them.
 A call whose outcome was not recorded is not run again.
-Its status read reports a prediction call as failed unless the journal holds that exact revision, and reports the current overview for the other calls.
+Its status read reports a prediction call as failed unless the journal holds that exact revision.
+For an estimate call it reports the current overview and whether the journal holds an estimate for that revision, scope and elements, and for an overview call the current overview.
 A `heartwood gateway serve` deployment with `[planning]` and no `[worker]` table keeps planning to the researcher interfaces.
 
 ### Platform Job Operations

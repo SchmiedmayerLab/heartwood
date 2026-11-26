@@ -130,6 +130,7 @@ class Catalog:
         self.server.tool(self.get_operation, annotations=_READ_ONLY)
         self.server.tool(self.delete_records)
         self.server.tool(self.unbound_lookup, annotations=_READ_ONLY)
+        self.server.tool(self.label_records, annotations=_READ_ONLY)
         self.server.resource("resource://synthetic/notes")(self.notes)
         self.server.prompt(self.plan)
         self.app = self.server.http_app(path="/mcp", json_response=True, stateless_http=True)
@@ -187,6 +188,13 @@ class Catalog:
             self.tombstones.add(key)
             self.operations[key] = "not-received"
         return self._observation(project_id, operation_id)
+
+    async def label_records(
+        self, project_id: str, operation_id: str, summary: str
+    ) -> PlatformOperationObservation:
+        """Label synthetic records with a summary; the tool's own argument is named summary."""
+        self.calls.append(f"label:{summary}")
+        return await self.find_records(project_id, operation_id, summary)
 
     def delete_records(self, project_id: str, operation_id: str, term: str) -> str:
         """Delete synthetic records; the deployment does not allow this tool."""
@@ -340,7 +348,7 @@ def served(
             destination = McpDestination(
                 service_id=_SERVICE_ID,
                 origin=origin,
-                tools=("find_records", "unbound_lookup"),
+                tools=("find_records", "unbound_lookup", "label_records"),
                 observation_tool="get_operation",
                 max_result_bytes=max_result_bytes,
                 call_timeout_seconds=2,
@@ -991,9 +999,36 @@ def test_the_sdk_fields_of_a_call_stay_out_of_the_reviewed_request(tmp_path: Pat
             assert service.catalog.calls == ["synthetic"]
 
 
-def test_a_tool_that_declares_an_sdk_field_keeps_it() -> None:
-    arguments: dict[str, JsonValue] = {"summary": "Ticket title", "security_risk": "LOW"}
-    assert _tool_arguments(arguments, {"summary"}) == {"summary": "Ticket title"}
+def test_a_tool_that_declares_an_sdk_field_receives_it(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable(["label_records"])
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            worker.call(tool, {"summary": "Cohort A", "security_risk": "LOW"})
+            advance_outside_calls(session, adapter)
+            (record,) = _records(session)
+            assert json.loads(record.proposal.request.request_json) == {"summary": "Cohort A"}
+            _decide(session, record, CommandKind.APPROVE)
+            assert service.catalog.calls == ["label:Cohort A", "Cohort A"]
+
+
+def test_an_undeclared_argument_beside_the_sdk_fields_is_refused(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            arguments: dict[str, JsonValue] = {
+                "term": "synthetic",
+                "summary": "Search",
+                "security_risk": "LOW",
+                "limit": 5,
+            }
+            with pytest.raises(ExternalActionError):
+                adapter.prepare(tool, arguments)
+            worker.call(tool, arguments)
+            advance_outside_calls(session, adapter)
+            assert _records(session) == []
+            assert _tool_arguments(arguments, {"term"}) == {"term": "synthetic", "limit": 5}
 
 
 def test_tools_outside_the_session_binding_and_gateway_fields_are_refused(tmp_path: Path) -> None:

@@ -28,7 +28,11 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from heartwood.core_adapter.external_actions import ExternalOperationEstimate, canonical_request
+from heartwood.core_adapter.external_actions import (
+    ExternalActionError,
+    ExternalOperationEstimate,
+    canonical_request,
+)
 from heartwood.gateway._access import (
     AccessUnavailableError,
     ServiceTokens,
@@ -770,11 +774,11 @@ class PlatformPlanning:
             return summary, canonical_request(content)
         except PlanningRecordError as error:
             reason = str(error)
-        except ValueError:
+        except ExternalActionError:
             reason = "The planning call is invalid or exceeds the request size limit"
-        return f"Refuse {tool_name}: {reason}"[:512], canonical_request(
-            json.dumps({_REFUSAL: reason})
-        )
+        return f"Tell the agent its {tool_name} call was refused: {reason}"[
+            :512
+        ], canonical_request(json.dumps({_REFUSAL: reason}))
 
     def _agent_request(self, tool_name: str, values: dict[str, JsonValue]) -> tuple[str, str]:
         if tool_name == OVERVIEW_AGENT_TOOL and not values:
@@ -883,7 +887,8 @@ class PlatformPlanning:
         """Report a call whose outcome was not recorded, without running it again.
 
         A prediction counts as recorded only when the journal holds that exact revision;
-        for an estimate the result says whether the journal holds one for the revision.
+        for an estimate the result says whether the journal holds one for the revision,
+        scope and elements.
         """
         request = json.loads(request_json)
         if _REFUSAL in request:
@@ -903,13 +908,17 @@ class PlatformPlanning:
                 held = any(
                     _key(item.prediction) == _key(estimate.prediction)
                     and item.scope == estimate.scope
+                    and (
+                        estimate.scope == "plan"
+                        or set(item.covered_element_ids) == set(estimate.element_ids)
+                    )
                     for item in _of(self._entries(), PlatformEstimate)
                 )
                 note = (
                     "The outcome of this call was not observed. The journal "
                     + ("holds an" if held else "holds no")
-                    + " estimate for this revision and scope; this is the current planning "
-                    "overview."
+                    + " estimate for this revision, scope and elements; this is the current "
+                    "planning overview."
                 )
         except PlanningStateError as error:
             return self._agent_failure(tool_name, operation_id, str(error))
