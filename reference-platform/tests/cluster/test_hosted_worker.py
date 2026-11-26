@@ -86,6 +86,46 @@ class Server:
             time.sleep(3)
         raise AssertionError("the Hub did not stop the server")
 
+    def remove(self) -> None:
+        """Delete the named server, which deletes its session, and wait until it is gone.
+
+        The Hub stops the server and deletes the session after it answers, so the next
+        start of a server of the same name would otherwise race the deletion. The Hub
+        deletes the server's claim last.
+        """
+        self.browser.hub_api(
+            "DELETE", f"/users/{researcher(FIRST)}/servers/{self.project}", {"remove": True}
+        )
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            status, user = self.browser.hub_api("GET", f"/users/{researcher(FIRST)}")
+            gone = status == 200 and self.project not in user.get("servers", {})
+            if gone and not (self.session and self._session_objects()):
+                return
+            time.sleep(3)
+        raise AssertionError("the Hub did not delete the server")
+
+    def _session_objects(self) -> list[str]:
+        """The gateway pods, Secret and claim of the server's session that still exist."""
+        result = self.browser.cluster.kubectl(
+            "get",
+            f"--namespace={SESSIONS}",
+            "pods",
+            f"--selector=heartwood.platform/session={self.session}",
+            "--output=name",
+        )
+        assert result.returncode == 0, result.stderr
+        named = self.browser.cluster.kubectl(
+            "get",
+            f"--namespace={SESSIONS}",
+            f"secret/hw-gw-{self.session}",
+            f"persistentvolumeclaim/hw-home-{self.session}",
+            "--output=name",
+            "--ignore-not-found",
+        )
+        assert named.returncode == 0, named.stderr
+        return [*result.stdout.split(), *named.stdout.split()]
+
     def api(
         self, method: str, path: str, body: dict[str, Any] | None = None, max_time: int = 60
     ) -> tuple[int, Any]:
@@ -170,7 +210,7 @@ def small(browser: Browser) -> Iterator[Server]:
     try:
         yield server
     finally:
-        browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/small", {"remove": True})
+        server.remove()
 
 
 def test_the_gateway_discovers_the_route_models_with_its_discovery_key(small: Server) -> None:
@@ -242,7 +282,7 @@ def test_settlement_records_the_spending_above_the_key_budget(
     small: Server, cluster: Cluster
 ) -> None:
     session = small.session
-    small.browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/small", {"remove": True})
+    small.remove()
     query = (
         "import sqlite3,sys;c=sqlite3.connect('/var/lib/heartwood-control/control.sqlite3');"
         'print(c.execute("SELECT state, amount, incurred FROM reservation WHERE holder=?",'
@@ -310,7 +350,7 @@ def demo(browser: Browser) -> Iterator[Server]:
     try:
         yield server
     finally:
-        browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/demo", {"remove": True})
+        server.remove()
 
 
 def _turn(server: Server, prompt: str) -> None:
