@@ -35,6 +35,7 @@ from heartwood.cli._audit import (
 )
 from heartwood.cli._brand import lockup
 from heartwood.cli._experiments import configure_experiments, handle_experiments
+from heartwood.cli._identity import configure_identity, handle_identity
 from heartwood.cli._interactive import (
     InteractionResult,
     InteractiveSession,
@@ -72,10 +73,10 @@ from heartwood.gateway import (
     CheckpointSignerError,
     CommandConflictError,
     GatewayAsgiApp,
+    IdentityAccess,
     IngressConfigurationError,
     IngressPolicy,
     InterfaceKind,
-    LaunchCapability,
     NativeLockUnavailableError,
     ProjectConfigError,
     ProjectContext,
@@ -92,6 +93,7 @@ from heartwood.gateway import (
     load_checkpoint_signer_registry,
     load_project_deployment,
     narrowed_review_check,
+    select_gateway_access,
 )
 from heartwood.session import CommandKind, EventKind, SessionEvent, validate_session_id
 
@@ -287,6 +289,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     configure_audit(subparsers.add_parser("audit", help="Audit-log operations."))
 
+    configure_identity(
+        subparsers.add_parser("identity", help="Sign in for a hosted gateway from a terminal.")
+    )
+
     configure_signer(
         subparsers.add_parser(
             "signer",
@@ -404,6 +410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "identity":
+        # The sign-in reads and writes nothing in the current directory.
+        return handle_identity(args)
     project = ProjectContext.current()
     if args.command == "project":
         from heartwood.gateway._project_migration import (
@@ -1080,10 +1089,10 @@ def _handle_serve(
             raise IngressConfigurationError(
                 "environment capability delivery is unsupported; use --capability-fd"
             )
-        access = (
-            LaunchCapability.from_descriptor(capability_descriptor)
-            if capability_descriptor is not None
-            else LaunchCapability.generate()
+        access = select_gateway_access(
+            ingress,
+            identity=None if deployment is None else deployment.identity,
+            capability_descriptor=capability_descriptor,
         )
     except IngressConfigurationError as error:
         raise SystemExit(f"{diagnostic.code}: {error}") from error
@@ -1123,6 +1132,9 @@ def _handle_serve(
                     worker_plan_factory=worker_plan_factory,
                     worker_reconciler=worker_reconciler,
                     checkpoint_evidence_factory=checkpoint_evidence_factory,
+                    service_tokens=access.service_token
+                    if isinstance(access, IdentityAccess)
+                    else None,
                 )
                 if deployment is not None
                 else SessionGateway(project=project)
@@ -1160,6 +1172,12 @@ def _handle_serve(
             launch_url = access.launch_url(ingress)
             if launch_url is not None:
                 print(f"Open Heartwood with this one-time link:\n  {launch_url}\n", flush=True)
+            elif ingress.mode == "identity-proxy":
+                print(
+                    "Heartwood is served at:\n"
+                    f"  {ingress.external_origin}{ingress.browser_base_path}/\n",
+                    flush=True,
+                )
             uvicorn.Server(config).run(sockets=[listener])
     return 0
 

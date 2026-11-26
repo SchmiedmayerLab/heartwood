@@ -8,13 +8,14 @@
 
 from __future__ import annotations
 
+import ssl
 import sys
 from pathlib import Path
 from typing import Annotated, Any, Self
 
 import httpx
 import uvicorn
-from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.applications import Starlette
 
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
@@ -22,6 +23,7 @@ from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, Subject, create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
+from heartwood_platform.control.prices import PriceSheet
 from heartwood_platform.control.registry import Project, Registry
 from heartwood_platform.control.sessions import ApiServerAddress, Sessions, SessionSettings
 
@@ -36,7 +38,9 @@ class _Settings(BaseModel):
 class KeycloakSettings(_Settings):
     """How the control service reaches Keycloak."""
 
-    url: str
+    url: str = Field(pattern=r"^https://[^/]+$")
+    # The platform CA, the only authority the control service trusts for Keycloak.
+    ca_file: Path
     issuer: str
     realm: str
     client_id: str
@@ -86,6 +90,7 @@ class Settings(_Settings):
     keycloak: KeycloakSettings
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
+    synthetic_prices: PriceSheet
 
     @model_validator(mode="after")
     def _validate(self) -> Self:
@@ -106,7 +111,11 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         Project(project.id, project.billing_attribution_ref, project.policy_ref, project.members)
         for project in settings.projects
     )
-    client = httpx.Client(base_url=settings.keycloak.url, timeout=30)
+    client = httpx.Client(
+        base_url=settings.keycloak.url,
+        timeout=30,
+        verify=ssl.create_default_context(cafile=settings.keycloak.ca_file),
+    )
     secret_file = settings.keycloak.client_secret_file
     keycloak = Keycloak(
         client,
@@ -150,6 +159,7 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
+        settings.synthetic_prices,
     )
 
 

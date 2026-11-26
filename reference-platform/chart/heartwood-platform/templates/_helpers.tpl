@@ -34,7 +34,7 @@ upgrade does not rotate it. Arguments: context, name, key.
 {{- end }}
 
 {{- define "heartwood.keycloakUrl" -}}
-{{- .Values.keycloak.url | default (printf "http://keycloak.%s.svc.cluster.local:8080" .Release.Namespace) -}}
+{{- .Values.keycloak.url | default (printf "https://keycloak.%s.svc.cluster.local:8443" .Release.Namespace) -}}
 {{- end }}
 
 {{- /* Security context of a container under the restricted Pod Security Standard. */ -}}

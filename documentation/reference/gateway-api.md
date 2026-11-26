@@ -44,6 +44,10 @@ The capability arrives in one of two ways:
 - The researcher opens the launch link; the page sends its one-time token to `POST /launch` as `{"token":"…"}` and receives `{"capability":"…"}`. The route still validates ingress, and the token works once.
 - The operator starts the gateway with [`--capability-fd`](cli.md#gateway-serve), and an authenticated proxy adds the header only for the owning researcher.
 
+With [`identity-proxy` ingress](../operate/security.md#researcher-identity) the gateway verifies the researcher itself and records the verified subject as the actor.
+A browser signs in at `GET /identity/login`, returns through `GET /oauth_callback`, and exchanges the launch token of that sign-in at `POST /launch`.
+Other clients send `Authorization: Bearer` with an access token whose audience contains the gateway's client and whose subject is the bound researcher.
+
 Capability cookies and environment delivery are rejected.
 Keep tokens and capabilities out of URLs, logs, shared browser storage, and worker access.
 Browser storage is isolated per origin, not per path, so mutually untrusted projects need separate origins.
@@ -157,7 +161,7 @@ OpenAPI lists the statuses each operation can return.
 | Status | Meaning | Client response |
 |---|---|---|
 | `400` | Malformed request, query, JSON, UTF-8, or ingress metadata | Correct the request |
-| `401` | Missing or invalid capability | Re-establish the capability through the launch link or operator |
+| `401` | Missing or invalid capability or identity | Re-establish the capability through the launch link or operator, or sign in again |
 | `403` | Rejected ingress or launch exchange | Check the route, identity boundary, and token |
 | `404` | Unknown resource or base path | Check the base path and identifier |
 | `409` | Command, ownership, or lock conflict; integrity recovery; unresolved required evidence | Read current state and resolve it; never force another writer |

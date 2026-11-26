@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 {{- range .Values.projects -}}
 {{- $projects = append $projects (dict "id" .id "billing_attribution_ref" .billingAttributionRef "policy_ref" .policyRef "members" (.members | default list)) -}}
 {{- end -}}
-{{- $keycloak := dict "url" "http://keycloak:8080" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
+{{- $keycloak := dict "url" "https://keycloak:8443" "ca_file" "/etc/heartwood-control/platform-ca/ca.crt" "issuer" (printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .)) "realm" "heartwood" "client_id" "heartwood-control" "client_secret_file" "/etc/heartwood-control/keycloak/client-secret" -}}
 {{- /* Without configured addresses, the Service address and the endpoints of the API server are read from the cluster. */ -}}
 {{- $apiServer := .Values.sessions.apiServer -}}
 {{- if not $apiServer -}}
@@ -32,7 +32,18 @@ SPDX-License-Identifier: MIT
 {{- fail "sessions.apiServer is empty and the API server addresses cannot be read from the cluster" -}}
 {{- end -}}
 {{- $sessions := dict "control_namespace" .Release.Namespace "control_account" "heartwood-control" "gateway_namespace" .Values.sessions.namespace "openshell_objects_file" "/etc/heartwood-control/openshell/openshell-session.json" "openshell_gateway_image" .Values.images.openshellGateway "openshell_repository" .Values.images.openshellRepository "api_server" $apiServer "quota" .Values.sessions.quota "container_defaults" .Values.sessions.containerDefaults "container_default_requests" .Values.sessions.containerDefaultRequests "platform_ca_file" "/etc/heartwood-control/platform-ca/ca.crt" -}}
-{{- dict "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" .Values.control.redirectUriTemplate "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- $prices := .Values.syntheticPrices -}}
+{{- $profiles := list -}}
+{{- range $prices.runtimeProfiles -}}
+{{- $rates := list -}}
+{{- range .rates -}}
+{{- $rates = append $rates (dict "measure" .measure "sku_price_id" .skuPriceId "quantity_per_pricing_unit" .quantityPerPricingUnit) -}}
+{{- end -}}
+{{- $profiles = append $profiles (dict "runtime_profile_ref" .runtimeProfileRef "kind" .kind "rates" $rates) -}}
+{{- end -}}
+{{- /* The SKU prices keep their FOCUS column names. */ -}}
+{{- $syntheticPrices := dict "estimate_validity_seconds" $prices.estimateValiditySeconds "sku_prices" $prices.skuPrices "runtime_profiles" $profiles -}}
+{{- dict "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" .Values.control.redirectUriTemplate "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The registry and the settings of the control service. It holds no credential.
 apiVersion: v1
@@ -151,8 +162,8 @@ spec:
         - name: openshell
           configMap:
             name: heartwood-control-openshell
-        # The platform CA certificate, which the service copies into each session
-        # namespace for the supervisors of its sandboxes.
+        # The platform CA certificate, which the service trusts for Keycloak and copies
+        # into each session namespace for the supervisors of its sandboxes.
         - name: platform-ca
           configMap:
             name: platform-ca

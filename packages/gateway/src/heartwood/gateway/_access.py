@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Launch capability that binds gateway API access to the launching researcher."""
+"""Gateway access: the contract of an access method and the launch capability."""
 
 from __future__ import annotations
 
@@ -14,8 +14,10 @@ import secrets
 import selectors
 import stat
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from threading import Lock
+from typing import Protocol
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +27,8 @@ from heartwood.gateway._ingress import IngressConfigurationError, IngressPolicy
 CAPABILITY_HEADER = "x-heartwood-capability"
 CAPABILITY_ENVIRONMENT = "HEARTWOOD_GATEWAY_CAPABILITY"
 CAPABILITY_ACTOR = "human"
+# The actor of operator actions, such as audit checkpoint exports.
+OPERATOR_ACTOR = "deployment-operator"
 _MINIMUM_SECRET_LENGTH = 32
 _MAXIMUM_SECRET_BYTES = 4096
 _DESCRIPTOR_TIMEOUT_SECONDS = 5.0
@@ -43,6 +47,62 @@ class LaunchResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     capability: str = Field(min_length=32, max_length=4096, repr=False)
+
+
+class AccessUnavailableError(RuntimeError):
+    """A request could not be checked because the service that verifies it is unavailable."""
+
+    def __init__(self, status_code: int = 503) -> None:
+        super().__init__("the service that verifies gateway requests is unavailable")
+        self.status_code = status_code
+
+
+class TokenExchangeRefusedError(RuntimeError):
+    """The identity provider refused a token for a platform service."""
+
+    def __init__(self) -> None:
+        super().__init__("the identity provider refused a token for the platform service")
+
+
+# Returns the token for one service scope and audience, or None while no sign-in is live.
+type ServiceTokens = Callable[[str, str], str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class AccessResponse:
+    """A redirect, or a refusal reported with the stable diagnostic of ``check_id``."""
+
+    status_code: int
+    location: str | None = None
+    cookies: tuple[str, ...] = ()
+    check_id: str | None = None
+
+
+class GatewayAccess(Protocol):
+    """How a gateway decides who issued a request."""
+
+    @property
+    def refusal_check(self) -> str:
+        """Return the diagnostic check reported to a request that is not authorized."""
+
+    def principal(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
+        """Return the actor to record for an authorized request, otherwise None."""
+
+    def exchange_launch_token(self, token: str) -> str | None:
+        """Exchange a one-time launch token for the capability the browser then sends."""
+
+    def launch_url(self, ingress: IngressPolicy) -> str | None:
+        """Return a one-time browser link when the access method issues one."""
+
+    def browser_response(
+        self,
+        *,
+        method: str,
+        path: str,
+        query_string: str,
+        headers: Mapping[str, tuple[str, ...]],
+    ) -> AccessResponse | None:
+        """Answer a browser route the access method owns; None leaves it to the gateway."""
 
 
 class LaunchCapability:
@@ -117,10 +177,7 @@ class LaunchCapability:
             raise IngressConfigurationError("cannot read capability descriptor") from error
         return cls(secret, launch_token=None)
 
-    @property
-    def actor_id(self) -> str:
-        """Return the principal recorded for commands presented with this capability."""
-        return CAPABILITY_ACTOR
+    refusal_check = "gateway-capability"
 
     def launch_url(self, ingress: IngressPolicy) -> str | None:
         """Return the one-time browser link, or None when the secret was supplied externally."""
@@ -138,10 +195,24 @@ class LaunchCapability:
             self._launch_token = None
             return self._secret.decode("ascii")
 
-    def authorizes(self, headers: Mapping[str, tuple[str, ...]]) -> bool:
-        """Return whether the request carries the explicit capability header."""
+    def principal(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
+        """Return the launching principal when the request carries the capability header."""
         presented = [value.strip() for value in headers.get(CAPABILITY_HEADER, ())]
         try:
-            return any(secrets.compare_digest(self._secret, value.encode()) for value in presented)
+            authorized = any(
+                secrets.compare_digest(self._secret, value.encode()) for value in presented
+            )
         except UnicodeError:
-            return False
+            return None
+        return CAPABILITY_ACTOR if authorized else None
+
+    def browser_response(
+        self,
+        *,
+        method: str,  # noqa: ARG002
+        path: str,  # noqa: ARG002
+        query_string: str,  # noqa: ARG002
+        headers: Mapping[str, tuple[str, ...]],  # noqa: ARG002
+    ) -> None:
+        """Own no browser route: the launch link carries the researcher's access."""
+        return

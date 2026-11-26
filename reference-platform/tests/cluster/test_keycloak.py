@@ -10,15 +10,63 @@ from __future__ import annotations
 
 import base64
 import json
-import warnings
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlencode
 
-from kube import Cluster
+import pytest
+from identity import curl
+from kube import PROBE_CA, Cluster
 
-_KEYCLOAK = "http://keycloak.heartwood-platform.svc.cluster.local:8080"
-# The exit status of the request script when the form reached it incomplete.
-_INCOMPLETE = 75
+_KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
+_SESSIONS = "heartwood-sessions"
+_POD = "hw-keycloak-probe"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def probe(cluster: Cluster, probe_image: str) -> Iterator[None]:
+    """A pod in the sessions namespace that trusts only the platform CA."""
+    pod = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": _POD, "namespace": _SESSIONS},
+        "spec": {
+            "automountServiceAccountToken": False,
+            "securityContext": {
+                "runAsNonRoot": True,
+                "runAsUser": 65534,
+                "seccompProfile": {"type": "RuntimeDefault"},
+            },
+            "containers": [
+                {
+                    "name": "agnhost",
+                    "image": probe_image,
+                    "args": ["pause"],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                    "volumeMounts": [
+                        {"name": "platform-ca", "mountPath": "/etc/platform-ca"},
+                        {"name": "scratch", "mountPath": "/scratch"},
+                    ],
+                }
+            ],
+            "volumes": [
+                {"name": "platform-ca", "configMap": {"name": PROBE_CA}},
+                {"name": "scratch", "emptyDir": {"medium": "Memory"}},
+            ],
+        },
+    }
+    try:
+        cluster.apply(pod)
+        ready = cluster.kubectl(
+            "wait", f"--namespace={_SESSIONS}", "--for=condition=Ready", f"pod/{_POD}"
+        )
+        assert ready.returncode == 0, ready.stderr
+        yield
+    finally:
+        cluster.kubectl("delete", f"--namespace={_SESSIONS}", f"pod/{_POD}", "--wait")
 
 
 def _secret(cluster: Cluster, name: str, key: str) -> str:
@@ -33,42 +81,58 @@ def _secret(cluster: Cluster, name: str, key: str) -> str:
     return base64.b64decode(result.stdout).decode()
 
 
-def _token(cluster: Cluster, realm: str, form: dict[str, str]) -> dict[str, Any]:
-    """Request a token from inside the Keycloak pod, with the form on standard input.
+def _curl(cluster: Cluster, *arguments: str, text_input: str = "") -> str:
+    return curl(cluster, _POD, *arguments, text_input=text_input)
 
-    Data sent to ``kubectl exec`` on standard input can arrive incomplete, so the script
-    refuses a form of another length, and the request is repeated with a warning.
-    """
-    body = urlencode(form)
-    script = (
-        f'exec 3<>/dev/tcp/127.0.0.1/8080; body=$(cat); [ "${{#body}}" -eq {len(body)} ] '
-        f"|| exit {_INCOMPLETE}; "
-        f'printf "POST /realms/{realm}/protocol/openid-connect/token HTTP/1.0\\r\\n'
-        "Host: keycloak:8080\\r\\n"
-        "Content-Type: application/x-www-form-urlencoded\\r\\n"
-        'Content-Length: %s\\r\\n\\r\\n%s" "${#body}" "${body}" >&3; cat <&3'
+
+def _token(cluster: Cluster, realm: str, form: dict[str, str]) -> dict[str, Any]:
+    """Request a token over TLS, with the form in a checked file."""
+    output = _curl(
+        cluster,
+        "--data",
+        "@-",
+        f"{_KEYCLOAK}/realms/{realm}/protocol/openid-connect/token",
+        text_input=urlencode(form),
     )
-    for attempt in range(1, 6):
-        result = cluster.kubectl(
-            "exec",
-            "--stdin",
-            "--namespace=heartwood-platform",
-            "deployment/keycloak",
-            "--",
-            "/bin/bash",
-            "-c",
-            script,
-            text_input=body,
-        )
-        if result.returncode != _INCOMPLETE:
-            break
-        warnings.warn(
-            f"form {attempt} reached Keycloak incomplete: {len(body)} bytes sent", stacklevel=2
-        )
-    assert result.returncode == 0, result.stderr
-    answer = json.loads(result.stdout[result.stdout.index("{") :])
-    assert isinstance(answer, dict)
-    return answer
+    body = json.loads(output)
+    assert isinstance(body, dict)
+    return body
+
+
+def test_keycloak_serves_https_with_a_certificate_of_the_platform_ca(cluster: Cluster) -> None:
+    # curl trusts only the platform CA, so the request succeeds only with its certificate.
+    document = json.loads(
+        _curl(cluster, f"{_KEYCLOAK}/realms/heartwood/.well-known/openid-configuration")
+    )
+    assert document["issuer"] == f"{_KEYCLOAK}/realms/heartwood"
+    # Plain HTTP is not served.
+    result = cluster.kubectl(
+        "exec",
+        f"--namespace={_SESSIONS}",
+        _POD,
+        "--",
+        "curl",
+        "--silent",
+        "--max-time",
+        "10",
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{http_code}",
+        "http://keycloak.heartwood-platform.svc.cluster.local:8443/realms/heartwood",
+    )
+    assert result.stdout.strip() in {"000", "400"}, result.stdout
+    # Keycloak itself listens on no plain HTTP port.
+    result = cluster.kubectl(
+        "exec",
+        "--namespace=heartwood-platform",
+        "deployment/keycloak",
+        "--",
+        "/bin/bash",
+        "-c",
+        "! (exec 3<>/dev/tcp/127.0.0.1/8080) 2>/dev/null",
+    )
+    assert result.returncode == 0, "Keycloak accepts connections on port 8080"
 
 
 def test_bootstrap_administrator_is_disabled(cluster: Cluster) -> None:

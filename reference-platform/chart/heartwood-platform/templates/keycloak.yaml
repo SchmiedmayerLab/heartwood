@@ -31,6 +31,20 @@ type: Opaque
 data:
   client-secret: {{ include "heartwood.credential" (dict "context" . "name" "heartwood-control-keycloak" "key" "client-secret") }}
 ---
+# Passwords of the synthetic researchers, one key for each user name.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-researchers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- range $researcher := .Values.researchers }}
+  {{ $researcher.username }}: {{ include "heartwood.credential" (dict "context" $ "name" "keycloak-researchers" "key" $researcher.username) }}
+  {{- end }}
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -53,9 +67,9 @@ spec:
   selector:
     {{- include "heartwood.selector" (dict "context" . "component" "keycloak") | nindent 4 }}
   ports:
-    - name: http
-      port: 8080
-      targetPort: http
+    - name: https
+      port: 8443
+      targetPort: https
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -103,8 +117,17 @@ spec:
                   key: keycloak-password
             - name: KC_HOSTNAME
               value: {{ include "heartwood.keycloakUrl" . | quote }}
+            # Keycloak serves only HTTPS, with its certificate from the platform CA.
+            - name: KC_HTTPS_CERTIFICATE_FILE
+              value: /opt/keycloak/conf/tls/tls.crt
+            - name: KC_HTTPS_CERTIFICATE_KEY_FILE
+              value: /opt/keycloak/conf/tls/tls.key
+            # A replaced certificate is served within a minute after the Secret volume changes,
+            # within the wait of the bootstrap Job after an upgrade.
+            - name: KC_HTTPS_CERTIFICATES_RELOAD_PERIOD
+              value: 1m
             - name: KC_HTTP_ENABLED
-              value: "true"
+              value: "false"
             - name: KC_HEALTH_ENABLED
               value: "true"
             - name: KC_CACHE
@@ -125,21 +148,31 @@ spec:
                 secretKeyRef:
                   name: heartwood-control-keycloak
                   key: client-secret
+            {{- range $index, $researcher := .Values.researchers }}
+            - name: HEARTWOOD_RESEARCHER_PASSWORD_{{ $index }}
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-researchers
+                  key: {{ $researcher.username }}
+            {{- end }}
           ports:
-            - name: http
-              containerPort: 8080
+            - name: https
+              containerPort: 8443
             - name: management
               containerPort: 9000
+          # The management interface uses the same certificate.
           startupProbe:
             httpGet:
               path: /health/started
               port: management
+              scheme: HTTPS
             periodSeconds: 5
             failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /health/ready
               port: management
+              scheme: HTTPS
             periodSeconds: 5
           resources:
             requests:
@@ -151,10 +184,17 @@ spec:
             - name: realm
               mountPath: /opt/keycloak/data/import
               readOnly: true
+            - name: tls
+              mountPath: /opt/keycloak/conf/tls
+              readOnly: true
       volumes:
         - name: realm
           configMap:
             name: keycloak-realm
+        - name: tls
+          secret:
+            secretName: keycloak-tls
+            defaultMode: 0440
 ---
 # Disables the temporary administrator that Keycloak creates at its first start.
 # The realm import needs no administrator, and the account stays disabled across restarts.
@@ -191,8 +231,16 @@ spec:
             - |
               set -u
               kcadm() { /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm.config; }
+              # kcadm.sh trusts the platform CA through a truststore made for this run.
+              # /tmp survives a restart of the container, so an earlier truststore is removed.
+              export KC_CLI_TRUSTSTORE_PASSWORD="$(head -c 24 /dev/urandom | base64)"
+              rm -f /tmp/truststore.p12
+              keytool -importcert -noprompt -alias platform-ca -file /etc/platform-ca/ca.crt \
+                -keystore /tmp/truststore.p12 -storetype PKCS12 \
+                -storepass:env KC_CLI_TRUSTSTORE_PASSWORD >/dev/null || exit 1
+              kcadm config truststore /tmp/truststore.p12 || exit 1
               for attempt in $(seq 1 60); do
-                if output="$(kcadm config credentials --server http://keycloak:8080 \
+                if output="$(kcadm config credentials --server https://keycloak:8443 \
                   --realm master --user "${ADMIN_USERNAME}" 2>&1)"; then
                   id="$(kcadm get users --target-realm master --query "username=${ADMIN_USERNAME}" \
                     --query exact=true --fields id --format csv --noquotes)" || exit 1
@@ -229,6 +277,12 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: platform-ca
+              mountPath: /etc/platform-ca
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: platform-ca
+          configMap:
+            name: platform-ca

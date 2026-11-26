@@ -36,6 +36,8 @@ from heartwood.core_adapter import (
 from heartwood.core_adapter.worker_attempts import WorkerGatewayCapabilityError
 from heartwood.gateway import (
     GatewayAsgiApp,
+    IdentityAccess,
+    IdentityDeployment,
     IngressPolicy,
     LaunchCapability,
     ModelProfile,
@@ -64,6 +66,8 @@ _STATES = json.loads(
 )["states"]
 _KEY_NAME = "HEARTWOOD_SYNTHETIC_PLATFORM_KEY"
 _SESSION = "platform-failure"
+# Gateway refusals that only identity-proxy ingress produces.
+_IDENTITY_CODES = {"HW-INGRESS-004", "HW-INGRESS-005"}
 _SECRET = "synthetic" * 5
 
 
@@ -264,7 +268,7 @@ def test_worker_gateway_failure_shows_the_same_diagnostic_in_every_interface(
     [
         pytest.param(item, id=item["code"])
         for item in _STATES
-        if item["surface"] == "gateway-response"
+        if item["surface"] == "gateway-response" and item["code"] not in _IDENTITY_CODES
     ],
 )
 def test_gateway_refusals_carry_the_fixture_diagnostic(
@@ -284,6 +288,59 @@ def test_gateway_refusals_carry_the_fixture_diagnostic(
             transport=httpx.ASGITransport(app=cast(Any, app)), base_url="http://127.0.0.1:8767"
         ) as client:
             return await client.get(path, headers={"origin": "http://127.0.0.1:8767"})
+
+    try:
+        body = asyncio.run(request()).json()
+    finally:
+        gateway.stop()
+
+    assert f"{body['code']}: {body['error']}" == state["diagnostic"]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        pytest.param(item, id=item["code"])
+        for item in _STATES
+        if item["surface"] == "gateway-response" and item["code"] in _IDENTITY_CODES
+    ],
+)
+def test_identity_refusals_carry_the_fixture_diagnostic(
+    tmp_path: Path, state: dict[str, str]
+) -> None:
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("synthetic provider detail", request=request)
+
+    origin = "http://gateway.synthetic.invalid"
+    ingress = IngressPolicy.create(
+        mode="identity-proxy",
+        bind_host="0.0.0.0",
+        external_origin=origin,
+        trusted_proxy_sources=("127.0.0.1",),
+    )
+    access = IdentityAccess(
+        IdentityDeployment.model_validate(
+            {
+                "issuer": "https://identity.synthetic.invalid",
+                "client_id": "hw-proj-synthetic",
+                "client_secret_file": str(tmp_path / "client-secret"),
+                "subject": "synthetic-researcher",
+            }
+        ),
+        ingress,
+        client_secret=_SECRET,
+        http=httpx.Client(transport=httpx.MockTransport(unreachable)),
+    )
+    gateway = SessionGateway(project=ProjectContext(tmp_path), env={}, backend_id="deterministic")
+    app = GatewayAsgiApp(gateway, access=access, ingress=ingress)
+    # A request without identity is refused; a sign-in needs the provider, which is down.
+    path = "/sessions" if state["code"] == "HW-INGRESS-004" else "/identity/login"
+
+    async def request() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=cast(Any, app)), base_url=origin
+        ) as client:
+            return await client.get(path)
 
     try:
         body = asyncio.run(request()).json()

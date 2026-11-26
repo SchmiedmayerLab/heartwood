@@ -566,8 +566,12 @@ class PlatformCapabilitiesResponse(_ApiResponse):
     display_name: str
     interfaces: list[InterfaceKind]
     browser_route: Literal["direct", "jupyter-proxy", "unavailable"]
-    ingress_modes: list[Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]]
-    default_ingress_mode: Literal["direct-loopback", "jupyter-proxy", "trusted-proxy"]
+    ingress_modes: list[
+        Literal["direct-loopback", "jupyter-proxy", "trusted-proxy", "identity-proxy"]
+    ]
+    default_ingress_mode: Literal[
+        "direct-loopback", "jupyter-proxy", "trusted-proxy", "identity-proxy"
+    ]
     managed_runtimes: list[Literal["llama-cpp", "vllm"]]
     scheduler: Literal["none", "provisioned", "slurm"]
     persistent_storage: str

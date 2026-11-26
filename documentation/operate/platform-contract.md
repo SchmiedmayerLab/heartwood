@@ -23,21 +23,22 @@ A schema describes a message; it does not enable a service, authorize a request,
 | Part | Status |
 |---|---|
 | [Hosting](#hosting) the published artifact with persistent project storage | Current |
-| [Access and identity](#access-and-identity) through an authenticated proxy and the launch capability | Current for one launching principal per gateway; per-user identity verification unavailable |
+| [Access and identity](#access-and-identity) through an authenticated proxy and the launch capability | Current for one launching principal per gateway |
 | [Deployment policy](#deployment-policy) bound by the operator deployment manifest | Current |
 | [Inference](#inference) through built-in and operator-configured routes | Current; connection-manifest startup unavailable; model metadata draft |
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
 | [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
-| Hosted per-project gateways with verified OpenID Connect identity | Unavailable |
+| Verified OpenID Connect identity of one researcher per gateway, with `identity-proxy` ingress | Current, implemented and tested locally with a synthetic provider |
+| Launch of hosted per-project gateways by a platform | Unavailable |
 | Realtime voice | Unavailable |
 
 ## Responsibilities
 
 | Area | Heartwood | Platform |
 |---|---|---|
-| Researcher identity | Records the launching principal as the actor of every accepted command and ignores actors claimed in requests | Authenticates the person, authorizes project access, ends the session |
+| Researcher identity | Records the launching principal, or with `identity-proxy` ingress the verified subject, as the actor of every accepted command and ignores actors claimed in requests | Authenticates the person or operates the identity provider, authorizes project access, ends the session |
 | Gateway access | Requires the launch capability on every request and validates the declared ingress route | Routes only authenticated users to the gateway, strips client-supplied forwarding and identity headers, terminates TLS, delivers the capability |
 | Research session | Owns canonical session records, action review, outside authorization and interface projections | Keeps the gateway, research files, protected state and network route available |
 | Policy | Evaluates model routes, review modes and credential references against the deployment ceiling | Defines the ceiling and enforces filesystem, process and network restrictions |
@@ -97,7 +98,7 @@ Releases carry build attestations; separate artifact signatures, software bills 
 |---|---|---|---|
 | Workstation or container | The researcher | The operating system and the launch link | Current |
 | Platform workspace | The platform, in the researcher's workspace | The platform proxy | Current for the Terra terminal and notebook and the Stanford Carina terminal, CI validated |
-| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Unavailable |
+| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch unavailable |
 
 Gateway shutdown does not stop external jobs or storage charges.
 
@@ -131,6 +132,9 @@ heartwood gateway serve --capability-fd 3 3</run/secrets/heartwood-capability \
 
 The proxy then adds `X-Heartwood-Capability` with the same secret to each authenticated request.
 [Gateway Ingress](security.md#gateway-ingress) and [Launch Capability](security.md#launch-capability) state the exact validation rules, and the [command reference](../reference/cli.md#gateway-serve) lists every serve option.
+
+A platform whose proxy forwards requests without authenticating them starts the gateway with `identity-proxy` ingress.
+The gateway then signs the researcher in at the institution's OpenID Connect provider and accepts only the subject bound in the manifest, as [Researcher Identity](security.md#researcher-identity) describes.
 
 ### Deployment Policy
 
@@ -289,6 +293,23 @@ Required:
 - Annotate each tool with explicit boolean `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` values.
 - Enforce identity, quotas and dataset entitlements on every call, independently of Heartwood's approval.
 - Accept delegated or platform-held credentials that never reach model context, tool environments or exports.
+- For a hosted gateway, accept the [exchanged service token](#service-tokens) and derive the project from it.
+
+#### Service Tokens
+
+A gateway with [`identity-proxy` ingress](security.md#researcher-identity) obtains the token for a platform service by OAuth token exchange, when the service's [destination](../reference/configuration.md#mcp-destinations) declares one.
+The gateway authenticates as the project's client and sends the researcher's access token as the subject token, with the scope and the audience the manifest names for that service.
+
+| Claim | Value | The service checks |
+|---|---|---|
+| `iss` | The identity provider | Equal to its configured issuer, with the provider's signature |
+| `aud` | One audience, the service's own | Equal to its own audience |
+| `azp` | The project's client, `hw-proj-<project>` | The project it acts for, derived from this claim and never from a request field |
+| `sub` | The researcher | Membership and entitlement in that project |
+| `exp` | No later than the researcher's token | Unexpired |
+
+The service does not forward the token.
+The identity provider decides which client may request which scope and audience; an audience requested without its scope, a scope requested with another service's audience and another project's client are refused there.
 
 Annotations are hints from the server, not authorization, and a changed tool set requires a new review.
 
@@ -581,6 +602,8 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 |---|---|---|
 | Capability not offered | No advertised support | The choice is hidden in every interface; a stored or requested choice shows [HW-SETUP-004](../reference/troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
+| Missing or refused identity with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
+| Identity provider unreachable or unusable | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Sandbox gateway lacks a deletion capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
 | Expired or rejected model credential | An authentication error | [HW-AGENT-008](../reference/troubleshooting.md#agent-runtime) |
@@ -745,12 +768,13 @@ The fakes hold synthetic data only and are not reference implementations of a pl
 | Fake | Shape | Covered behavior |
 |---|---|---|
 | Inference | OpenAI-compatible model list and streaming Chat Completions | A reply that completes an agent turn; a rejected credential, an exhausted quota, a rate limit, an unknown model and an unavailable service |
-| Token issuer | Exchanged, audience-restricted JWT access tokens with a project claim | Valid, expired, wrong-audience and wrong-project tokens |
+| Token issuer | Exchanged JWT access tokens with one audience such as `heartwood-data`, its scope such as `svc-data`, the project's client `hw-proj-<project>` as authorized party and the researcher as subject | Valid, expired, wrong-audience and wrong-project tokens |
 | Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
 | Budget service | MCP tools `get_budgets` and `estimate_workload`, returning `heartwood.budget-observation.v1` and `heartwood.platform-estimate.v1` priced from a synthetic price sheet | Allocations changed by other work or an administrator, estimates for a whole plan or for named elements, unsupported workload kinds and unpriced runtime profiles reported as unknown cost, a prediction for another project context and an unavailable service |
 | Job service | MCP tools `create_task`, `get_task`, `cancel_task`, `describe_operations` and `propose_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations, the declared operations, and the proposal for a submission | Submission, status, cancellation of a named operation, status of an identifier the service never received, a lost or delayed reply that reconciles to one task, a conflicting resubmission, a denied GPU request, an exhausted budget, revoked access and a task that fails after it started |
 
-The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
+The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs.
+Each tool derives the project from the token's authorized party and refuses a token of another project's client.
 Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
 `running_platform_fakes()` starts the inference, data, job and budget fakes with one token issuer and returns their endpoints and service profiles.
 
@@ -785,7 +809,7 @@ It holds no credential and no credential reference.
 |---|---|
 | Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection, including their NAT64, IPv4-compatible and IPv4-translated forms. Private addresses are permitted only at an origin whose destination sets `private_address`, such as a cluster service. Only public addresses, and private ones with the opt-in, are permitted; link-local addresses and `fd00:ec2::/32` are always refused. Public metadata addresses, such as `168.63.129.16`, are not recognized. The client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
 | Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
-| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. The token never reaches the worker, model context, session records or exports. |
+| Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. A destination that declares a `token_exchange` takes the [exchanged service token](#service-tokens) of the signed-in researcher and refuses an entered or stored token. The token never reaches the worker, model context, session records or exports. |
 | Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. A token entered with a test or a selection is kept only after the server accepted it. The service still verifies the token. |
 | Tools | A tool must be listed for its origin and accept `project_id` and `operation_id`. A test shows each tool's complete definition, the parameters the agent fills in and the definition's digest. The researcher selects a tool together with that digest, and the gateway lists the tools again and refuses a selection whose definition differs. |
 | Tool changes | Each selected tool keeps the SHA-256 of its reviewed definition. A test that lists a different definition removes the tool from the enabled set, and the gateway compares the definition again before it sends a call. A changed definition needs a new selection. |

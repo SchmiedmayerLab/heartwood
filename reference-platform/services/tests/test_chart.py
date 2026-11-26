@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 import yaml
+from fakes import SYNTHETIC_PRICES
+from heartwood_platform.control.__main__ import Settings
 
 _CHART = Path(__file__).resolve().parents[2] / "chart" / "heartwood-platform"
 _DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$")
@@ -280,10 +282,52 @@ def test_realm_import_holds_scopes_and_no_credential(objects: list[dict[str, Any
     clients = {client["clientId"]: client for client in realm["clients"]}
     assert clients["heartwood-control"]["secret"] == "${HEARTWOOD_CONTROL_CLIENT_SECRET}"
     assert clients["heartwood-control"]["optionalClientScopes"] == ["kc-admin-api"]
-    (account,) = realm["users"]
+    account, *researchers = realm["users"]
     assert account["clientRoles"] == {"realm-management": ["manage-clients"]}
+    # Each password is a reference to the environment of Keycloak, never a value.
+    assert [user["credentials"] for user in researchers] == [
+        [
+            {
+                "type": "password",
+                "temporary": False,
+                "value": f"${{HEARTWOOD_RESEARCHER_PASSWORD_{index}}}",
+            }
+        ]
+        for index in range(len(researchers))
+    ]
+    assert all("clientRoles" not in user and "realmRoles" not in user for user in researchers)
+    passwords = _named(objects, "Secret", "keycloak-researchers")["data"] or {}
+    assert set(passwords) == {user["username"] for user in researchers}
+    environment = {
+        variable["name"]: variable["valueFrom"]["secretKeyRef"]
+        for variable in _named(objects, "Deployment", "keycloak")["spec"]["template"]["spec"][
+            "containers"
+        ][0]["env"]
+        if variable["name"].startswith("HEARTWOOD_RESEARCHER_PASSWORD_")
+    }
+    assert environment == {
+        f"HEARTWOOD_RESEARCHER_PASSWORD_{index}": {
+            "name": "keycloak-researchers",
+            "key": user["username"],
+        }
+        for index, user in enumerate(researchers)
+    }
     projects = {scope for scope in scopes if scope.startswith("project-")}
     assert set(clients["heartwood-cli"]["optionalClientScopes"]) == projects
+
+
+def test_synthetic_researchers_keep_the_subjects_of_the_registry() -> None:
+    objects = _render("values-kind.yaml")
+    realm = json.loads(
+        _named(objects, "ConfigMap", "keycloak-realm")["data"]["heartwood-realm.json"]
+    )
+    subjects = {user["id"] for user in realm["users"] if "id" in user}
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    members = {member for project in configuration["projects"] for member in project["members"]}
+    assert subjects == members
+    assert len(subjects) == 2
 
 
 def test_platform_ca_certificate_is_a_certificate_authority(
@@ -297,9 +341,56 @@ def test_platform_ca_certificate_is_a_certificate_authority(
     assert "CA:TRUE" in text
     assert "Certificate Sign" in text
     assert "X509v3 Subject Key Identifier" in text
-    published = _named(objects, "ConfigMap", "platform-ca")["data"]["ca.crt"]
-    assert published.strip() == certificate.decode().strip()
-    assert "PRIVATE KEY" not in published
+    published = [
+        item["data"]["ca.crt"]
+        for item in objects
+        if item["kind"] == "ConfigMap" and item["metadata"]["name"] == "platform-ca"
+    ]
+    assert len(published) == 1
+    for text in published:
+        assert text.strip() == certificate.decode().strip()
+        assert "PRIVATE KEY" not in text
+
+
+def test_keycloak_serves_only_https_with_a_certificate_of_the_platform_ca(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    authority = tmp_path / "ca.crt"
+    authority.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"])
+    )
+    serving = tmp_path / "keycloak.crt"
+    serving.write_bytes(
+        base64.b64decode(_named(objects, "Secret", "keycloak-tls")["data"]["tls.crt"])
+    )
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), str(serving)],
+        check=True,
+        capture_output=True,
+    )
+    text = subprocess.run(
+        ["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", str(serving)],
+        check=True,
+        capture_output=True,
+    ).stdout.decode()
+    for name in ("keycloak", "keycloak.heartwood-platform.svc.cluster.local"):
+        assert f"DNS:{name}," in f"{text.strip()},"
+    container = _named(objects, "Deployment", "keycloak")["spec"]["template"]["spec"]["containers"][
+        0
+    ]
+    variables = {variable["name"]: variable.get("value") for variable in container["env"]}
+    assert variables["KC_HTTP_ENABLED"] == "false"
+    assert variables["KC_HTTPS_CERTIFICATES_RELOAD_PERIOD"] == "1m"
+    assert variables["KC_HTTPS_CERTIFICATE_FILE"] == "/opt/keycloak/conf/tls/tls.crt"
+    assert variables["KC_HOSTNAME"].startswith("https://")
+    assert [port["containerPort"] for port in container["ports"]] == [8443, 9000]
+    for probe in ("startupProbe", "readinessProbe"):
+        assert container[probe]["httpGet"]["scheme"] == "HTTPS"
+    configuration = json.loads(
+        _named(objects, "ConfigMap", "heartwood-control")["data"]["configuration.json"]
+    )
+    assert configuration["keycloak"]["url"] == "https://keycloak:8443"
+    assert configuration["keycloak"]["issuer"].startswith("https://")
 
 
 def test_gke_values_set_only_cluster_specific_keys() -> None:
@@ -401,3 +492,37 @@ def test_installation_needs_the_api_server_addresses() -> None:
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
+
+
+def test_control_service_configuration_holds_the_synthetic_prices(
+    objects: list[dict[str, Any]],
+) -> None:
+    config = _named(objects, "ConfigMap", "heartwood-control")
+    configuration = json.loads(config["data"]["configuration.json"])
+
+    settings = Settings.model_validate_json(config["data"]["configuration.json"])
+    # The tests price with the chart's synthetic prices.
+    assert configuration["synthetic_prices"] == SYNTHETIC_PRICES
+    assert settings.synthetic_prices.denomination.unit == "USD"
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        ("syntheticPrices.skuPrices[0].UnitPrice=0.5", "/syntheticPrices/skuPrices/0/UnitPrice"),
+        ('syntheticPrices.skuPrices[0].UnitPrice="-1"', "/syntheticPrices/skuPrices/0/UnitPrice"),
+        ('syntheticPrices.skuPrices[0].PricingQuantity="1"', "'PricingQuantity' not allowed"),
+        (
+            'syntheticPrices.skuPrices[0].SkuPriceEffectiveStart="2026-13-45T00:00:00Z"',
+            "/syntheticPrices/skuPrices/0/SkuPriceEffectiveStart",
+        ),
+        (
+            'syntheticPrices.runtimeProfiles[0].kind="job"',
+            "/syntheticPrices/runtimeProfiles/0/kind",
+        ),
+    ],
+)
+def test_schema_rejects_inconsistent_synthetic_prices(value: str, path: str) -> None:
+    result = subprocess.run([*_TEMPLATE, "--set-json", value], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert path in result.stderr

@@ -193,7 +193,7 @@ SPDX-License-Identifier: MIT
 : The upstream agent SDK and coding-tool platform used by Heartwood for conversations and tool execution.
 
 **OpenID Connect (OIDC)**
-: An identity protocol built on OAuth that supplies authenticated user claims; a gateway capability is not an OpenID Connect identity.
+: An identity protocol built on OAuth that supplies authenticated user claims; a gateway with `identity-proxy` ingress verifies one researcher with it, and a launch capability is not an OpenID Connect identity.
 
 **OpenShell**
 : The sandbox infrastructure that runs managed workers, enforces their filesystem and network policy outside the worker, and substitutes inference credentials.
@@ -224,6 +224,9 @@ SPDX-License-Identifier: MIT
 
 **Project state**
 : Private configuration, sessions, models, Skills, logs, caches, runtime files and audit artifacts in local `.heartwood/` or an operator-bound external directory; raw provider credentials are excluded.
+
+**Proof Key for Code Exchange (PKCE)**
+: An OAuth extension in which the client that starts a sign-in proves, when it redeems the authorization code, that it is the same client.
 
 **Protected health information (PHI)**
 : Individually identifiable health information protected under applicable policy or law.
@@ -296,6 +299,9 @@ SPDX-License-Identifier: MIT
 
 **The Update Framework (TUF)**
 : A signed metadata system that protects software distribution against repository compromise, rollback, freeze, and artifact-substitution attacks.
+
+**Token exchange**
+: An OAuth grant in which a client presents one token and receives another for a named audience; a hosted gateway uses it to obtain a platform service's token for the signed-in researcher.
 
 **uv**
 : A Python package and environment manager used by Heartwood to install locked analysis dependencies in a separate environment.

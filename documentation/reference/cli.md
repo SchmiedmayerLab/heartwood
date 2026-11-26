@@ -201,11 +201,35 @@ These commands never show private project state and exit nonzero for unavailable
 | `heartwood audit verify-checkpoint [--public-key KEY] BUNDLE` | Verify a bundle with the active signer profile or an independently trusted key |
 | `heartwood signer init-local [--directory DIR] [--profile ID] [--key-version V]` | Create the local fallback signer outside the project; defaults `local-development` and `v1` |
 | `heartwood signer serve-local [--registry PATH] [--profile ID] [--private-key PATH]` | Run that signer on its owner-only Unix socket |
+| `heartwood identity token --issuer URL --client-id ID [--scope SCOPE ...]` | Sign in with a device code and print an access token for a hosted gateway |
 
 Checkpoints never replace an existing output, and private signing keys are never command arguments or project state.
 See [Audit Checkpoints and Retention](../operate/audit-checkpoints.md).
 
 The operator deployment manifest that `gateway serve --deployment` and the migration commands read is specified in [Deployment Manifest](configuration.md#deployment-manifest).
+
+### Identity Token
+
+`heartwood identity token` signs a person in from a terminal with the OAuth device authorization grant, as a public client of the identity provider.
+
+```bash
+heartwood identity token \
+  --issuer https://id.example.org/realms/research \
+  --client-id heartwood-cli \
+  --scope openid --scope project-demo
+```
+
+| Option | Meaning |
+|---|---|
+| `--issuer URL` | OpenID Connect issuer; its discovery document must name a device authorization endpoint and a token endpoint on the same origin |
+| `--client-id ID` | The public client registered for this command |
+| `--scope SCOPE` | Scope to request; repeat for several. The project's scope adds the gateway's client to the token's audience |
+| `--ca-file PATH` | PEM certificate authorities, such as the platform CA, that replace the default certificate bundle |
+| `--timeout SECONDS` | Longest wait for the sign-in; default 600, and the provider's code lifetime also applies |
+
+The command prints the verification address and the user code on standard error, polls at the interval the provider names, and prints the access token alone on standard output.
+It stores nothing, reads no project, and exits `1` without a token when the sign-in is denied, expires or the provider cannot be used.
+Send the token to a gateway with [`identity-proxy` ingress](../operate/security.md#researcher-identity) as `Authorization: Bearer`.
 
 ### Runtime Start
 
@@ -234,7 +258,7 @@ Top-level `--interface`, `--port`, `--plain`, `--prompt`, and `--review-mode` se
 | `--deployment PATH` | Absolute operator manifest binding the project to external state, policy, and optional managed workers |
 | `--review-mode MODE` | Review mode selected at start; policy limits still apply |
 | `--capability-fd N` | Read the operator capability from inherited descriptor `N` instead of printing a launch link |
-| `--ingress-mode {direct-loopback,jupyter-proxy,trusted-proxy}` | Network route; default the platform's declared mode |
+| `--ingress-mode {direct-loopback,jupyter-proxy,trusted-proxy,identity-proxy}` | Network route; default the platform's declared mode |
 | `--public-origin ORIGIN` | Exact browser-visible `http` or `https` origin of a proxy route |
 | `--base-path PATH` | Exact browser-visible gateway prefix; default `/` |
 | `--trusted-proxy-source IP_OR_CIDR` | Trusted proxy source; repeat for several |
@@ -258,6 +282,20 @@ Workstations and Carina default to direct loopback and refuse a non-loopback bin
 `--host-loopback-publication` is valid only with a host mapping such as `-p 127.0.0.1:8767:8767` and does not inspect the image.
 A trusted identity assertion is a route marker, not a credential; the proxy must strip client-supplied forwarding and identity headers.
 See [Add a Platform](../operate/platform-integration.md#gateway-ingress).
+
+`identity-proxy` mode serves one researcher behind a reverse proxy that keeps the base path, and needs a manifest with an [`[identity]` table](configuration.md#identity):
+
+```bash
+heartwood gateway serve --deployment /etc/heartwood/project.toml \
+  --ingress-mode identity-proxy \
+  --host 0.0.0.0 \
+  --port 8767 \
+  --public-origin https://research.example.org \
+  --base-path /user/researcher/project-a \
+  --trusted-proxy-source 10.0.0.0/24
+```
+
+The gateway prints its external URL and no launch link, and it refuses `--capability-fd`, `--proxy-strips-prefix`, a trusted identity assertion and a loopback bind in this mode.
 
 With a manifest that declares a `[worker]` table, `gateway serve` first checks that the sandbox gateway reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) and stops with [`HW-WORKER-001`](troubleshooting.md#hw-worker-001-sandbox-gateway-lacks-a-required-deletion-capability) when a capability is missing or the gateway's report cannot be read.
 It then reconciles worker attempts that an earlier gateway process for the same deployment left unrevoked, and prints one line for each session whose revocation was not observed; that attempt stays fenced and is retried at the next start.
