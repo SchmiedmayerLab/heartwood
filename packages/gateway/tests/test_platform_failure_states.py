@@ -208,6 +208,33 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
     }
 
 
+@pytest.mark.parametrize("state", [pytest.param(item, id=item["code"]) for item in _STATES])
+def test_each_failure_state_renders_the_same_diagnostic_in_every_interface(
+    state: dict[str, str],
+) -> None:
+    """Render every coded state of the contract's table from one session projection.
+
+    Several states never become session events in process: HW-INGRESS-002 and
+    HW-INGRESS-003 refuse HTTP requests, and setup, planning and operation states have
+    their own projections. Each state is therefore injected at the projection boundary
+    as a recorded error with the fixture's diagnostic, so this test checks only that the
+    terminal, browser and notebook render it alike; the tests above produce each state.
+    """
+    code, reason = state["diagnostic"].split(": ", 1)
+    event = SessionEvent(
+        event_id="synthetic-failure",
+        session_id=_SESSION,
+        sequence=0,
+        kind=EventKind.ERROR_RECORDED,
+        occurred_at="2026-07-26T00:00:00Z",
+        payload={"code": code, "reason": reason},
+    )
+
+    _assert_every_interface_shows(
+        project_session((event,), session_id=_SESSION), state["diagnostic"]
+    )
+
+
 @pytest.mark.parametrize(
     "state",
     [
