@@ -408,6 +408,38 @@ def test_changed_authority_or_input_prevents_dispatch(setup: Setup, change: str)
     assert "synthetic credential" not in str(service.replay_events())
 
 
+def test_a_coded_refusal_is_recorded_with_its_code_and_keeps_the_review_open(
+    setup: Setup,
+) -> None:
+    service, worker, platform = setup
+    record = propose(service, worker)
+
+    def refuse() -> None:
+        raise ExternalActionError("Sign in again.", code="HW-INGRESS-004")
+
+    platform.check_hook = refuse
+    refused = service.handle(command(service, record)).events[-1]
+
+    assert refused.kind == EventKind.ERROR_RECORDED
+    assert (refused.payload["code"], refused.payload["reason"]) == (
+        "HW-INGRESS-004",
+        "Sign in again.",
+    )
+    assert refused.payload["affects_lifecycle"] is False
+    assert latest(service).phase == "proposed"
+    assert platform.submissions == []
+
+    platform.check_hook = lambda: None
+    service.handle(command(service, record))
+    assert latest(service).terminal
+    assert len(platform.submissions) == 1
+
+
+def test_an_outside_refusal_code_must_be_a_stable_diagnostic_code() -> None:
+    with pytest.raises(ValueError, match="code is invalid"):
+        ExternalActionError("detail", code="service text")
+
+
 def test_rechecks_fence_after_slow_policy_callback(setup: Setup) -> None:
     service, worker, platform = setup
     record = propose(service, worker)

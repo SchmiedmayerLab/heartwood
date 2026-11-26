@@ -203,12 +203,17 @@ def decide_external_action(
             proposal=proposal,
             decision=current.decision or decision,
         )
-    except Exception:
+    except Exception as error:
+        # Only a refusal the adapter coded is shown with its detail; other text stays out.
         return (
             service._record_event(
                 EventKind.ERROR_RECORDED,
                 {
-                    "reason": "outside authorization or input validation failed",
+                    **(
+                        {"code": error.code, "reason": error.detail}
+                        if isinstance(error, ExternalActionError) and error.code is not None
+                        else {"reason": "outside authorization or input validation failed"}
+                    ),
                     "affects_lifecycle": False,
                 },
             ),

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal, Protocol, Self, cast
@@ -35,7 +36,19 @@ _OUTSIDE_PREFIX = "outside-operation-"
 
 
 class ExternalActionError(ValueError):
-    """An outside operation cannot be admitted or its outcome cannot be established."""
+    """An outside operation cannot be admitted or its outcome cannot be established.
+
+    A trusted adapter sets ``code`` to a stable diagnostic code when the researcher can
+    act on the refusal; the session then records that code with ``detail``.
+    """
+
+    def __init__(self, detail: str, *, code: str | None = None) -> None:
+        """Keep the detail apart from its optional stable diagnostic code."""
+        if code is not None and re.fullmatch(r"HW-[A-Z]+-\d{3}", code) is None:
+            raise ValueError("outside operation diagnostic code is invalid")
+        self.detail = detail
+        self.code = code
+        super().__init__(detail if code is None else f"{code}: {detail}")
 
 
 class _Record(BaseModel):
