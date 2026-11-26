@@ -20,6 +20,7 @@ import html
 import json
 import re
 import secrets
+import subprocess
 import warnings
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
@@ -138,27 +139,31 @@ def curl(
     Arguments that read standard input (``@-``) read ``text_input`` from a file that
     is written and checked first.
     """
-    with private_file(cluster, pod, text_input) if text_input else nullcontext() as path:
-        if path is not None:
-            arguments = tuple(
-                f"@{path}" if argument == "@-" else argument for argument in arguments
+    try:
+        with private_file(cluster, pod, text_input) if text_input else nullcontext() as path:
+            if path is not None:
+                arguments = tuple(
+                    f"@{path}" if argument == "@-" else argument for argument in arguments
+                )
+            result = cluster.kubectl(
+                "exec",
+                f"--namespace={SESSIONS}",
+                pod,
+                "--",
+                "curl",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                str(max_time),
+                # Keycloak is verified against the platform CA alone.
+                "--cacert",
+                "/etc/platform-ca/ca.crt",
+                *arguments,
             )
-        result = cluster.kubectl(
-            "exec",
-            f"--namespace={SESSIONS}",
-            pod,
-            "--",
-            "curl",
-            "--silent",
-            "--show-error",
-            "--max-time",
-            str(max_time),
-            # Keycloak is verified against the platform CA alone.
-            "--cacert",
-            "/etc/platform-ca/ca.crt",
-            *arguments,
-        )
-    assert result.returncode == 0, result.stderr
+    except subprocess.TimeoutExpired:
+        raise AssertionError("Probe request timed out") from None
+    if result.returncode:
+        raise AssertionError(f"Probe request failed with exit status {result.returncode}")
     return result.stdout
 
 
