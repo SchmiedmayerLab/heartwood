@@ -16,17 +16,30 @@ ledger, monitors no spending and submits no work.
 from __future__ import annotations
 
 import json
+import ssl
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, cast
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from heartwood.core_adapter.external_actions import ExternalOperationEstimate
+from heartwood.gateway._access import (
+    AccessUnavailableError,
+    ServiceTokens,
+    TokenExchangeRefusedError,
+)
 from heartwood.gateway._diagnostics import DiagnosticDefinition, diagnostic_for
+from heartwood.gateway._mcp_policy import (
+    McpServerError,
+    TokenExchange,
+    check_resolved_host,
+    exact_origin,
+)
 from heartwood.persistence import DurableFileError, LockedJsonlStore
 from heartwood.schemas import (
     BudgetObservation,
@@ -55,6 +68,7 @@ from heartwood.schemas.planning import (
 )
 
 if TYPE_CHECKING:
+    from fastmcp.client.transports import StreamableHttpTransport
     from mcp.types import CallToolResult
     from openhands.sdk.mcp import MCPClient
 
@@ -199,17 +213,18 @@ class McpPlanningClient:
             raise PlanningServiceError("unavailable")
         return content
 
+    def _transport(self) -> StreamableHttpTransport:
+        from fastmcp.client.transports import StreamableHttpTransport
+
+        return StreamableHttpTransport(str(self.endpoint.profile.url), auth=self.endpoint.token)
+
     def _session[T](self, request: Callable[[MCPClient], Awaitable[T]]) -> T:
         # The MCP client loads with the OpenHands SDK, so it is imported when first used.
-        from fastmcp.client.transports import StreamableHttpTransport
         from mcp.shared.exceptions import MCPError as McpProtocolError
         from openhands.sdk.mcp import MCPClient
         from openhands.sdk.mcp.exceptions import MCPError
 
-        client = MCPClient(  # type: ignore[no-untyped-call]
-            StreamableHttpTransport(str(self.endpoint.profile.url), auth=self.endpoint.token),
-            timeout=_TIMEOUT_SECONDS,
-        )
+        client = MCPClient(self._transport(), timeout=_TIMEOUT_SECONDS)  # type: ignore[no-untyped-call]
         try:
             client.call_async_from_sync(client.connect, timeout=_TIMEOUT_SECONDS)
             return cast(T, client.call_async_from_sync(request(client), timeout=_TIMEOUT_SECONDS))
@@ -218,6 +233,82 @@ class McpPlanningClient:
             raise PlanningServiceError("unavailable") from None
         finally:
             client.sync_close()
+
+
+class PlanningDeployment(BaseModel):
+    """A deployment's planning service, reached with a token exchanged for the sign-in.
+
+    The launch context file holds the platform launch context that the platform issued
+    for this gateway; project files and agent-writable settings cannot replace it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str = Field(min_length=1, max_length=2048)
+    # Certificate authorities that replace the default bundle for the service.
+    ca_file: Path | None = None
+    # The operator's opt-in for a cluster or other private address of the service.
+    private_address: bool = False
+    token_exchange: TokenExchange
+    launch_context_file: Path
+
+    @model_validator(mode="after")
+    def _service_location(self) -> Self:
+        parts = urlsplit(self.url)
+        if parts.query or parts.fragment or parts.username or parts.password:
+            raise ValueError("the planning URL has no credentials, query or fragment")
+        exact_origin(f"{parts.scheme}://{parts.netloc}", private_address=self.private_address)
+        if parts.scheme != "https":
+            raise ValueError("the planning service is reached over HTTPS")
+        for path in (self.ca_file, self.launch_context_file):
+            if path is not None and not path.is_absolute():
+                raise ValueError("planning files are absolute paths")
+        return self
+
+
+class HostedPlanningClient(McpPlanningClient):
+    """Call the planning tools with a token exchanged for the researcher's sign-in.
+
+    Each request exchanges the sign-in for the deployment's scope and audience, checks
+    the service address before connecting, and trusts the deployment's certificate
+    authorities. Without a live sign-in the service counts as unavailable.
+    """
+
+    def __init__(
+        self, deployment: PlanningDeployment, tokens: ServiceTokens, *, project_id: str
+    ) -> None:
+        """Call the service of ``deployment`` for the platform project ``project_id``."""
+        self.deployment = deployment
+        self.tokens = tokens
+        self.project_id = project_id
+
+    def _transport(self) -> StreamableHttpTransport:
+        from fastmcp.client.transports import StreamableHttpTransport
+
+        deployment = self.deployment
+        # The address and the authorities are checked before a token is exchanged.
+        parts = urlsplit(deployment.url)
+        try:
+            check_resolved_host(
+                parts.hostname or "", parts.port or 443, private_address=deployment.private_address
+            )
+            verify = (
+                None
+                if deployment.ca_file is None
+                else ssl.create_default_context(cafile=str(deployment.ca_file))
+            )
+        except (McpServerError, OSError, ValueError):
+            raise PlanningServiceError("unavailable") from None
+        exchange = deployment.token_exchange
+        try:
+            token = self.tokens(exchange.scope, exchange.audience)
+        except AccessUnavailableError:
+            raise PlanningServiceError("unavailable") from None
+        except TokenExchangeRefusedError:
+            raise PlanningServiceError("refused") from None
+        if token is None:
+            raise PlanningServiceError("unavailable")
+        return StreamableHttpTransport(deployment.url, auth=token, verify=verify)
 
 
 def _parse(model: type[BaseModel], value: object) -> BaseModel:
@@ -976,7 +1067,9 @@ def not_offered_projection() -> PlanningProjection:
 __all__ = [
     "BUDGET_TOOL",
     "ESTIMATE_TOOL",
+    "HostedPlanningClient",
     "McpPlanningClient",
+    "PlanningDeployment",
     "PlanningDiscovery",
     "PlanningJournal",
     "PlanningNotOfferedError",

@@ -23,7 +23,7 @@ from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
 _PLATFORM = "heartwood-platform"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
 _POLICY = "ValidatingAdmissionPolicy 'heartwood-control-scope'"
@@ -78,7 +78,7 @@ def _names(cluster: Cluster, kind: str, namespace: str) -> set[str]:
 
 def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[int, Any]:
     token = cluster.kubectl(
-        "create", "token", "hub", f"--namespace={_SESSIONS}", "--audience=heartwood-control"
+        "create", "token", "hub", f"--namespace={_PLATFORM}", "--audience=heartwood-control"
     )
     assert token.returncode == 0, token.stderr
     output = curl(
@@ -102,13 +102,7 @@ def _call(cluster: Cluster, method: str, subject: str, project: str) -> tuple[in
 @pytest.fixture(scope="module")
 def launch(cluster: Cluster, probe_image: str) -> Iterator[dict[str, Any]]:
     """Launch one session and delete every session of the module afterwards."""
-    account = {
-        "apiVersion": "v1",
-        "kind": "ServiceAccount",
-        "metadata": {"name": "hub", "namespace": _SESSIONS},
-    }
-    existed = cluster.kubectl("get", f"--namespace={_SESSIONS}", "serviceaccount/hub")
-    cluster.apply(account, _pod("hw-session-probe", probe_image, {}))
+    cluster.apply(_pod("hw-session-probe", probe_image, {}))
     ready = cluster.kubectl(
         "wait", f"--namespace={_SESSIONS}", "--for=condition=Ready", "pod/hw-session-probe"
     )
@@ -128,8 +122,6 @@ def launch(cluster: Cluster, probe_image: str) -> Iterator[dict[str, Any]]:
         "hw-session-gateway",
         "hw-session-other",
     )
-    if existed.returncode != 0:
-        cluster.kubectl("delete", f"--namespace={_SESSIONS}", "serviceaccount/hub")
 
 
 def test_namespace_is_restricted_with_quota_limits_and_default_deny(
@@ -218,7 +210,14 @@ def test_openshell_gateway_is_ready_with_its_own_key_and_client_bundle(
         "openshell-ca.crt",
         "openshell-tls.crt",
         "openshell-tls.key",
+        "platform-ca.crt",
+        "deployment.toml",
+        "kubeconfig",
+        "worker-policy.json",
+        "launch-context.json",
     }
+    platform_ca = _json(cluster, "configmap", "platform-ca", f"--namespace={_PLATFORM}")
+    assert files["platform-ca.crt"] == platform_ca["data"]["ca.crt"]
     assert json.loads(files["launch.json"]) == launch
     bundle = _json(cluster, "secret", "openshell-client-tls", f"--namespace={namespace}")
     assert files["openshell-tls.crt"] == base64.b64decode(bundle["data"]["tls.crt"]).decode()

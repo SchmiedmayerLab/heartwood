@@ -43,7 +43,14 @@ SPDX-License-Identifier: MIT
 {{- end -}}
 {{- /* The SKU prices keep their FOCUS column names. */ -}}
 {{- $syntheticPrices := dict "estimate_validity_seconds" $prices.estimateValiditySeconds "sku_prices" $prices.skuPrices "runtime_profiles" $profiles -}}
-{{- dict "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "redirect_uri_template" .Values.control.redirectUriTemplate "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
+{{- $tls := dict "certificate_file" "/etc/heartwood-control/tls/tls.crt" "key_file" "/etc/heartwood-control/tls/tls.key" -}}
+{{- $worker := .Values.hub.worker -}}
+{{- $route := .Values.hub.modelRoute -}}
+{{- $hostedWorker := dict "image" (required "hub.worker.image must name the worker image by digest" $worker.image) "sandbox_policy_sha256" $worker.sandboxPolicySha256 "policy" $worker.policy "cpu" $worker.cpu "memory" $worker.memory -}}
+{{- $modelRoute := dict "profile_id" $route.profileId "model" $route.model "endpoint" $route.endpoint "provider" $route.provider "placeholder_env" $route.placeholderEnv -}}
+{{- $hosted := dict "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "worker" $hostedWorker "model_route" $modelRoute -}}
+{{- $redirect := printf "%s/user/{subject}/{project}/oauth_callback" .Values.hub.publicOrigin -}}
+{{- dict "tls" $tls "hosted" $hosted "synthetic_prices" $syntheticPrices "sessions" $sessions "platform_id" .Values.control.platformId "database" "/var/lib/heartwood-control/control.sqlite3" "audience" "heartwood-control" "service_callers" .Values.control.serviceCallers "operator_callers" .Values.control.operatorCallers "redirect_uri_template" $redirect "keycloak" $keycloak "projects" $projects | toPrettyJson -}}
 {{- end }}
 # The registry and the settings of the control service. It holds no credential.
 apiVersion: v1
@@ -80,9 +87,9 @@ spec:
   selector:
     {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 4 }}
   ports:
-    - name: http
-      port: 8080
-      targetPort: http
+    - name: https
+      port: 8443
+      targetPort: https
 ---
 # One replica: the registry is one SQLite database, and updates of a Keycloak client
 # are serialized inside the process.
@@ -121,13 +128,15 @@ spec:
           securityContext:
             {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
             readOnlyRootFilesystem: true
+          # The service serves only HTTPS, with its certificate from the platform CA.
           ports:
-            - name: http
-              containerPort: 8080
+            - name: https
+              containerPort: 8443
           readinessProbe:
             httpGet:
               path: /healthz
-              port: http
+              port: https
+              scheme: HTTPS
             periodSeconds: 5
           resources:
             requests:
@@ -144,6 +153,9 @@ spec:
               readOnly: true
             - name: openshell
               mountPath: /etc/heartwood-control/openshell
+              readOnly: true
+            - name: tls
+              mountPath: /etc/heartwood-control/tls
               readOnly: true
             - name: platform-ca
               mountPath: /etc/heartwood-control/platform-ca
@@ -162,6 +174,10 @@ spec:
         - name: openshell
           configMap:
             name: heartwood-control-openshell
+        # The serving certificate, which the service reloads when the Secret changes.
+        - name: tls
+          secret:
+            secretName: heartwood-control-tls
         # The platform CA certificate, which the service trusts for Keycloak and copies
         # into each session namespace for the supervisors of its sandboxes.
         - name: platform-ca
@@ -170,8 +186,11 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+        # In memory, because the service copies its serving key here when it reloads it.
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
   volumeClaimTemplates:
     - metadata:
         name: data

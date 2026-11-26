@@ -13,6 +13,7 @@ token whose audience is this service.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 import time
@@ -22,6 +23,7 @@ from typing import Any
 
 import jwt
 
+_LOGGER = logging.getLogger(__name__)
 _PROJECT_CLIENT = re.compile(r"hw-proj-([a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?)")
 _REQUIRED_CLAIMS = ["exp", "iat", "iss", "aud", "sub", "azp"]
 # Lower bound between two key fetches, so unknown key identifiers cannot flood Keycloak.
@@ -131,6 +133,14 @@ class ServiceTokens:
             or self._audience not in status.get("audiences", [])
             or username not in self._callers
         ):
+            # The review's outcome, without the token, shows why a caller was refused.
+            _LOGGER.warning(
+                "service account token refused: authenticated=%s audiences=%s user=%s error=%s",
+                status.get("authenticated"),
+                status.get("audiences"),
+                username,
+                status.get("error"),
+            )
             raise AuthenticationError("service account token is not accepted")
         assert isinstance(username, str)
         return username

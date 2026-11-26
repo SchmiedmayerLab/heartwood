@@ -18,7 +18,6 @@ import html
 import json
 import re
 import secrets
-import time
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,7 +28,7 @@ from kube import PROBE_CA, Cluster
 
 SESSIONS = "heartwood-sessions"
 PLATFORM = "heartwood-platform"
-CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 REALM = f"{KEYCLOAK}/realms/heartwood/protocol/openid-connect"
 FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
@@ -40,7 +39,7 @@ ACCESS_TOKEN = "urn:ietf:params:oauth:token-type:access_token"
 
 @contextmanager
 def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
-    """Run a pod with curl in heartwood-sessions, and the stand-in for the spawner."""
+    """Run a pod with curl in heartwood-sessions."""
     pod = {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -73,66 +72,15 @@ def probe(cluster: Cluster, name: str, image: str) -> Iterator[str]:
             ],
         },
     }
-    account = {
-        "apiVersion": "v1",
-        "kind": "ServiceAccount",
-        "metadata": {"name": "hub", "namespace": SESSIONS},
-    }
-    existed = cluster.kubectl("get", f"--namespace={SESSIONS}", "serviceaccount/hub")
     try:
-        cluster.apply(pod, account)
+        cluster.apply(pod)
         ready = cluster.kubectl(
             "wait", f"--namespace={SESSIONS}", "--for=condition=Ready", f"pod/{name}"
         )
         assert ready.returncode == 0, ready.stderr
-        _wait_for_spawner(cluster, name)
         yield name
     finally:
         cluster.kubectl("delete", f"--namespace={SESSIONS}", f"pod/{name}", "--wait")
-        if existed.returncode != 0:
-            cluster.kubectl("delete", f"--namespace={SESSIONS}", "serviceaccount/hub")
-
-
-def _wait_for_spawner(cluster: Cluster, pod: str) -> None:
-    """Wait until the control service accepts a token of the stand-in for the spawner.
-
-    In some full runs the control service refused the first tokens of a ServiceAccount
-    that an earlier module had deleted and this probe created again. The refusals that
-    precede acceptance are reported as a warning, so a run shows whether the wait was
-    needed.
-    """
-    deadline = time.monotonic() + 60
-    refused: list[tuple[int, object]] = []
-    while True:
-        token = spawner_token(cluster)
-        status, _ = request(
-            cluster, pod, "GET", f"{CONTROL}/v1/researchers/{FIRST}/projects", token
-        )
-        if status == 200:
-            if refused:
-                warnings.warn(
-                    f"the control service refused the spawner first: {refused}", stacklevel=2
-                )
-            return
-        # The API server's own answer for the same token, to tell the causes apart.
-        review = cluster.kubectl(
-            "create",
-            "--raw",
-            "/apis/authentication.k8s.io/v1/tokenreviews",
-            "--filename",
-            "-",
-            text_input=json.dumps(
-                {
-                    "apiVersion": "authentication.k8s.io/v1",
-                    "kind": "TokenReview",
-                    "spec": {"token": token, "audiences": ["heartwood-control"]},
-                }
-            ),
-        )
-        answer = json.loads(review.stdout).get("status", {}) if review.returncode == 0 else None
-        refused.append((status, answer and {k: answer.get(k) for k in ("authenticated", "error")}))
-        assert time.monotonic() < deadline, f"the spawner's tokens are not accepted: {refused}"
-        time.sleep(1)
 
 
 def write_private(cluster: Cluster, pod: str, text: str) -> str:
@@ -233,9 +181,9 @@ def request(
 
 
 def spawner_token(cluster: Cluster) -> str:
-    """Return a token of the stand-in for the spawner, for the control service."""
+    """Return a token of the Hub's ServiceAccount, the spawner, for the control service."""
     result = cluster.kubectl(
-        "create", "token", "hub", f"--namespace={SESSIONS}", "--audience=heartwood-control"
+        "create", "token", "hub", f"--namespace={PLATFORM}", "--audience=heartwood-control"
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()

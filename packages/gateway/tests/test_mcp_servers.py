@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import ssl
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -24,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Never, cast
 
+import httpx
 import pytest
 import tomli_w
 from fastmcp import FastMCP
@@ -31,7 +33,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
@@ -84,6 +86,7 @@ from heartwood.schemas import (
     PolicyProfile,
 )
 from heartwood.session import CommandKind, EventKind, SessionCommand
+from packages.gateway.tests.tls_fixtures import certificate_authority, https_server
 
 _AUDIENCE = "https://catalog.synthetic.invalid"
 _SERVICE_ID = "synthetic-catalog"
@@ -506,6 +509,80 @@ def test_connections_apply_the_destinations_opt_in(
     # Without the opt-in the address is refused; with it the client is built for the server.
     assert outcomes == {False: "HW-MCP-001", True: "client reached"}
     assert reached == ["https://catalog.platform.svc/mcp"]
+
+
+def test_a_destination_ca_file_replaces_the_default_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    platform = certificate_authority(tmp_path, "platform")
+    other = certificate_authority(tmp_path, "other")
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.96.0.12", 0))],
+    )
+    transports: list[StreamableHttpTransport] = []
+
+    class UnreachableError(Exception):
+        pass
+
+    def no_client(transport: StreamableHttpTransport, **_kwargs: object) -> Never:
+        transports.append(transport)
+        raise UnreachableError
+
+    monkeypatch.setattr("openhands.sdk.mcp.MCPClient", no_client)
+    for ca_file in (platform[0], None):
+        destination = McpDestination(
+            service_id="cluster-catalog",
+            origin="https://catalog.platform.svc",
+            tools=("find_records",),
+            observation_tool="get_operation",
+            private_address=True,
+            ca_file=ca_file,
+        )
+        root = tmp_path / ("platform-ca" if ca_file else "default")
+        root.mkdir()
+        gateway = _gateway(root, (destination,), Platform())
+        try:
+            gateway.add_mcp_server(
+                McpServerAddRequest(
+                    server_id="catalog", label="Catalog", url=f"{destination.origin}/mcp"
+                )
+            )
+            with pytest.raises(UnreachableError):
+                gateway.test_mcp_server("catalog", McpServerTestRequest())
+        finally:
+            gateway.stop()
+    # The name resolution stand-in ends here; the servers below listen on loopback.
+    monkeypatch.undo()
+    trusted, default = (transport.verify for transport in transports)
+    assert default is None
+    assert isinstance(trusted, ssl.SSLContext)
+    # The context trusts the platform CA and nothing else.
+    for issuer, accepted in ((platform, True), (other, False)):
+        with https_server(tmp_path / issuer[0].stem, issuer) as port:
+            address = f"https://localhost:{port}/"
+            if accepted:
+                assert httpx.get(address, verify=trusted).status_code == 200
+            else:
+                with pytest.raises(httpx.ConnectError, match="CERTIFICATE_VERIFY_FAILED"):
+                    httpx.get(address, verify=trusted)
+
+
+def test_a_destination_ca_file_is_an_absolute_path_for_an_https_origin() -> None:
+    entry = {
+        "service_id": "catalog",
+        "origin": "https://catalog.example.org",
+        "tools": ["find_records"],
+        "observation_tool": "get_operation",
+    }
+    assert McpDestination.model_validate({**entry, "ca_file": "/etc/platform-ca/ca.crt"}).ca_file
+    for change in (
+        {"ca_file": "platform-ca/ca.crt"},
+        {"origin": "http://127.0.0.1:8080", "ca_file": "/etc/platform-ca/ca.crt"},
+    ):
+        with pytest.raises(ValidationError, match="ca_file"):
+            McpDestination.model_validate({**entry, **change})
 
 
 def test_translated_loopback_is_not_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1149,6 +1226,38 @@ def test_snapshot_reads_open_review_through_the_session_adapter(
 
 
 def test_manifest_destinations_require_worker_isolation(tmp_path: Path) -> None:
+    manifest, workspace = _destination_manifest(tmp_path, {})
+    with pytest.raises(ProjectStateError, match=r"HW-DEPLOY-001.*worker isolation"):
+        load_project_deployment(manifest, project_root=workspace)
+
+
+def test_manifest_destination_ca_file_follows_the_operator_file_rules(tmp_path: Path) -> None:
+    authority = tmp_path / "operator" / "ca.crt"
+    authority.parent.mkdir()
+    certificate_authority(authority.parent, "ca")
+    manifest, workspace = _destination_manifest(tmp_path, {"ca_file": str(authority)})
+    # A safe file passes, and the next check, worker isolation, refuses the manifest.
+    with pytest.raises(ProjectStateError, match=r"worker isolation"):
+        load_project_deployment(manifest, project_root=workspace)
+
+    authority.chmod(0o666)
+    with pytest.raises(ProjectStateError, match=r"write-protected"):
+        load_project_deployment(manifest, project_root=workspace)
+    authority.chmod(0o644)
+    certificate = authority.read_bytes()
+    authority.write_text("not a certificate\n", encoding="utf-8")
+    with pytest.raises(ProjectStateError, match=r"HW-DEPLOY-001.*catalog is unusable"):
+        load_project_deployment(manifest, project_root=workspace)
+    authority.write_bytes(certificate)
+    inside = tmp_path / "inside" / "research" / "ca.crt"
+    manifest, workspace = _destination_manifest(tmp_path / "inside", {"ca_file": str(inside)})
+    inside.write_bytes(authority.read_bytes())
+    with pytest.raises(ProjectStateError, match=r"outside project files"):
+        load_project_deployment(manifest, project_root=workspace)
+
+
+def _destination_manifest(tmp_path: Path, fields: dict[str, str]) -> tuple[Path, Path]:
+    tmp_path.mkdir(exist_ok=True)
     workspace = tmp_path / "research"
     workspace.mkdir()
     (tmp_path / "protected").mkdir(mode=0o700)
@@ -1168,14 +1277,14 @@ def test_manifest_destinations_require_worker_isolation(tmp_path: Path) -> None:
                         "origin": "https://catalog.example.org",
                         "tools": ["find_records"],
                         "observation_tool": "get_operation",
+                        **fields,
                     }
                 ],
             }
         )
     )
     manifest.chmod(0o600)
-    with pytest.raises(ProjectStateError, match=r"HW-DEPLOY-001.*worker isolation"):
-        load_project_deployment(manifest, project_root=workspace)
+    return manifest, workspace
 
 
 def test_project_configuration_keeps_reviewed_definitions_and_no_credentials(

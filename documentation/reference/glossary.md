@@ -129,6 +129,9 @@ SPDX-License-Identifier: MIT
 **JSON Web Token (JWT)**
 : A signed token that carries claims such as issuer, audience, subject and expiry; platform services verify it before acting on a request.
 
+**JupyterHub**
+: A server that signs users in and starts one server process for each of them; the Kubernetes reference platform uses it to start one Heartwood gateway per researcher and project.
+
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 

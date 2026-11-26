@@ -22,24 +22,6 @@ basic constraint, the certificate signing key usage and a subject key identifier
 {{- $certificate = $ca.Cert -}}
 {{- $key = $ca.Key -}}
 {{- end -}}
-{{- /*
-The serving certificate of Keycloak, signed by the platform CA for the names of its
-Service. An existing certificate is kept while the CA is kept.
-*/ -}}
-{{- $keycloakCertificate := "" -}}
-{{- $keycloakKey := "" -}}
-{{- $keycloakExisting := lookup "v1" "Secret" .Release.Namespace "keycloak-tls" -}}
-{{- if and $existing $keycloakExisting -}}
-{{- $keycloakCertificate = index $keycloakExisting.data "tls.crt" | b64dec -}}
-{{- $keycloakKey = index $keycloakExisting.data "tls.key" | b64dec -}}
-{{- else -}}
-{{- $authority := buildCustomCert ($certificate | b64enc) ($key | b64enc) -}}
-{{- $service := printf "keycloak.%s" .Release.Namespace -}}
-{{- $names := list "keycloak" $service (printf "%s.svc" $service) (printf "%s.svc.cluster.local" $service) -}}
-{{- $serving := genSignedCert "keycloak" nil $names 825 $authority -}}
-{{- $keycloakCertificate = $serving.Cert -}}
-{{- $keycloakKey = $serving.Key -}}
-{{- end -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -63,15 +45,74 @@ metadata:
 data:
   ca.crt: |
     {{- $certificate | nindent 4 }}
+{{- /*
+The serving certificates of the platform services that clients reach over TLS, signed
+by the platform CA for the names of each Service. An existing certificate is kept
+while the CA is kept.
+*/ -}}
+{{- $authority := buildCustomCert ($certificate | b64enc) ($key | b64enc) -}}
+{{- range $service := list "keycloak" "heartwood-control" }}
+{{- $secret := printf "%s-tls" $service -}}
+{{- $servingCertificate := "" -}}
+{{- $servingKey := "" -}}
+{{- $servingExisting := lookup "v1" "Secret" $.Release.Namespace $secret -}}
+{{- if and $existing $servingExisting -}}
+{{- $servingCertificate = index $servingExisting.data "tls.crt" | b64dec -}}
+{{- $servingKey = index $servingExisting.data "tls.key" | b64dec -}}
+{{- else -}}
+{{- $qualified := printf "%s.%s" $service $.Release.Namespace -}}
+{{- $names := list $service $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified) -}}
+{{- $serving := genSignedCert $service nil $names 825 $authority -}}
+{{- $servingCertificate = $serving.Cert -}}
+{{- $servingKey = $serving.Key -}}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: keycloak-tls
+  name: {{ $secret }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $servingCertificate | b64enc }}
+  tls.key: {{ $servingKey | b64enc }}
+{{- end }}
+{{- /*
+The serving certificate of the Hub's proxy, for the names of its public and API Services
+and the host of hub.publicOrigin. The names are recorded on the Secret, and an existing
+certificate is kept while the CA and the names are kept.
+*/ -}}
+{{- $proxyNames := list -}}
+{{- range $service := list "proxy-public" "proxy-api" -}}
+{{- $qualified := printf "%s.%s" $service $.Release.Namespace -}}
+{{- $proxyNames = concat $proxyNames (list $service $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified)) -}}
+{{- end -}}
+{{- $proxyNames = append $proxyNames (urlParse .Values.hub.publicOrigin).hostname | uniq -}}
+{{- $proxyNamesText := join "," $proxyNames -}}
+{{- $proxyCertificate := "" -}}
+{{- $proxyKey := "" -}}
+{{- $proxyExisting := lookup "v1" "Secret" .Release.Namespace "proxy-tls" -}}
+{{- if and $existing $proxyExisting (eq (dig "metadata" "annotations" "heartwood.platform/names" "" $proxyExisting) $proxyNamesText) -}}
+{{- $proxyCertificate = index $proxyExisting.data "tls.crt" | b64dec -}}
+{{- $proxyKey = index $proxyExisting.data "tls.key" | b64dec -}}
+{{- else -}}
+{{- $proxyServing := genSignedCert "proxy-public" nil $proxyNames 825 $authority -}}
+{{- $proxyCertificate = $proxyServing.Cert -}}
+{{- $proxyKey = $proxyServing.Key -}}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: proxy-tls
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "heartwood.labels" . | nindent 4 }}
+  annotations:
+    heartwood.platform/names: {{ $proxyNamesText | quote }}
 type: kubernetes.io/tls
 data:
-  tls.crt: {{ $keycloakCertificate | b64enc }}
-  tls.key: {{ $keycloakKey | b64enc }}
+  tls.crt: {{ $proxyCertificate | b64enc }}
+  tls.key: {{ $proxyKey | b64enc }}

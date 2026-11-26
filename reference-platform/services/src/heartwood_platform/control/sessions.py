@@ -387,7 +387,12 @@ class Sessions:
         )
 
     def write_gateway_secret(self, session: str, files: dict[str, str]) -> None:
-        """Replace the configuration Secret of a session's Heartwood gateway."""
+        """Replace the configuration Secret of a session's Heartwood gateway.
+
+        The Secret also carries the platform CA certificate as ``platform-ca.crt``, the
+        only authority the gateway trusts for Keycloak and the platform services.
+        """
+        files = {**files, "platform-ca.crt": self._settings.platform_ca}
         namespace = self._settings.gateway_namespace
         name = gateway_account(session)
         # The service may create and delete Secrets there, and not read or update them.

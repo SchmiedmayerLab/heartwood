@@ -24,7 +24,7 @@ from identity import curl
 from kube import PROBE_CA, Cluster
 
 _SESSIONS = "heartwood-sessions"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 _KEYCLOAK = "https://keycloak.heartwood-platform.svc.cluster.local:8443"
 _FIRST = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _SECOND = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0002"
@@ -65,13 +65,7 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
             ],
         },
     }
-    account = {
-        "apiVersion": "v1",
-        "kind": "ServiceAccount",
-        "metadata": {"name": "hub", "namespace": _SESSIONS},
-    }
-    existed = cluster.kubectl("get", f"--namespace={_SESSIONS}", "serviceaccount/hub")
-    cluster.apply(pod, account)
+    cluster.apply(pod)
     ready = cluster.kubectl(
         "wait", f"--namespace={_SESSIONS}", "--for=condition=Ready", f"pod/{_POD}"
     )
@@ -80,13 +74,13 @@ def caller(cluster: Cluster, probe_image: str) -> Iterator[None]:
     for subject, project in ((_FIRST, "demo"), (_FIRST, "other"), (_SECOND, "demo")):
         _call(cluster, "DELETE", _launch(subject, project), _token(cluster))
     cluster.kubectl("delete", f"--namespace={_SESSIONS}", f"pod/{_POD}", "--wait")
-    if existed.returncode != 0:
-        cluster.kubectl("delete", f"--namespace={_SESSIONS}", "serviceaccount/hub")
 
 
 def _token(cluster: Cluster, account: str = "hub", audience: str = "heartwood-control") -> str:
+    """Return a token of the Hub's account, or of another account of the sessions namespace."""
+    namespace = "heartwood-platform" if account == "hub" else _SESSIONS
     result = cluster.kubectl(
-        "create", "token", account, f"--namespace={_SESSIONS}", f"--audience={audience}"
+        "create", "token", account, f"--namespace={namespace}", f"--audience={audience}"
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
@@ -225,7 +219,7 @@ def test_launch_outside_the_registry_is_refused(cluster: Cluster) -> None:
     assert not _redirect_uri_is_registered(
         cluster,
         "other",
-        f"http://proxy-public.{_SESSIONS}.svc.cluster.local/user/{_SECOND}/other/oauth_callback",
+        f"https://proxy-public.heartwood-platform.svc.cluster.local/user/{_SECOND}/other/oauth_callback",
     )
 
 
@@ -239,3 +233,42 @@ def test_other_callers_are_refused(cluster: Cluster) -> None:
     ):
         assert _call(cluster, "PUT", _launch(_FIRST, "demo"), token)[0] == 401
         assert _call(cluster, "GET", f"{_CONTROL}/v1/launch-context", token)[0] == 401
+
+
+def test_control_service_serves_only_https_with_a_certificate_of_the_platform_ca(
+    cluster: Cluster,
+) -> None:
+    # _call trusts only the platform CA, so an answer shows the certificate of the CA.
+    assert _call(cluster, "GET", f"{_CONTROL}/v1/launch-context")[0] == 401
+    # Without the platform CA the certificate is not trusted (curl exit 60), and plain HTTP
+    # receives no HTTP answer (exit 52, an empty reply, or 56, a reset connection).
+    for url, exits in (
+        (f"{_CONTROL}/healthz", {60}),
+        (_CONTROL.replace("https", "http") + "/healthz", {52, 56}),
+    ):
+        result = cluster.kubectl(
+            "exec",
+            f"--namespace={_SESSIONS}",
+            _POD,
+            "--",
+            "curl",
+            "--silent",
+            "--max-time",
+            "10",
+            "--output",
+            "/dev/null",
+            url,
+        )
+        assert result.returncode in exits, (url, result.returncode, result.stderr)
+    # The service itself listens on no plain HTTP port.
+    result = cluster.kubectl(
+        "exec",
+        "--namespace=heartwood-platform",
+        "statefulset/heartwood-control",
+        "--",
+        "/opt/heartwood-platform/.venv/bin/python",
+        "-c",
+        "import socket; socket.create_connection(('127.0.0.1', 8080), 5)",
+    )
+    assert result.returncode != 0
+    assert "ConnectionRefusedError" in result.stderr

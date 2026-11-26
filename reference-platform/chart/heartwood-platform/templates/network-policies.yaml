@@ -64,6 +64,11 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: hub
       ports:
         - protocol: TCP
           port: 8443
@@ -107,6 +112,101 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: hub
       ports:
         - protocol: TCP
-          port: 8080
+          port: 8443
+---
+# The proxy receives researchers' HTTPS requests from anywhere, and only the Hub
+# configures it. Its HTTP port, which only redirects to HTTPS, admits no connection.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hub-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: jupyterhub
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: proxy
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: hub
+      ports:
+        - protocol: TCP
+          port: 8001
+---
+# The proxy forwards to the Hub, and the culler runs inside the Hub's pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hub
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: jupyterhub
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: hub
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: jupyterhub
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: proxy
+      ports:
+        - protocol: TCP
+          port: 8081
+---
+# A Heartwood gateway receives requests from the proxy, and the Hub checks that it
+# answers. Gateways do not reach each other.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hosted-gateways
+  namespace: {{ .Values.sessions.namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      heartwood.platform/role: hosted-gateway
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [jupyterhub]
+              - key: app.kubernetes.io/instance
+                operator: In
+                values: [{{ .Release.Name | quote }}]
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [hub, proxy]
+      ports:
+        - protocol: TCP
+          port: 8888

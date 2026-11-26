@@ -131,6 +131,7 @@ from heartwood.gateway._model_snapshots import (
 )
 from heartwood.gateway._openhands_models import prepare_openhands_import
 from heartwood.gateway._platform_planning import (
+    HostedPlanningClient,
     PlanningNotOfferedError,
     PlatformPlanning,
     PlatformPlanningBinding,
@@ -521,6 +522,21 @@ class SessionGateway:
                 )
             project, deployment_policy = deployment.project, deployment.policy
             mcp_destinations = deployment.mcp_destinations
+            if deployment.planning is not None:
+                if platform_planning is not None or service_tokens is None:
+                    raise ValueError(
+                        "A deployment's planning service needs the gateway identity and "
+                        "no other planning binding"
+                    )
+                assert deployment.platform_launch is not None
+                platform_planning = PlatformPlanningBinding(
+                    deployment.platform_launch,
+                    HostedPlanningClient(
+                        deployment.planning,
+                        service_tokens,
+                        project_id=deployment.platform_launch.project_id,
+                    ),
+                )
             model_connections = (*BUILT_IN_MODEL_CONNECTIONS, *deployment.model_connections)
         self._deployment = deployment
         # A manifest change that cannot apply safely stops dispatch until the next start.

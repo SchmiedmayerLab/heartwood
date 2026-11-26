@@ -22,6 +22,9 @@ images:
   # images, each under its upstream name and digest, such as a mirror of the release.
   # Empty pulls them from ghcr.io/nvidia/openshell.
   openshellRepository: ""
+  # Image of the hosted Heartwood gateway, the hosted-gateway-image stage of
+  # images/Dockerfile. It has no default: set it to a reference by digest.
+  hostedGateway: ""
 
 # StorageClass of the platform's own volumes. Empty selects the cluster default.
 storageClassName: ""
@@ -46,11 +49,12 @@ control:
   # Identifier of this platform in launch contexts.
   platformId: heartwood-reference-platform
   storage: 1Gi
-  # Service accounts that may list projects and launch sessions for researchers.
+  # Service accounts that may list projects and launch sessions for researchers: the Hub.
   serviceCallers:
-    - system:serviceaccount:heartwood-sessions:hub
-  # Redirect URI of the gateway of one researcher and project.
-  redirectUriTemplate: "http://proxy-public.heartwood-sessions.svc.cluster.local/user/{subject}/{project}/oauth_callback"
+    - system:serviceaccount:heartwood-platform:hub
+  # Service accounts that may rotate the client secret of a project.
+  operatorCallers:
+    - system:serviceaccount:heartwood-platform:heartwood-operator
 
 # Synthetic prices of the control service's estimates, for development and tests.
 # They are not the prices of any provider.
@@ -196,6 +200,165 @@ sessions:
   attemptStorageClass:
     provisioner: ""
     parameters: {}
+
+# The Hub starts one Heartwood gateway for each researcher and project, as a named server
+# in the sessions namespace. Researchers sign in to the Hub and to their gateways through
+# Keycloak.
+hub:
+  # HTTPS origin under which researchers open the Hub's proxy. Gateways redirect their
+  # sign-in to <publicOrigin>/user/<subject>/<project>/oauth_callback. The default is the
+  # in-cluster address of the proxy Service. The proxy serves a certificate of the
+  # platform CA for the names of its Services and the host of this origin.
+  publicOrigin: "https://proxy-public.heartwood-platform.svc.cluster.local"
+  # Networks from which gateways accept proxied requests: the pod network that holds the
+  # proxy. Required: a gateway does not start without at least one range. Network
+  # policies admit only the proxy and the Hub to the gateway pods.
+  trustedProxySources: []
+  # Volume of one named server, which holds its research and state directories.
+  storage:
+    capacity: 1Gi
+    storageClassName: ""
+  resources:
+    cpuLimit: 2
+    cpuGuarantee: 0.1
+    memoryLimit: 2G
+    memoryGuarantee: 512M
+  # The worker of each session's gateway. Set the policy and its effective digest from
+  # the qualification of the worker image and its model route. The default digest
+  # matches no policy, so no worker is admitted until it is set.
+  worker:
+    image: ""
+    sandboxPolicySha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    policy:
+      version: 1
+      filesystem:
+        include_workdir: true
+        read_only: [/usr, /bin, /lib, /etc, /proc, /dev/urandom, /opt, /inputs, /skills]
+        read_write: [/tmp, /dev/null, /home/heartwood, /dev/pts, /dev/ptmx, /workspace]
+      landlock:
+        compatibility: hard_requirement
+      process:
+        run_as_user: "10001"
+        run_as_group: "10001"
+    cpu: "1"
+    memory: 2Gi
+  # The model route of the worker. Until the platform provides one, it names an address
+  # that does not resolve.
+  modelRoute:
+    profileId: platform-route
+    model: platform/unavailable
+    endpoint: https://model-route.heartwood.invalid/v1/chat/completions
+    provider: platform-route
+    placeholderEnv: HEARTWOOD_PLATFORM_MODEL_KEY
+
+# Values of the JupyterHub chart. The chart's RBAC is off: the platform chart grants the
+# Hub only what spawning needs, in the sessions namespace. Its user scheduler, image
+# pullers, placeholders and network policies are off; the platform chart's network
+# policies cover the Hub, the proxy and the gateways.
+jupyterhub:
+  fullnameOverride: ""
+  rbac:
+    create: false
+  hub:
+    image:
+      name: quay.io/jupyterhub/k8s-hub
+      tag: "4.4.5@sha256:6ce210488f5598e2dd5130d82e84d9f74b72538b66895861240bd84926ec50bd"
+    networkPolicy:
+      enabled: false
+    # KubeSpawner uses the Hub's ServiceAccount token.
+    extraPodSpec:
+      automountServiceAccountToken: true
+    extraVolumes:
+      - name: heartwood
+        configMap:
+          name: heartwood-hub
+      - name: heartwood-client
+        secret:
+          secretName: heartwood-hub-keycloak
+      - name: platform-ca
+        configMap:
+          name: platform-ca
+          items:
+            - key: ca.crt
+              path: ca.crt
+      # The Hub's token for the control service.
+      - name: control-token
+        projected:
+          sources:
+            - serviceAccountToken:
+                audience: heartwood-control
+                expirationSeconds: 3600
+                path: token
+    extraVolumeMounts:
+      - name: heartwood
+        mountPath: /usr/local/etc/jupyterhub/jupyterhub_config.d/heartwood_hub.py
+        subPath: heartwood_hub.py
+      - name: heartwood
+        mountPath: /usr/local/etc/heartwood/hub/config
+        readOnly: true
+      - name: heartwood-client
+        mountPath: /usr/local/etc/heartwood/hub/client
+        readOnly: true
+      - name: platform-ca
+        mountPath: /usr/local/etc/heartwood/platform-ca
+        readOnly: true
+      - name: control-token
+        mountPath: /var/run/secrets/heartwood/control
+        readOnly: true
+  # The proxy serves researchers and its API over HTTPS with the certificate in the
+  # Secret proxy-tls, which the platform chart signs with the platform CA. Its Service
+  # has no HTTP port.
+  proxy:
+    https:
+      enabled: true
+      type: secret
+      secret:
+        name: proxy-tls
+    service:
+      type: ClusterIP
+      disableHttpPort: true
+    chp:
+      extraCommandLineFlags:
+        - --api-ssl-key=/etc/chp/tls/tls.key
+        - --api-ssl-cert=/etc/chp/tls/tls.crt
+      image:
+        name: quay.io/jupyterhub/configurable-http-proxy
+        tag: "5.4.0@sha256:7977d796d372642aa9eb962ff36590b3019f8f24493fcf9f1d07d2c81e8e6080"
+      networkPolicy:
+        enabled: false
+      extraPodSpec:
+        automountServiceAccountToken: false
+        securityContext:
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+  singleuser:
+    networkPolicy:
+      enabled: false
+    storage:
+      type: none
+    cloudMetadata:
+      blockWithIptables: false
+  scheduling:
+    userScheduler:
+      enabled: false
+    userPlaceholder:
+      enabled: false
+    podPriority:
+      enabled: false
+  prePuller:
+    hook:
+      enabled: false
+    continuous:
+      enabled: false
+  # The idle culler stops a server without activity through the proxy; the server's
+  # volume, session namespace and OpenShell gateway stay for its next start.
+  cull:
+    enabled: true
+    timeout: 3600
+    every: 300
+    users: false
+    removeNamedServers: false
 
 # Placement of GPU pods. Set per cluster.
 gpu:

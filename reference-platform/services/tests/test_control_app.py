@@ -17,6 +17,7 @@ from fakes import (
     AUDIENCE,
     HUB,
     ISSUER,
+    OPERATOR,
     SYNTHETIC_PRICES,
     FakeKeycloak,
     FakeKubernetes,
@@ -30,9 +31,10 @@ from heartwood_platform.control.app import create_app
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
-from heartwood_platform.control.registry import Project, Registry
+from heartwood_platform.control.registry import Project, Registry, Session
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
 from starlette.testclient import TestClient
+from test_hosted import HOSTED
 
 from heartwood.schemas import PlatformLaunchContext
 
@@ -40,6 +42,7 @@ _HUB = {"Authorization": "Bearer hub-token"}
 _ALICE = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a01"
 _BOB = "0b9f5d1e-7c64-4f0e-9d53-6f6f3f0f1a02"
 _NOW = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+
 _OBJECTS = (
     Path(__file__).resolve().parents[2]
     / "chart"
@@ -92,6 +95,7 @@ class Platform:
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
                 PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
                 clock=lambda: _NOW,
+                operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
             )
         )
 
@@ -173,7 +177,9 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
         "openshell-ca.crt": f"ca.crt of hw-s-{launch['session']}",
         "openshell-tls.crt": f"tls.crt of hw-s-{launch['session']}",
         "openshell-tls.key": f"tls.key of hw-s-{launch['session']}",
+        "platform-ca.crt": "-----BEGIN CERTIFICATE-----\n",
     }
+    files.pop("platform-ca.crt")
     for credential in files.values():
         assert credential not in json.dumps(launch)
 
@@ -311,6 +317,11 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         "service_callers": [HUB],
         "redirect_uri_template": _TEMPLATE,
         "keycloak": keycloak,
+        "tls": {
+            "certificate_file": "/etc/heartwood-control/tls/tls.crt",
+            "key_file": "/etc/heartwood-control/tls/tls.key",
+        },
+        "hosted": HOSTED,
         "sessions": {
             "control_namespace": "heartwood-platform",
             "control_account": "heartwood-control",
@@ -335,6 +346,8 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
         # Keycloak is reached only over HTTPS.
         {"keycloak": {**keycloak, "url": "http://keycloak:8080"}},
         {"synthetic_prices": {**SYNTHETIC_PRICES, "runtime_profiles": "none"}},
+        # The service serves only HTTPS, so its certificate and key are required.
+        {"tls": {"certificate_file": "/etc/heartwood-control/tls/tls.crt"}},
     ):
         with pytest.raises(ValueError, match="validation error"):
             Settings.model_validate_json(json.dumps({**settings, **change}))
@@ -381,3 +394,98 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     assert events == ["provisioned", "secret written", "removed"]
     assert registry.session(_BOB, "demo") is None
     assert keycloak.by_client_id("hw-proj-demo")["redirectUris"] == []
+
+
+_OPERATOR = {"Authorization": "Bearer operator-token"}
+
+
+def _gateway_secret(platform: Platform, session: object) -> str:
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{session}"]
+    return base64.b64decode(secret["data"]["keycloak-client-secret"]).decode()
+
+
+def test_an_operator_rotates_a_project_client_secret_into_every_gateway_secret(
+    platform: Platform,
+) -> None:
+    alice, bob = platform.launch(_ALICE, "demo"), platform.launch(_BOB, "demo")
+    other = platform.launch(_ALICE, "other")
+    before = _gateway_secret(platform, alice["session"])
+
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()["sessions"]) == {alice["session"], bob["session"]}
+    assert response.json()["failed"] == []
+    after = _gateway_secret(platform, alice["session"])
+    assert after != before
+    assert _gateway_secret(platform, bob["session"]) == after
+    # Another project's client and its gateways keep their secret.
+    assert _gateway_secret(platform, other["session"]) == "secret-of-uuid-2"
+
+
+def test_only_operators_rotate_and_only_existing_projects(platform: Platform) -> None:
+    for headers in ({}, _HUB, {"Authorization": "Bearer unknown"}):
+        response = platform.client.post("/v1/projects/demo/client-secret", headers=headers)
+        assert response.status_code == 401
+    response = platform.client.post("/v1/projects/missing/client-secret", headers=_OPERATOR)
+    assert response.status_code == 404
+    response = platform.client.post("/v1/projects/Not_A_Project/client-secret", headers=_OPERATOR)
+    assert response.status_code == 422
+    assert platform.keycloak.rotations == {}
+
+
+def test_a_project_without_a_client_has_nothing_to_rotate(platform: Platform) -> None:
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 409
+    assert response.json() == {"error": "the project has no client yet"}
+    assert platform.keycloak.rotations == {}
+
+
+def test_a_former_members_session_keeps_its_secret(platform: Platform) -> None:
+    alice, bob = platform.launch(_ALICE, "demo"), platform.launch(_BOB, "demo")
+    before = _gateway_secret(platform, bob["session"])
+    platform.registry.synchronize(
+        [
+            Project("demo", "grant-demo", "policy-1", frozenset({_ALICE})),
+            Project("other", "grant-other", "policy-1", frozenset({_ALICE})),
+        ]
+    )
+
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200
+    assert response.json()["sessions"] == [alice["session"]]
+    assert _gateway_secret(platform, bob["session"]) == before
+
+
+def test_a_session_deleted_during_a_rotation_is_not_created_again(platform: Platform) -> None:
+    alice = platform.launch(_ALICE, "demo")
+    original = platform.registry.sessions_of
+
+    def deleted_after_listing(project: str) -> list[Session]:
+        listed = original(project)
+        platform.client.delete(f"/v1/researchers/{_ALICE}/projects/demo/launch", headers=_HUB)
+        return listed
+
+    platform.registry.sessions_of = deleted_after_listing  # type: ignore[method-assign]
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200
+    assert response.json()["sessions"] == []
+    assert platform.registry.session(_ALICE, "demo") is None
+    assert f"hw-gw-{alice['session']}" not in platform.kubernetes.kind(
+        "Secret", "heartwood-sessions"
+    )
+
+
+def test_a_session_that_cannot_be_prepared_is_reported_and_the_others_are_rewritten(
+    platform: Platform,
+) -> None:
+    alice, bob = platform.launch(_ALICE, "demo"), platform.launch(_BOB, "demo")
+    platform.kubernetes.failing.add(("GET", f"/api/v1/namespaces/hw-s-{alice['session']}"))
+
+    response = platform.client.post("/v1/projects/demo/client-secret", headers=_OPERATOR)
+
+    assert response.status_code == 200
+    assert response.json() == {"sessions": [bob["session"]], "failed": [alice["session"]]}

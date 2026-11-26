@@ -48,7 +48,7 @@ from qualification_evidence import (
 ROOT = Path(__file__).resolve().parents[1]
 _SESSIONS = "heartwood-sessions"
 _PLATFORM = "heartwood-platform"
-_CONTROL = "http://heartwood-control.heartwood-platform.svc.cluster.local:8080"
+_CONTROL = "https://heartwood-control.heartwood-platform.svc.cluster.local:8443"
 # A synthetic researcher and project of the chart's kind values.
 _SUBJECT = "6d1f7c0a-51a4-4d0b-9c1e-0c5a6e2f0001"
 _PROJECT = "demo"
@@ -84,17 +84,20 @@ _SOURCES = (
     "images/worker/candidate/replacement-worker.Dockerfile",
     "reference-platform/cluster/push-image.sh",
 )
-# The exit status of the launch script when the token reached it incomplete.
+# The exit status of the launch script when its input reached it incomplete.
 _INCOMPLETE = 75
-# A token on standard input can arrive incomplete, so the script refuses one of another
-# length before it sends a request.
-_LAUNCH = """import json,sys,urllib.error,urllib.request
-token=sys.stdin.read().strip()
-if len(token)!=int(sys.argv[3]): sys.exit(75)
+# The token and the platform CA certificate arrive on standard input, which can arrive
+# incomplete, so the script refuses input of another length; the request trusts that CA
+# alone.
+_LAUNCH = """import json,ssl,sys,urllib.error,urllib.request
+raw=sys.stdin.read()
+if len(raw.encode())!=int(sys.argv[3]): sys.exit(75)
+given=json.loads(raw)
 request=urllib.request.Request(sys.argv[2],method=sys.argv[1],
- headers={'Authorization':'Bearer '+token})
+ headers={'Authorization':'Bearer '+given['token']})
+context=ssl.create_default_context(cadata=given['ca'])
 try:
- with urllib.request.urlopen(request,timeout=300) as response:
+ with urllib.request.urlopen(request,timeout=300,context=context) as response:
   print(json.dumps({'status':response.status,'body':response.read().decode()}))
 except urllib.error.HTTPError as error:
  print(json.dumps({'status':error.code,'body':error.read().decode()}))
@@ -346,8 +349,9 @@ def _pod(name: str, image: str, **spec: Any) -> dict[str, Any]:  # noqa: ANN401
 def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
     """Call the control service as the spawner would, from inside the cluster."""
     token = cluster.kubectl(
-        "create", "token", "hub", "--namespace", _SESSIONS, "--audience=heartwood-control"
+        "create", "token", "hub", "--namespace", _PLATFORM, "--audience=heartwood-control"
     )
+    token = token.strip()
     reply = _call(cluster, method, token)
     attempts = 1
     # A launch is idempotent, and the spawner repeats one that the control service answers
@@ -363,8 +367,9 @@ def _launch(cluster: Cluster, method: str) -> dict[str, Any]:
 
 
 def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
-    """Send one launch request; a token that reached the pod incomplete is sent again."""
-    token = token.strip()
+    """Send one launch request; input that reached the pod incomplete is sent again."""
+    authority = cluster.json("configmap", "platform-ca", "--namespace", _PLATFORM)["data"]["ca.crt"]
+    payload = json.dumps({"token": token.strip(), "ca": authority})
     for attempt in range(1, 6):
         try:
             output = cluster.kubectl(
@@ -380,17 +385,17 @@ def _call(cluster: Cluster, method: str, token: str) -> dict[str, Any]:
                 _LAUNCH,
                 method,
                 f"{_CONTROL}/v1/researchers/{_SUBJECT}/projects/{_PROJECT}/launch",
-                str(len(token)),
-                stdin=token,
+                str(len(payload.encode())),
+                stdin=payload,
             )
         except subprocess.CalledProcessError as error:
             if error.returncode != _INCOMPLETE:
                 raise
-            sys.stderr.write(f"The launch token reached the pod incomplete (attempt {attempt})\n")
+            sys.stderr.write(f"The launch input reached the pod incomplete (attempt {attempt})\n")
             continue
         reply: dict[str, Any] = json.loads(output)
         return reply
-    raise RuntimeError("The launch token did not reach the pod complete")
+    raise RuntimeError("The launch input did not reach the pod complete")
 
 
 def _provider_certificate(cluster: Cluster, host: str) -> dict[str, str]:
@@ -752,7 +757,6 @@ def _remove(cluster: Cluster, namespace: str | None) -> bool:
                 f"secret/{_PROVIDER}",
                 f"secret/{_FIXTURE}",
                 f"serviceaccount/{_FIXTURE}",
-                "serviceaccount/hub",
             )
         finally:
             cluster.kubectl(
@@ -796,11 +800,6 @@ def run(arguments: argparse.Namespace) -> None:
             f"pod/{_CONTROLLER}", f"pod/{_LAUNCHER}",
         )  # fmt: skip
         cluster.apply(
-            {
-                "apiVersion": "v1",
-                "kind": "ServiceAccount",
-                "metadata": {"name": "hub", "namespace": _SESSIONS},
-            },
             _pod(_LAUNCHER, built["image_references"]["controller"]),
         )
         cluster.kubectl(

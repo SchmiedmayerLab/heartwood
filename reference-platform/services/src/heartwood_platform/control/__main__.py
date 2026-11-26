@@ -8,19 +8,21 @@
 
 from __future__ import annotations
 
+import logging
 import ssl
 import sys
 from pathlib import Path
 from typing import Annotated, Any, Self
 
 import httpx
-import uvicorn
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from starlette.applications import Starlette
 
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
+from heartwood_platform.common.serving import TlsSettings, serve
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.app import ProjectId, Subject, create_app
+from heartwood_platform.control.hosted import HostedGateway, HostedGatewaySettings, sandbox_digests
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
@@ -86,8 +88,14 @@ class Settings(_Settings):
     database: Path
     audience: str
     service_callers: frozenset[str]
+    # Service accounts of platform operators, which may rotate project client secrets.
+    operator_callers: frozenset[str] = frozenset()
     redirect_uri_template: str
     keycloak: KeycloakSettings
+    # The serving certificate from the platform CA; the service serves only HTTPS.
+    tls: TlsSettings
+    # The files of each session's hosted gateway.
+    hosted: HostedGatewaySettings
     sessions: SessionNamespaceSettings
     projects: tuple[ProjectSettings, ...]
     synthetic_prices: PriceSheet
@@ -133,13 +141,14 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         return document
 
     namespaces = settings.sessions
+    openshell_objects = namespaces.openshell_objects_file.read_text(encoding="utf-8")
     sessions = Sessions(
         kubernetes,
         SessionSettings(
             control_namespace=namespaces.control_namespace,
             control_account=namespaces.control_account,
             gateway_namespace=namespaces.gateway_namespace,
-            openshell_objects=namespaces.openshell_objects_file.read_text(encoding="utf-8"),
+            openshell_objects=openshell_objects,
             openshell_gateway_image=namespaces.openshell_gateway_image,
             api_server=tuple(
                 ApiServerAddress(address.cidr, address.port) for address in namespaces.api_server
@@ -152,22 +161,40 @@ def build(settings: Settings, kubernetes: Kubernetes) -> Starlette:
         ),
         registry.session_ids,
     )
+    supervisor, sandbox = sandbox_digests(openshell_objects)
+    hosted = HostedGateway(
+        settings.hosted,
+        issuer=settings.keycloak.issuer,
+        supervisor=supervisor,
+        sandbox=sandbox,
+    )
     launches = LaunchService(
-        registry, keycloak, sessions, settings.platform_id, settings.redirect_uri_template
+        registry,
+        keycloak,
+        sessions,
+        settings.platform_id,
+        settings.redirect_uri_template,
+        hosted=hosted,
     )
     return create_app(
         launches,
         ResearcherTokens(settings.keycloak.issuer, settings.audience, keys),
         ServiceTokens(kubernetes.review_token, settings.audience, settings.service_callers),
         settings.synthetic_prices,
+        operators=ServiceTokens(
+            kubernetes.review_token, settings.audience, settings.operator_callers
+        )
+        if settings.operator_callers
+        else None,
     )
 
 
 def main() -> None:
     """Serve the control service with the configuration file named on the command line."""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     settings = Settings.model_validate_json(Path(sys.argv[1]).read_text(encoding="utf-8"))
     application = build(settings, Kubernetes(in_cluster_client()))
-    uvicorn.run(application, host="0.0.0.0", port=8080, log_config=None)
+    serve(application, settings.tls)
 
 
 if __name__ == "__main__":

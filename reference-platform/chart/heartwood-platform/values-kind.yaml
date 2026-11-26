@@ -41,3 +41,17 @@ sessions:
     - registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
   attemptStorageClass:
     provisioner: rancher.io/local-path
+
+hub:
+  # The pod network of the kind cluster.
+  trustedProxySources:
+    - 10.244.0.0/16
+  worker:
+    # The staging stand-in above in place of the worker image.
+    image: registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+
+jupyterhub:
+  # Short enough for the cluster tests to observe a cull.
+  cull:
+    timeout: 120
+    every: 30

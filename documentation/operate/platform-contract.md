@@ -29,9 +29,9 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
-| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
+| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current; `heartwood gateway serve` installs a planning service only from a deployment manifest's `[planning]` table |
 | Verified OpenID Connect identity of one researcher per gateway, with `identity-proxy` ingress | Current, implemented and tested locally with a synthetic provider |
-| Launch of hosted per-project gateways by a platform | Unavailable |
+| Launch of hosted per-project gateways by a platform | Current in the Kubernetes reference platform in `reference-platform/`, which starts one gateway per researcher and project with JupyterHub; tested on a local cluster without a model route for workers |
 | Realtime voice | Unavailable |
 
 ## Responsibilities
@@ -98,7 +98,7 @@ Releases carry build attestations; separate artifact signatures, software bills 
 |---|---|---|---|
 | Workstation or container | The researcher | The operating system and the launch link | Current |
 | Platform workspace | The platform, in the researcher's workspace | The platform proxy | Current for the Terra terminal and notebook and the Stanford Carina terminal, CI validated |
-| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch unavailable |
+| Hosted per-project service | The platform, one gateway per researcher and project | The institution's identity provider, verified by Heartwood | Identity verification current, implemented and tested locally with a synthetic provider; platform launch current in the Kubernetes reference platform, tested on a local cluster without a model route for workers |
 
 Gateway shutdown does not stop external jobs or storage charges.
 
@@ -507,7 +507,9 @@ There is one open release review per operation, denial is final for it, and an i
 
 A trusted Python embedding connects a planning service by passing `SessionGateway(platform_planning=PlatformPlanningBinding(launch, client))`.
 `launch` is the platform's launch context and `client` a `PlanningServiceClient`, such as `McpPlanningClient` for the MCP tools above.
-The gateway requires protected state for it, and `heartwood gateway serve` and the other built-in launchers install none.
+The gateway requires protected state for it.
+`heartwood gateway serve` installs a binding from a deployment manifest's [`[planning]` table](../reference/configuration.md#planning-service): the launch context comes from an operator file, and each call carries a token exchanged for the signed-in researcher's token.
+The other built-in launchers install none.
 Without a binding, the planning projection reports that planning is not offered, and every interface hides it.
 
 The gateway does the following and nothing more:
@@ -807,7 +809,7 @@ It holds no credential and no credential reference.
 
 | Control | Behavior |
 |---|---|
-| Destinations | Only exact listed origins. HTTPS is required except on loopback. Literal and resolved private, link-local and metadata addresses are refused before each connection, including their NAT64, IPv4-compatible and IPv4-translated forms. Private addresses are permitted only at an origin whose destination sets `private_address`, such as a cluster service. Only public addresses, and private ones with the opt-in, are permitted; link-local addresses and `fd00:ec2::/32` are always refused. Public metadata addresses, such as `168.63.129.16`, are not recognized. The client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
+| Destinations | Only exact listed origins. HTTPS is required except on loopback. A destination's `ca_file` replaces the default certificate bundle for its origin, so a service with a certificate from a private authority, such as a platform CA, is verified against that authority alone. Literal and resolved private, link-local and metadata addresses are refused before each connection, including their NAT64, IPv4-compatible and IPv4-translated forms. Private addresses are permitted only at an origin whose destination sets `private_address`, such as a cluster service. Only public addresses, and private ones with the opt-in, are permitted; link-local addresses and `fd00:ec2::/32` are always refused. Public metadata addresses, such as `168.63.129.16`, are not recognized. The client resolves the name again, so the platform's egress controls bound the connection itself. A manifest without destinations refuses every server. |
 | Redirects | The client follows a redirect only within the same origin and sends no request to another origin. |
 | Credentials | A bearer token is entered through the gateway and kept in its credential store under a binding derived from the destination's `service_id`, or supplied by the operator in the environment variable of that name, so a token is sent only to its own service. The deployment's credential backends apply. A destination that declares a `token_exchange` takes the [exchanged service token](#service-tokens) of the signed-in researcher and refuses an entered or stored token. The token never reaches the worker, model context, session records or exports. |
 | Authentication state | The gateway reads the token's expiry and refuses an expired token before sending it. A token entered with a test or a selection is kept only after the server accepted it. The service still verifies the token. |

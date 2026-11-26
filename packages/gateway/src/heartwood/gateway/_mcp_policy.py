@@ -25,6 +25,7 @@ import socket
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, Self
 from urllib.parse import urlsplit
 
@@ -109,6 +110,9 @@ class McpDestination(BaseModel):
     call_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
     # The operator's opt-in for a cluster or other private address at this exact origin.
     private_address: bool = False
+    # Certificate authorities that replace the default bundle for this origin, such as a
+    # platform CA; an operator file.
+    ca_file: Path | None = None
     operations: McpOperationProfile | None = None
     # The service takes a token exchanged for the researcher's sign-in, never an entered one.
     token_exchange: TokenExchange | None = None
@@ -145,6 +149,10 @@ class McpDestination(BaseModel):
                     "the cancellation tool must be selectable next to a submission tool"
                 )
         exact_origin(self.origin, private_address=self.private_address)
+        if self.ca_file is not None and (
+            not self.ca_file.is_absolute() or not self.origin.startswith("https://")
+        ):
+            raise ValueError("ca_file is an absolute path for an https origin")
         return self
 
     def cancels(self, tool: str) -> bool:

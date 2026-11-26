@@ -15,3 +15,5 @@ metadata:
   name: {{ .Values.sessions.namespace }}
   labels:
     {{- include "heartwood.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
