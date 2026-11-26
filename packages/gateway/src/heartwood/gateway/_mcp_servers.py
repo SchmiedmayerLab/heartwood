@@ -815,8 +815,8 @@ class McpOutsideAdapter:
         if held is not None and self.clock() - held[0] < _RECONCILE_INTERVAL_SECONDS:
             raise _outside_error(held[1])
         try:
-            with self._manager.connect(bound.server, bound.destination) as client:
-                proposal = request_proposal(
+            with self._connect(bound) as client:
+                return request_proposal(
                     client, bound.destination, bound.tool.name, project, arguments
                 )
         except McpServerError as error:
@@ -826,8 +826,13 @@ class McpOutsideAdapter:
                 self._identity_refusals[service] = (self.clock(), error)
                 raise _outside_error(error) from None
             return None
-        self._identity_refusals.pop(service, None)
-        return proposal
+
+    @contextmanager
+    def _connect(self, bound: McpBoundTool) -> Iterator[MCPClient]:
+        """Connect to a bound tool's server; a connection ends an earlier identity refusal."""
+        with self._manager.connect(bound.server, bound.destination) as client:
+            self._identity_refusals.pop(bound.destination.service_id, None)
+            yield client
 
     def _estimate(self, proposal: PlatformOperationProposal | None) -> ExternalOperationEstimate:
         if self._planning is None:
@@ -864,7 +869,7 @@ class McpOutsideAdapter:
         if review is not None and review.kind == "submit" and review.proposal is None:
             raise ExternalActionError("the platform returned no proposal for this operation")
         try:
-            with self._manager.connect(bound.server, bound.destination) as client:
+            with self._connect(bound) as client:
                 self._verify_definition(client, bound)
         except McpServerError as error:
             raise _outside_error(error) from None
@@ -884,7 +889,7 @@ class McpOutsideAdapter:
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
         target = proposal.request.target_operation_id
-        with self._manager.connect(bound.server, bound.destination) as client:
+        with self._connect(bound) as client:
             self._verify_definition(client, bound)
             operation = self._call(
                 client,
@@ -902,7 +907,7 @@ class McpOutsideAdapter:
     def observe(self, proposal: ExternalActionProposal) -> ExternalActionObservation:
         """Ask the service's read-only status tool about the existing operation identifier."""
         bound = self._tool(proposal.request.tool_name)
-        with self._manager.connect(bound.server, bound.destination) as client:
+        with self._connect(bound) as client:
             operation = self._call(
                 client,
                 bound,
@@ -966,7 +971,7 @@ def advance_outside_calls(
     service: SessionService,
     adapter: McpOutsideAdapter,
     *,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Callable[[], float] | None = None,
 ) -> None:
     """Open outside review for new worker calls and result review for finished ones.
 
@@ -976,7 +981,8 @@ def advance_outside_calls(
     runs at most once per interval. A refusal leaves the session as it was; the next
     read tries again. With planning, the operation records are then linked to it.
     """
-    _advance(service, adapter, clock)
+    # The adapter's clock also times its identity refusal hold.
+    _advance(service, adapter, adapter.clock if clock is None else clock)
     if adapter.planning is not None:
         with suppress(ValueError):
             adapter.linked_sequence = link_operations(
