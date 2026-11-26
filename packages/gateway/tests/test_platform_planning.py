@@ -1239,15 +1239,18 @@ def test_every_recorded_prediction_id_can_be_cited(
 
 
 @pytest.mark.parametrize(
-    ("version", "invalid", "message"),
+    ("version", "damage", "message"),
     [
-        ("v1", False, "earlier evidence references"),
-        ("v1", True, "Persisted planning record is invalid"),
-        ("v2", False, "Persisted planning record is invalid"),
+        ("v1", None, "earlier evidence references"),
+        ("v1", "plan", "Persisted planning record is invalid"),
+        ("v1", "evidence", "Persisted planning record is invalid"),
+        ("v1", "reference", "Persisted planning record is invalid"),
+        ("v1", "record", "Persisted planning record is invalid"),
+        ("v2", None, "Persisted planning record is invalid"),
     ],
 )
 def test_legacy_reference_is_distinct_from_journal_corruption(
-    tmp_path: Path, clock: _Clock, version: str, invalid: bool, message: str
+    tmp_path: Path, clock: _Clock, version: str, damage: str | None, message: str
 ) -> None:
     gateway = _gateway(tmp_path, PlatformPlanningBinding(_LAUNCH, _ScriptedClient(), clock))
     try:
@@ -1256,8 +1259,14 @@ def test_legacy_reference_is_distinct_from_journal_corruption(
         entry = json.loads(journal.read_bytes())
         entry["schema_version"] = f"heartwood.planning-entry.{version}"
         entry["record"]["evidence"][0]["reference"] = "sample.csv"
-        if invalid:
+        if damage == "plan":
             del entry["record"]["plan"]
+        elif damage == "evidence":
+            entry["record"]["evidence"] = {}
+        elif damage == "reference":
+            entry["record"]["evidence"][0]["reference"] = " "
+        elif damage == "record":
+            entry["record"] = [entry["record"]]
         with journal.open("a") as file:
             file.write(json.dumps(entry) + "\n")
         before = journal.read_bytes()
