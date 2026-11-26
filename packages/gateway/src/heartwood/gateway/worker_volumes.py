@@ -166,6 +166,26 @@ def container_runtime_sha256(settings: WorkerVolumeSettings) -> str:
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
+def attachable_labels(workspace: str) -> dict[str, str]:
+    """Labels by which the sandbox gateway approves a volume for one workspace's sandboxes."""
+    return {
+        "openshell.ai/sandbox-attachable": "true",
+        "openshell.ai/sandbox-attachable-workspace": workspace,
+    }
+
+
+def require_private_snapshots(sources: dict[str, Path], names: dict[str, str]) -> None:
+    """Require one canonical, operator-owned private directory for each projection."""
+    if set(sources) != set(names):
+        raise WorkerAttemptError("worker staging requires explicit inputs and Skills")
+    for source in sources.values():
+        if not source.is_absolute() or source.resolve(strict=True) != source or not source.is_dir():
+            raise WorkerAttemptError("worker staging requires canonical private snapshots")
+        metadata = source.stat()
+        if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise WorkerAttemptError("worker staging requires operator-owned private snapshots")
+
+
 class WorkerVolumes:
     """Own only resources carrying the complete project and attempt identity."""
 
@@ -219,19 +239,8 @@ class WorkerVolumes:
         if self._staging_attempted:
             raise WorkerAttemptError("worker staging cannot repeat an uncertain transfer")
         self._staging_attempted = True
-        if set(sources) != set(self.names):
-            raise WorkerAttemptError("worker staging requires explicit inputs and Skills")
+        require_private_snapshots(sources, self.names)
         mounts: list[str] = []
-        for source in sources.values():
-            if (
-                not source.is_absolute()
-                or source.resolve(strict=True) != source
-                or not source.is_dir()
-            ):
-                raise WorkerAttemptError("worker staging requires canonical private snapshots")
-            metadata = source.stat()
-            if metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
-                raise WorkerAttemptError("worker staging requires operator-owned private snapshots")
         for mount, name in self.names.items():
             if self._volume_present(name):
                 raise WorkerAttemptError("worker projection volume already exists")
@@ -239,10 +248,11 @@ class WorkerVolumes:
                 "volume",
                 "create",
                 *self._label_arguments(role="projection"),
-                "--label",
-                "openshell.ai/sandbox-attachable=true",
-                "--label",
-                f"openshell.ai/sandbox-attachable-workspace={self.settings.workspace}",
+                *(
+                    argument
+                    for label, value in attachable_labels(self.settings.workspace).items()
+                    for argument in ("--label", f"{label}={value}")
+                ),
                 name,
             )
             self._owned(self._inspect("volume", name), container=False, role="projection")

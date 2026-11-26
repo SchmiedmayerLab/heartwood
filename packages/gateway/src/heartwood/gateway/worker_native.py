@@ -39,9 +39,18 @@ from heartwood.gateway._project import ProjectContext, ProjectStateError
 from heartwood.gateway._remote_workspace import _client_tool_contract
 from heartwood.gateway._worker_events import AdmittedWorkerWorkspace, require_worker_event_hooks
 from heartwood.gateway._workspace import WorkspaceInspector
-from heartwood.gateway.worker_control import NativeWorkerControl, NativeWorkerForward
-from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
+from heartwood.gateway.worker_control import (
+    ABSENCE_REJECTS_CREATION,
+    NativeWorkerControl,
+    NativeWorkerForward,
+)
+from heartwood.gateway.worker_deployment import (
+    KubernetesWorkerDeployment,
+    OpenShellWorkerDeployment,
+    WorkerDeployment,
+)
 from heartwood.gateway.worker_inputs import stage_worker_inputs
+from heartwood.gateway.worker_kubernetes import KubernetesWorkerVolumes, cluster_sha256
 from heartwood.gateway.worker_sessions import (
     WorkerPlanFactory,
     WorkerReconciler,
@@ -55,20 +64,30 @@ from heartwood.gateway.worker_volumes import (
 )
 
 # The pinned sandbox gateway returns these statuses for a creation request only before it
-# records or requests the sandbox; any other failure may still leave one created. They were
-# checked against this gateway source revision and patch digests; recheck on any change.
+# asks its compute driver, Docker or Kubernetes, to create the sandbox, and it maps every
+# driver creation error to another status; any other failure may still leave one created.
+# A credential store can also answer with one of them after the gateway recorded the sandbox
+# and before it asks the driver; the gateway then removes that record or marks it deleting,
+# and revocation deletes whatever the gateway still reports. They were checked against this
+# gateway source revision and patch digests; recheck on any change.
 _CREATION_REJECTED = ("INVALID_ARGUMENT", "PERMISSION_DENIED", "UNAUTHENTICATED")
+# A deletion the sandbox gateway cannot complete yet is sent again after each of these pauses,
+# in seconds, inside the deletion's time limit.
+_DELETION_RETRY_PAUSES = (0.5, 1, 2, 4)
+_DELETION_SECONDS = 90
 _CREATION_REJECTED_GATEWAY = (
-    "f3d976590d3eb1379690a2abaf0f0e26c21d487d",
+    "ce58cf8e9b953281352d98a637e41616295b1318",
     (
         "f36989e0cddf843d79ee8d43376704c4358decc906ad3c92bf40db6c429534c1",
         "206aab5e89fcb6f338781e3b51c2b54bb7502483a06fadca6f482aef9bcc41ee",
+        "5cf974a3e13b892367adf3ab531780852f7a200b08bd947801de980ae7561e37",
+        "17deeff1efc9f1791478b2e0e5104cf6cd4ef49d40bbdadd90d2c128a76fa6d0",
     ),
 )
 
 
 def native_worker_plan_factory(
-    settings: OpenShellWorkerDeployment,
+    settings: WorkerDeployment,
     project: ProjectContext,
     *,
     client_tools: Sequence[ClientToolSpec] = (),
@@ -96,9 +115,7 @@ def native_worker_plan_factory(
     return prepare
 
 
-def require_gateway_capabilities(
-    settings: OpenShellWorkerDeployment, project: ProjectContext
-) -> None:
+def require_gateway_capabilities(settings: WorkerDeployment, project: ProjectContext) -> None:
     """Require the registered gateway's deletion capabilities once before serving sessions."""
     control = NativeWorkerControl(settings, project)
     try:
@@ -108,7 +125,7 @@ def require_gateway_capabilities(
 
 
 def native_worker_reconciler(
-    settings: OpenShellWorkerDeployment, project: ProjectContext
+    settings: WorkerDeployment, project: ProjectContext
 ) -> WorkerReconciler:
     """Revoke attempts whose gateway process ended, only on the infrastructure that ran them."""
 
@@ -116,19 +133,18 @@ def native_worker_reconciler(
         if record.phase != "fenced" or record.intent.project_id != project.project_id:
             raise WorkerAttemptError("native reconciliation requires this project's fenced attempt")
         control = NativeWorkerControl(settings, project)
-        volume_settings = _volume_settings(settings, project, record.intent.image_digest)
         # Absence is evidence only on the infrastructure that ran the attempt.
         if record.intent.control_plane is None:
             raise WorkerControlPlaneError(
                 "worker attempt does not record the control plane and runtime it ran on"
             )
-        if record.intent.control_plane != _control_plane(control, volume_settings):
+        if record.intent.control_plane != _control_plane(control, project):
             raise WorkerControlPlaneError(
                 "worker attempt ran on another sandbox control plane or container runtime"
             )
         control.connect()
         try:
-            volumes = WorkerVolumes(volume_settings, record.intent)
+            volumes = _attempt_volumes(settings, project, record.intent)
             retained = record.runtime.sandbox_id if record.runtime else None
             # Without a recorded runtime, an ended process may have left creation unresolved.
             sandbox_id = _owned_sandbox(
@@ -136,12 +152,15 @@ def native_worker_reconciler(
             )
             if sandbox_id is not None:
                 _delete_sandbox(control, volumes, sandbox_id)
-            volumes.remove_after_revocation()
+            _remove_projections(volumes, sandbox_id or retained)
         finally:
             control.close()
         return _revocation_evidence(settings, record, sandbox_id or retained, control.gateway)
 
     return reconcile
+
+
+_Volumes = WorkerVolumes | KubernetesWorkerVolumes
 
 
 def _volume_settings(
@@ -158,18 +177,39 @@ def _volume_settings(
     )
 
 
-def _control_plane(
-    control: NativeWorkerControl, volume_settings: WorkerVolumeSettings
-) -> WorkerControlPlane:
+def _attempt_volumes(
+    settings: WorkerDeployment, project: ProjectContext, intent: WorkerAttemptIntent
+) -> _Volumes:
+    """Select the driver's staging, admission and absence adapter for one attempt."""
+    if isinstance(settings, KubernetesWorkerDeployment):
+        # An attempt is revoked with the image it retained, also after the manifest changed.
+        return KubernetesWorkerVolumes(
+            settings.model_copy(update={"image_digest": intent.image_digest}), intent
+        )
+    return WorkerVolumes(_volume_settings(settings, project, intent.image_digest), intent)
+
+
+def _control_plane(control: NativeWorkerControl, project: ProjectContext) -> WorkerControlPlane:
+    """Identify the sandbox gateway and the Docker daemon or cluster namespace behind it."""
+    settings = control.settings
     return WorkerControlPlane(
         control_plane_sha256=control.control_plane_sha256(),
-        container_runtime_sha256=container_runtime_sha256(volume_settings),
+        container_runtime_sha256=cluster_sha256(settings)
+        if isinstance(settings, KubernetesWorkerDeployment)
+        else container_runtime_sha256(_volume_settings(settings, project, settings.image_digest)),
     )
+
+
+def _remove_projections(volumes: _Volumes, sandbox_id: str | None) -> None:
+    if isinstance(volumes, KubernetesWorkerVolumes):
+        volumes.remove_after_revocation(sandbox_id)
+    else:
+        volumes.remove_after_revocation()
 
 
 def _owned_sandbox(
     control: NativeWorkerControl,
-    volumes: WorkerVolumes,
+    volumes: _Volumes,
     sandbox_id: str | None,
     *,
     uncertain: bool = False,
@@ -178,7 +218,8 @@ def _owned_sandbox(
 
     With `uncertain`, a creation request may still be queued or provisioning, and the
     sandbox gateway does not report a creation it has not recorded yet, so absence is not
-    evidence that nothing was created and the attempt stays unresolved.
+    evidence that nothing was created and the attempt stays unresolved, unless the gateway
+    itself confirms the absence to a deletion.
     """
     try:
         observed = control.client.get(volumes.worker_name, workspace=control.settings.workspace)
@@ -186,9 +227,7 @@ def _owned_sandbox(
         if error.code() != control.grpc.StatusCode.NOT_FOUND:
             raise WorkerAttemptError("native worker absence was not observed") from None
         if uncertain:
-            raise WorkerAttemptError(
-                "native worker absence after an unresolved creation is not evidence of revocation"
-            ) from None
+            return _unresolved_creation(control, volumes)
         return None
     if dict(observed.labels) != volumes.labels or (
         sandbox_id is not None and observed.id != sandbox_id
@@ -197,9 +236,89 @@ def _owned_sandbox(
     return str(observed.id)
 
 
-def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbox_id: str) -> None:
+def _unresolved_creation(control: NativeWorkerControl, volumes: _Volumes) -> str | None:
+    """Ask the sandbox gateway to confirm that an unresolved creation left no sandbox.
+
+    Only a Kubernetes gateway that rejects a creation after it confirmed the name absent
+    gives that evidence. Its deletion either finds nothing, and then nothing can be created
+    under the name, or removes the sandbox the creation made, whose identity it returns.
+    """
+    unresolved = WorkerAttemptError(
+        "native worker absence after an unresolved creation is not evidence of revocation"
+    )
+    if (
+        not isinstance(volumes, KubernetesWorkerVolumes)
+        or control.gateway is None
+        or ABSENCE_REJECTS_CREATION not in control.gateway.capabilities
+    ):
+        raise unresolved from None
+    try:
+        result = control.client.delete(
+            volumes.worker_name,
+            workspace=control.settings.workspace,
+            allow_missing=True,
+            timeout_seconds=_DELETION_SECONDS,
+        )
+    except control.grpc.RpcError:
+        raise unresolved from None
+    if result.outcome == control.sdk.DeletionOutcome.ALREADY_ABSENT:
+        return None
+    if (
+        result.outcome
+        in (
+            control.sdk.DeletionOutcome.COMPLETED,
+            control.sdk.DeletionOutcome.ACCEPTED,
+        )
+        and isinstance(result.sandbox_id, str)
+        and result.sandbox_id
+    ):
+        # Its labels can no longer be read. The name derives from the attempt identifier,
+        # and only this attempt's creation request used it.
+        return result.sandbox_id
+    raise unresolved from None
+
+
+def _delete_with_retry(control: NativeWorkerControl, volumes: _Volumes, sandbox_id: str) -> None:
+    """Send a deletion again while the sandbox gateway reports that it could not complete it.
+
+    The Kubernetes driver fails a deletion that meets a concurrent change of the Sandbox
+    resource, and the gateway refuses one while an earlier operation is pending; the sandbox
+    then still exists. A sandbox another deletion removed meanwhile needs no further request.
+    """
+    status = control.grpc.StatusCode
+    deadline = monotonic() + _DELETION_SECONDS
+    for pause in (*_DELETION_RETRY_PAUSES, None):
+        try:
+            control.client.delete(
+                volumes.worker_name,
+                workspace=control.settings.workspace,
+                timeout_seconds=max(1.0, deadline - monotonic()),
+            )
+            return
+        except control.grpc.RpcError as error:
+            code = error.code()
+            if code == status.NOT_FOUND:
+                return
+            retried = code in (status.FAILED_PRECONDITION, status.UNAVAILABLE) or (
+                code == status.INTERNAL
+                and str(error.details()).startswith("delete sandbox failed:")
+            )
+            if not retried or pause is None or monotonic() + pause >= deadline:
+                raise WorkerAttemptError("native worker deletion requires reconciliation") from None
+        sleep(pause)
+        # The identity is read again before each retry, so a replacement found there stays.
+        if _owned_sandbox(control, volumes, sandbox_id) is None:
+            return
+
+
+def _delete_sandbox(control: NativeWorkerControl, volumes: _Volumes, sandbox_id: str) -> None:
     workspace = control.settings.workspace
-    control.client.delete(volumes.worker_name, workspace=workspace, timeout_seconds=90)
+    if isinstance(volumes, KubernetesWorkerVolumes):
+        _delete_with_retry(control, volumes, sandbox_id)
+    else:
+        control.client.delete(
+            volumes.worker_name, workspace=workspace, timeout_seconds=_DELETION_SECONDS
+        )
     control.client.wait_deleted(
         volumes.worker_name,
         workspace=workspace,
@@ -209,7 +328,7 @@ def _delete_sandbox(control: NativeWorkerControl, volumes: WorkerVolumes, sandbo
 
 
 def _revocation_evidence(
-    settings: OpenShellWorkerDeployment,
+    settings: WorkerDeployment,
     record: WorkerAttemptRecord,
     sandbox_id: str | None,
     gateway: WorkerGatewayReport | None,
@@ -236,7 +355,7 @@ def _revocation_evidence(
 class _NativeWorkerAttempt:
     def __init__(
         self,
-        settings: OpenShellWorkerDeployment,
+        settings: WorkerDeployment,
         request: WorkerSessionRequest,
         *,
         client_tools: Sequence[ClientToolSpec] = (),
@@ -254,13 +373,11 @@ class _NativeWorkerAttempt:
             )
         self.control = NativeWorkerControl(settings, request.project)
         self._policy = self.control.policy()
-        self._control_plane = _control_plane(
-            self.control, _volume_settings(settings, request.project, settings.image_digest)
-        )
+        self._control_plane = _control_plane(self.control, request.project)
         self._creation_uncertain = False
         self._preparation = ExitStack()
         self._intent: WorkerAttemptIntent | None = None
-        self._volumes: WorkerVolumes | None = None
+        self._volumes: _Volumes | None = None
         self._forward: NativeWorkerForward | None = None
         self._workspace: AdmittedWorkerWorkspace | None = None
         self._sandbox_id: str | None = None
@@ -336,29 +453,33 @@ class _NativeWorkerAttempt:
                 intent.project_id != self.request.project.project_id
                 or intent.session_id != self.request.session_id
                 or intent.input_manifest_sha256 != self._input_identity
+                or intent.image_digest != self.settings.image_digest
                 or intent.sandbox_policy_sha256 != self.settings.sandbox_policy_sha256
                 or intent.control_plane != self._control_plane
             ):
                 raise WorkerAttemptError("native worker intent does not match preparation")
             self.control.connect()
-            volume_settings = _volume_settings(
-                self.settings, self.request.project, self.settings.image_digest
-            )
-            if _control_plane(self.control, volume_settings) != self._control_plane:
+            if _control_plane(self.control, self.request.project) != self._control_plane:
                 raise WorkerControlPlaneError(
                     "sandbox control plane or container runtime changed after preparation"
                 )
-            volumes = self._volumes = WorkerVolumes(volume_settings, intent)
+            volumes = self._volumes = _attempt_volumes(self.settings, self.request.project, intent)
             try:
                 volumes.stage(self._sources)
             finally:
                 self._preparation.close()
             template = self.control.pb.SandboxTemplate(
-                image=self.settings.image_digest,
+                image=self.settings.image
+                if isinstance(self.settings, KubernetesWorkerDeployment)
+                else self.settings.image_digest,
                 resources={"limits": {"cpu": self.settings.cpu, "memory": self.settings.memory}},
                 labels={**volumes.labels, "heartwood.role": "worker"},
             )
-            template.driver_config.update({"docker": {"mounts": volumes.mounts()}})
+            template.driver_config.update(
+                {"kubernetes": volumes.driver_config()}
+                if isinstance(volumes, KubernetesWorkerVolumes)
+                else {"docker": {"mounts": volumes.mounts()}}
+            )
             spec = self.control.pb.SandboxSpec(
                 template=template,
                 policy=self._policy,
@@ -398,7 +519,10 @@ class _NativeWorkerAttempt:
             )
             self._generation = ready.status.main_process_instance_id
             self._admit_native(ready)
-            volumes.inspect_worker(self._container_name())
+            if isinstance(volumes, KubernetesWorkerVolumes):
+                volumes.inspect_worker(self._sandbox_id)
+            else:
+                volumes.inspect_worker(self._container_name())
             self._probe()
             self._forward = NativeWorkerForward(self.control, volumes.worker_name)
             endpoint = self._forward.start()
@@ -613,7 +737,13 @@ print(json.dumps({'files':files,'uid':os.getuid(),
             self._forward.close()
         if self._volumes is not None:
             self.control.verify_configuration()
-            self._volumes.remove_after_revocation()
+            # Absence is evidence only in the cluster and namespace that ran the attempt.
+            if (
+                isinstance(self._volumes, KubernetesWorkerVolumes)
+                and _control_plane(self.control, self.request.project) != self._control_plane
+            ):
+                raise WorkerControlPlaneError("cluster or namespace changed after the launch")
+            _remove_projections(self._volumes, self._sandbox_id)
         if self._workspace is not None:
             self._workspace.reset_client()
         self.control.close()

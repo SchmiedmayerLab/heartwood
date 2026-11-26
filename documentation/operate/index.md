@@ -63,7 +63,7 @@ Without it, the agent runs in the gateway process even though state is protected
 Take `sandbox_policy_sha256` and `image_digest` from qualification, not from the worker whose admission they decide.
 Membership in the Docker socket's group grants control-plane authority; never add a worker identity to it.
 
-Before serving, and before each worker launch or reconciliation, Heartwood reads the registered sandbox gateway's info and stops with [`HW-WORKER-001`](../reference/troubleshooting.md#managed-workers) unless its Docker compute driver reports both deletion capabilities.
+Before serving, and before each worker launch or reconciliation, Heartwood reads the registered sandbox gateway's info and stops with [`HW-WORKER-001`](../reference/troubleshooting.md#managed-workers) unless the one compute driver the manifest's `driver` selects reports both deletion capabilities.
 The qualification build's patches report them; an unmodified upstream gateway does not.
 The check relies on the gateway's own report; it does not establish that the gateway has the [behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification).
 

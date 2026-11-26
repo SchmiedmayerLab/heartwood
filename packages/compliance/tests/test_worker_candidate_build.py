@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,9 +34,9 @@ def test_gateway_stamp_preserves_registry_dependencies(builder: ModuleType, tmp_
         '[[package]]\nname = "synthetic"\nversion = "10.0.0"\n'
         'source = "registry+https://example.invalid/index"\nchecksum = "unchanged"\n'
     )
-    builder._gateway_version(tmp_path, "0.1.8+heartwood.1")
+    builder._gateway_version(tmp_path, "0.1.9+heartwood.1")
     packages = tomllib.loads((tmp_path / "Cargo.lock").read_text())["package"]
-    assert packages[0]["version"] == "0.1.8+heartwood.1"
+    assert packages[0]["version"] == "0.1.9+heartwood.1"
     assert packages[1] == {
         "name": "synthetic",
         "version": "10.0.0",
@@ -53,7 +54,7 @@ def test_gateway_stamp_rejects_registry_zero_version(builder: ModuleType, tmp_pa
     )
     (tmp_path / "Cargo.lock").write_text(lock)
     with pytest.raises(ValueError, match="workspace versions"):
-        builder._gateway_version(tmp_path, "0.1.8+heartwood.1")
+        builder._gateway_version(tmp_path, "0.1.9+heartwood.1")
     assert (tmp_path / "Cargo.toml").read_text() == metadata
     assert (tmp_path / "Cargo.lock").read_text() == lock
 
@@ -580,15 +581,32 @@ def test_gateway_tests_require_positive_results_and_preserve_build_limits(
 
     monkeypatch.setattr(builder.subprocess, "run", run)
     if result == "passed":
-        record = builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
-        assert record["passed"] == 4
-        assert (
-            record["log_sha256"]
-            == hashlib.sha256((tmp_path / "gateway-tests.log").read_bytes()).hexdigest()
-        )
+        records = builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
+        assert [record["suite"] for record in records] == ["gateway", "kubernetes-driver"]
+        for record, command in zip(records, observed, strict=True):
+            log = tmp_path / f"{record['suite']}-tests.log"
+            assert record["command"] == command
+            assert record["passed"] == 4
+            assert record["log_sha256"] == hashlib.sha256(log.read_bytes()).hexdigest()
+        driver = observed[1]
+        assert driver[driver.index("--memory") + 1] == "12g"
+        assert driver[driver.index("cargo") :] == [
+            "cargo",
+            "test",
+            "--locked",
+            "--release",
+            "--package",
+            "openshell-driver-kubernetes",
+            "--lib",
+            "--jobs",
+            "1",
+        ]
+        assert json.loads((tmp_path / "kubernetes-driver-test-command.json").read_text()) == driver
     else:
         with pytest.raises(ValueError, match="nonempty passing suite"):
             builder._gateway_tests(container, "rust@sha256:" + "a" * 64, tmp_path)
+        # A suite without a passing result stops the run before the next suite.
+        assert len(observed) == 1
     assert container == original
     command = observed[0]
     assert command[command.index("--memory") + 1] == "12g"
@@ -612,7 +630,7 @@ def test_gateway_regression_failure_prevents_binary_build(
         'version = 4\n[[package]]\nname = "openshell-server"\nversion = "0.0.0"\n'
     )
     manifest = {
-        "version": "0.1.8+heartwood.1",
+        "version": "0.1.9+heartwood.1",
         "source": {},
         "patches": [],
         "cmake": {"amd64": {}},
@@ -646,7 +664,7 @@ def test_gateway_objects_are_not_reused_across_manifests(
     builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest = {
-        "version": "0.1.8+heartwood.1",
+        "version": "0.1.9+heartwood.1",
         "source": {},
         "patches": [],
         "cmake": {"amd64": {}},
@@ -680,6 +698,76 @@ def test_gateway_objects_are_not_reused_across_manifests(
             builder.build_gateway(tmp_path / f"output-{attempt}", tmp_path / "cache")
     assert len(targets) == 3
     assert targets[0] == targets[1] != targets[2]
+
+
+def test_gateway_build_enables_and_records_both_compute_drivers(
+    builder: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = {
+        "version": "0.1.9+heartwood.1",
+        "source": {"revision": "reviewed"},
+        "patches": [],
+        "cmake": {"amd64": {}},
+        "cli": {"amd64": {}},
+        "images": {"rust": "rust@sha256:" + "a" * 64, "gateway_base": "base@sha256:" + "b" * 64},
+    }
+
+    def extract(_source: object, staging: Path, **_kwargs: object) -> Path:
+        (staging / "deploy/docker").mkdir(parents=True)
+        (staging / "Cargo.toml").write_text('[workspace.package]\nversion = "0.0.0"\n')
+        (staging / "Cargo.lock").write_text(
+            'version = 4\n[[package]]\nname = "openshell-server"\nversion = "0.0.0"\n'
+        )
+        for name in ("deploy/docker/Dockerfile.gateway", "LICENSE", "openshell"):
+            (staging / name).write_text("synthetic")
+        return staging
+
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> None:
+        commands.append(command)
+        if "cargo" in command:
+            target = next(item for item in command if item.endswith(",dst=/target"))
+            binary = Path(target.split("src=")[1].split(",dst=")[0]) / "release/openshell-gateway"
+            binary.parent.mkdir(parents=True)
+            binary.write_text("synthetic gateway")
+        else:
+            Path(command[command.index("--iidfile") + 1]).write_text("sha256:" + "c" * 64)
+
+    def check_output(command: list[str], **_kwargs: object) -> str:
+        return "linux/amd64" if "info" in command else "openshell-gateway 0.1.9+heartwood.1"
+
+    monkeypatch.setattr(builder, "_gateway_configuration", lambda: (manifest, b"manifest"))
+    monkeypatch.setattr(builder, "_source", extract)
+    monkeypatch.setattr(builder.subprocess, "run", run)
+    monkeypatch.setattr(builder.subprocess, "check_output", check_output)
+    output = tmp_path / "output"
+    builder.build_gateway(output, tmp_path / "cache")
+    features = ["telemetry", "compute-driver-docker", "compute-driver-kubernetes", "vendored-z3"]
+    build, package = commands
+    assert build[build.index("--features") + 1] == ",".join(features)
+    assert "--no-default-features" in build
+    # The image comes from the upstream Dockerfile of the pinned source.
+    assert package[package.index("--file") + 1] == str(output / "deploy/docker/Dockerfile.gateway")
+    record = json.loads((output / "gateway-build-record.json").read_text())
+    assert record["features"] == features
+    assert record["build"] == build
+
+
+def test_gateway_configurations_select_their_compute_driver() -> None:
+    """A gateway with two drivers and no selection would choose one by detection."""
+    configurations = [
+        path
+        for directory in ("deploy", "images", "reference-platform")
+        for path in (_ROOT / directory).rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".toml", ".yaml", ".yml", ".tpl", ".sh"}
+        and not {".venv", "node_modules"}.intersection(path.parts)
+        and "[openshell.gateway]" in path.read_text(errors="ignore")
+    ]
+    assert configurations
+    for path in configurations:
+        assert re.search(r'^compute_driver = "', path.read_text(), re.MULTILINE), path
 
 
 @pytest.mark.parametrize("gateway", [False, True])

@@ -94,12 +94,13 @@ For that reason `review-outside-effects` is never in force outside a sandbox, an
 
 ### Managed Native Worker
 
-`heartwood gateway serve --deployment MANIFEST` selects the managed worker when the [deployment manifest](#protected-state-and-the-deployment-manifest) contains a `worker` table with `driver = "openshell-docker"`.
+`heartwood gateway serve --deployment MANIFEST` selects the managed worker when the [deployment manifest](#protected-state-and-the-deployment-manifest) contains a `worker` table.
 No other launch path selects it, and a managed session never falls back to the local backend.
+This section describes the worker of the Docker reference driver, `driver = "openshell-docker"`, and names the differences of `driver = "openshell-kubernetes"`.
 
 The worker is the OpenHands agent server from the Heartwood worker image, started by `images/worker/launch.py` as user `10001`.
 Before starting the server it registers the image's own verified advisory specialists.
-It runs in an OpenShell sandbox created through OpenShell's Docker driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
+It runs in an OpenShell sandbox created through OpenShell's Docker or Kubernetes driver, with `/inputs` and `/skills` mounted read-only and `/workspace` as its working directory.
 The sandbox has no network of its own (`network=none`); its only routes are those the OpenShell policy and supervisor permit.
 
 The gateway reaches the worker through an `openshell forward service` tunnel on loopback and authenticates every request with a per-attempt `SESSION_API_KEY`.
@@ -121,7 +122,7 @@ Launch happens once per session service, on the session's first backend read:
 2. The gateway stages the manifest's `inputs` (at most 128 files, 16 MiB each and 64 MiB in total) and a [Skill projection](skills.md#worker-projection) into a private directory under the state root.
    One input identity digest binds the inputs, the Skill selection, the specialist catalog fingerprint, and any client-tool specifications.
 3. The session journals the attempt intent before any sandbox exists.
-4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one Docker compute driver that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
+4. The launcher connects to the registered OpenShell gateway with its mutual TLS identity, reads its info, and requires exactly one compute driver, of the implementation the manifest's `driver` selects, that reports both [deletion capabilities](../operate/platform-requirements.md#gateway-behavior-behind-native-qualification) revocation evidence depends on.
    A missing capability or an unreadable report stops serving at start with `HW-WORKER-001`, and stops a later launch or reconciliation before any sandbox, volume, or deletion request.
    A launch refused this way reports `HW-WORKER-001` in the session and is recorded as revoked without a created worker.
    The decision and the reported gateway version, driver, and capabilities are retained with the attempt: an accepted report in its runtime binding and revocation evidence, a refused one in its revocation evidence.
@@ -134,7 +135,11 @@ Launch happens once per session service, on the session's first backend read:
 9. A probe inside the worker must report the expected file digests, read-only projections, no `/workspace/.heartwood`, user `10001`, the expected specialist catalog fingerprint, and an `openshell:resolve:env:` inference placeholder.
 10. The forwarded API must answer with the attempt key and refuse a request without it, and the sandbox is admitted once more before the binding is returned.
 
+Steps 5, 6, and 8 describe the `openshell-docker` driver.
+With `openshell-kubernetes`, step 5 is [Kubernetes Worker Staging](#kubernetes-worker-staging), step 6 references the worker image as `<image_repository>@<image_digest>` and passes the two claims as read-only driver volumes, and step 8 is [Kubernetes Worker Admission](#kubernetes-worker-admission).
+
 The operator's policy file must match `policy_file_sha256`, require Landlock as a hard requirement, run as `10001:10001`, and list `/inputs` and `/skills` as read-only.
+With the Kubernetes driver it must also list `/workspace` as writable.
 
 Container inspection accepts only listed confinement values: the container's own process and user namespaces, a private or absent IPC namespace, a private cgroup namespace, and security options that keep the default profiles, add `no-new-privileges`, or select the default AppArmor profile.
 It also requires every capability to be dropped, `no-new-privileges` to be set, no device, device request, or device rule, and no bind mount or other mount that is not a Docker volume.
@@ -149,6 +154,73 @@ Every other mount must be a Docker volume.
 The gateway version check compares the operator's declaration with the gateway's own report.
 It catches a misconfigured deployment, not a gateway that misreports its version or lacks the behavior Heartwood's revocation evidence depends on.
 The patched OpenShell gateway Heartwood builds exists only for qualification ([Build and Qualification](#build-and-qualification)).
+
+### Kubernetes Worker Admission
+
+With the `openshell-kubernetes` driver, each sandbox is a workload pod that runs the worker and a supervisor pod that mediates its connections.
+The Kubernetes admission reads these objects with `kubectl` from the manifest's `namespace`: the workload pod, the supervisor pod, the per-sandbox NetworkPolicy `os-control-<sandbox id>`, the namespace-wide NetworkPolicy `openshell-sandbox-workloads`, every other NetworkPolicy of the namespace, and the namespace.
+It uses the manifest's `kubectl_cli` and `kubeconfig` and no inherited Kubernetes or proxy configuration.
+A missing or unreadable object, or an object reported under another name, kind, or namespace, fails admission.
+The table lists the accepted values next to the values Docker inspection accepts.
+
+| Property | Docker container | Kubernetes pods |
+|---|---|---|
+| Identity | Container name of the attempt; labels for project, attempt, and role `worker` | Workload pod named `<workspace>--<worker name>`; labels for project, attempt, role `worker`, sandbox, and boundary role; one controlling owner reference to the Sandbox resource of the same name |
+| Supervisor | Not a separate container | Supervisor pod `os-supervisor-<sandbox id>` with the sandbox labels and an owner reference to the same Sandbox resource, by name and UID |
+| Containers | One container | Workload pod: container `agent` and init containers `openshell-sandbox-bootstrap` and `workspace-init`, in that order; supervisor pod: container `supervisor`; no ephemeral container in either pod |
+| Image | `Image` equals `image_digest` | `agent` and `workspace-init` use `image_digest`, `openshell-sandbox-bootstrap` uses `sandbox_image_digest`, and `supervisor` uses `supervisor_image_digest`; each `image` is a reference by digest, and each `imageID` in the pod status carries the same digest; the digest is the registry digest the pod references, where Docker reports the local image identifier |
+| Network | `NetworkMode` is `none` | `hostNetwork` is false; both NetworkPolicies have exactly the driver's rules, and `os-control-<sandbox id>` is owned by the same Sandbox resource |
+| Privilege | `Privileged` is false | `privileged` is false on every container |
+| Capabilities | `CapAdd` is empty and `CapDrop` contains `ALL` | `capabilities.drop` contains `ALL` and `capabilities.add` has no entry, on every container |
+| Privilege escalation | `no-new-privileges` is set | `allowPrivilegeEscalation` is false on every container |
+| Seccomp | No option that replaces the default profile | Pod `seccompProfile.type` is `RuntimeDefault`; a container profile, when set, is the same |
+| AppArmor and SELinux | Only AppArmor `docker-default` or an SELinux `container_t` label with individual categories | No `appArmorProfile`, AppArmor annotation, or `seLinuxOptions` on a pod or container, so the node's default applies; the effective profile is not reported |
+| Other security settings | Not applicable | No security context field other than those in this table, `readOnlyRootFilesystem`, `fsGroupChangePolicy`, and `supplementalGroupsPolicy`; no sysctl other than `net.ipv4.ip_unprivileged_port_start`; no `runtimeClassName`; no host port; no restart policy on a container |
+| Environment | Not inspected | No `envFrom` and no `valueFrom` entry, so no Secret or ConfigMap reaches a container through its environment |
+| Process and IPC namespaces | `PidMode` and `IpcMode` are private | `hostPID` and `hostIPC` are false; `shareProcessNamespace` is false on the workload pod |
+| User namespace | `UsernsMode` is empty | `hostUsers` is true |
+| Cgroup namespace | `CgroupnsMode` is `private` | Not reported |
+| User | Checked by the probe inside the worker | `runAsUser` and `runAsGroup` are `10001` and `runAsNonRoot` is true on every container and on the workload pod, and a pod-level `runAsUser` or `runAsGroup` on the supervisor pod is `10001`; `fsGroup` is `10001` on both pods, and neither lists another supplemental group |
+| Service account token | Not applicable | `automountServiceAccountToken` is false on both pods; the supervisor pod's projected token has audience `openshell-gateway` |
+| Devices | `Devices`, `DeviceRequests`, and `DeviceCgroupRules` are empty | No `volumeDevices`; requests and limits name only `cpu` and `memory` on every container and pod; no resource claim |
+| CPU and memory | `NanoCpus` and `Memory` equal the manifest's `cpu` and `memory` | The limits of `agent` equal the manifest's `cpu` and `memory`, and its requests equal its limits; `resources` is present on every container |
+| Process limit | `PidsLimit` is positive | Not reported |
+| Volumes | No bind mount; only Docker volumes; no mount source that overlaps a withheld host location | Workload pod: exactly the volumes `inputs`, `skills`, and `workspace` (persistent volume claims), `openshell-runtime`, `openshell-runtime-state`, and `openshell-run` (`emptyDir`), `openshell-pod-identity` (`downwardAPI`), and `openshell-sandbox-bootstrap` (the sandbox's bootstrap Secret, mounted only by the init container of the same name); supervisor pod: only `emptyDir` volumes, the sandbox's `os-supervisor-<sandbox id>-` Secret, the gateway certificate Secret `openshell-client-tls`, and projected service account token volumes |
+| Inputs and Skills | Exactly one read-only attempt volume at each of `/inputs` and `/skills` | Exactly one mount at each of `/inputs` and `/skills` in `agent`, without a sub-path or mount propagation; its claim is the attempt's claim, read-only on the volume and on every mount; every mount path in the pod is absolute and normalized |
+| Namespace | Not applicable | Label `pod-security.kubernetes.io/enforce` is `restricted`, label `pod-security.kubernetes.io/enforce-version` is `latest` or absent, and the namespace is active |
+
+The Kubernetes API server omits `hostNetwork`, `hostPID`, `hostIPC`, `privileged`, and `hostUsers` from a pod when they are unset, so these five fields are accepted when absent.
+It also omits a list without entries, so `capabilities.add`, `volumeDevices`, `ephemeralContainers`, supplemental groups, resource claims, container ports, and the supervisor pod's init containers are accepted when absent or empty.
+A setting the table excludes, such as `appArmorProfile` or `runtimeClassName`, must be absent.
+Pod-level `resources` and a container's own `seccompProfile` are optional.
+Every other listed field must be present with its accepted value.
+
+NetworkPolicies add up, so admission refuses any other NetworkPolicy that selects the workload pod's labels and has an ingress or egress rule.
+A policy without rules, such as a default denial, is accepted, and a selector that admission cannot evaluate fails admission.
+
+`admission_record` in `heartwood.gateway.worker_kubernetes` returns the inspected values of both pods, the policies, and the namespace for qualification evidence, without environment, commands, or pod labels and annotations.
+It keeps the namespace's Pod Security labels.
+The launcher keeps the record of the latest inspection whose objects could all be read, accepted or refused, on the attempt's adapter.
+
+### Kubernetes Worker Staging
+
+With the `openshell-kubernetes` driver, `KubernetesWorkerVolumes` in `heartwood.gateway.worker_kubernetes` stages the snapshots into two persistent volume claims, `hw-attempt-<attempt>-inputs` and `hw-attempt-<attempt>-skills`, in the manifest's `namespace`.
+The table lists each step next to the Docker step.
+
+| Step | Docker | Kubernetes |
+|---|---|---|
+| Volumes | Two Docker volumes with the project, attempt, and role labels and the two OpenShell approval labels | Two claims with the same labels, storage class `heartwood-attempt`, access mode `ReadWriteOnce`, 256 MiB each, and no data source |
+| Staging process | A container that never starts while the copy runs: no network, read-only root filesystem, all capabilities dropped except `FOWNER`, `no-new-privileges`, user `0` | Pod `hw-staging-<attempt>` from the worker image by digest: service account `hw-staging` without a mounted token, user and group `10002`, `RuntimeDefault` seccomp, no privilege escalation, all capabilities dropped, read-only root filesystem, CPU and memory limits, only the two claims as volumes, and a ten minute lifetime |
+| Network | `--network=none` | Every NetworkPolicy of the namespace that selects the pod's labels must have no ingress and no egress rule, and together they must cover both directions; otherwise nothing is created |
+| Copy | `docker container cp`, then `chmod -R a+rX` in the container | A tar stream of directories and regular files through `kubectl exec` into `tar` in the pod; files belong to user `10002`, are readable by every user, and keep whether they are executable. The worker image's Python then reports the SHA-256 digest of each claim's tree, over every path, type, permission set, file size and file content, and staging stops unless it equals the digest of the archive that was sent. A top-level `lost+found` directory that the claim's filesystem creates is not compared when the snapshot has no entry of that name and the directory is empty and belongs to user `0` with no permission for other users; any other such entry stops staging |
+| Completion | The container exited with status `0` and kept its identity | The pod kept its identity, is still running, and its container did not restart; then the pod is deleted and its absence is awaited |
+| Identity | Volume and container labels are read back after creation and before removal | Claim and pod labels and UIDs are read back after creation, and the labels again before removal; a deletion request selects by name and by the labels |
+| Read-only use | The worker mounts each volume read-only | The driver configuration names each claim read-only on the volume and on the mount |
+| Removal | No container of the attempt may be listed; then the staging container and the volumes are removed | For up to 90 seconds the Sandbox resource `<workspace>--hw-<first 16 hex characters of the attempt>` and every pod of the attempt must become absent; then the staging pod and the claims are deleted and their absence is awaited |
+
+A pod counts as the attempt's when it has the workload pod's or the supervisor pod's name, the attempt's labels, an owner reference to the attempt's Sandbox resource, or the sandbox identifier in `openshell.ai/boundary-pair` or `openshell.ai/sandbox-id`.
+A failed or unreadable `kubectl` request stops staging, and staging is never repeated for an attempt; revocation removes what was created.
+A missing or unreadable listing is never read as absence.
 
 ### Worker Attempt Ownership
 
@@ -165,6 +237,11 @@ The gateway fences an attempt when it observes an exhausted response budget, a m
 Fencing starts revocation on its own thread, so no control-plane call runs under a session lock or on a transport thread.
 Revocation does not wait for a session command whose worker request is in progress; it waits only for a control-plane launch of the same attempt to return, and is then bounded by the control-plane timeouts: 15 seconds to observe the sandbox, 90 seconds for the delete request, and 90 seconds to observe its absence.
 It deletes the sandbox through the control client connected at launch, stops the forwarder, rechecks the native configuration, requires Docker to report no attempt-owned worker container, and removes the attempt's volumes before the session records `revoked` with its evidence.
+With the Kubernetes driver, a deletion that the sandbox gateway could not complete is sent again, up to five times within the 90 seconds of the delete request, after pauses of 0.5, 1, 2, and 4 seconds.
+Only three answers are retried: an `INTERNAL` error that starts with `delete sandbox failed:`, which includes a concurrent change of the Sandbox resource, `FAILED_PRECONDITION`, which reports a pending operation, and `UNAVAILABLE`.
+Before each retry the sandbox's name, labels, and identity are read again.
+The cluster must then show neither the Sandbox resource nor any pod of the attempt, for which revocation waits up to 90 seconds, before the [claims are removed](#kubernetes-worker-staging).
+Revocation reads the cluster's identity again before that and keeps the attempt fenced when it differs from the launch.
 If revocation fails, the attempt stays fenced and the writer stays owned, and the worker can keep running until a retry succeeds: the managed session retries it, first after 15 seconds and then with the wait doubling up to 10 minutes, until revocation is observed, also after the session's service is closed, and the gateway stop and the next gateway start retry it too.
 A fence is raised only when the gateway observes the condition, so a worker the gateway is not exchanging data with is not detected by this path.
 
@@ -176,6 +253,7 @@ A session whose revocation was not observed (`HW-WORKER-003`) is retried while t
 Until then the gateway caches no service for that session: a read returns its journal and a command is refused, so no command takes the session out of the retry, and the first command after the observed revocation can admit a replacement.
 
 Each attempt's launch intent records stable identities of the sandbox control plane and the container runtime it uses: the registered gateway's name, endpoint, and certificate authority, and the identity the Docker daemon behind the configured socket reports.
+With the Kubernetes driver the second identity is a digest of the API server address and certificate authority in `kubeconfig`, the namespace's name and UID, and the manifest's `workspace`.
 Launch refuses to proceed when either identity changed after preparation.
 Reconciliation observes the infrastructure named by the current deployment manifest only when both identities match the attempt's record; otherwise the attempt stays fenced with `HW-WORKER-002` and nothing is observed or removed, because absence on other infrastructure is not evidence of revocation.
 Attempt records are versioned: records written before launches retained these identities remain readable, name no infrastructure, and are never reconciled against the current one.
@@ -183,6 +261,11 @@ The qualified sandbox gateway answers a creation request with `INVALID_ARGUMENT`
 After any other failed or unanswered creation request, absence of the sandbox is never recorded as `not-created`; reconciliation treats an attempt without a recorded runtime the same way, because the process that received the response has ended.
 The qualified sandbox gateway rejects deletion of a sandbox whose provisioning has not settled, but it does not report a creation request it has not recorded yet, so absence cannot show that such a request will not still create the sandbox.
 The attempt therefore stays fenced and its revocation keeps being retried; a sandbox that appears under the attempt's unique name with its full identity is deleted, and the attempt is recorded as revoked.
+With the Kubernetes driver and a sandbox gateway that reports `openshell.compute.create-rejects-deleted-name`, revocation asks the gateway by deleting the attempt's name with `allow_missing`.
+The answer `ALREADY_ABSENT` records `not-created`, because that gateway rejects a later creation under the name.
+A completed or accepted deletion is followed as the deletion of the sandbox whose identity the gateway returns, and records `revoked`.
+Any other answer keeps the attempt fenced.
+In both cases the cluster must also show no object of the attempt.
 Resolving such an attempt from absence requires a sandbox gateway that rejects or reports later creations under a name whose absence it confirmed.
 The native forwarder runs under a small supervisor in its own process group, which ends the whole group when the gateway's end of a pipe closes, so no forwarder outlives the gateway process, however that process ends.
 OpenShell deletion is name-scoped rather than conditional on a generation; unique attempt names and identity checks do not replace control-plane authorization.
@@ -426,7 +509,8 @@ The application's default lock installs patched OpenHands and OpenShell SDK whee
 `deploy/build-worker-candidate.py --bootstrap` builds them there from pinned upstream revisions, verified by the digest of their extracted source tree, and the reviewed patches in `images/worker/candidate/`, or verifies existing wheels against the digests in `sources.json`.
 The patches add the remote-event and configuration-admission hooks the trust boundary requires; the gateway refuses to construct a managed worker on an SDK without them.
 
-The OpenShell gateway is also built from pinned source with two deletion patches, as version `0.1.8+heartwood.3` with the purpose `qualification-only`; each patch makes the gateway report its behavior as a compute driver capability.
+The OpenShell gateway is also built from pinned source with the deletion patches recorded in `images/worker/candidate/gateway.json`, as version `0.1.9+heartwood.2` with the purpose `qualification-only`; each patch makes the gateway report its behavior as a compute driver capability.
+The build contains the Docker and Kubernetes compute drivers, and each gateway configuration in this repository selects one with `compute_driver`.
 Heartwood ships no production OpenShell gateway: a deployment's gateway is checked only by the capabilities it reports, and it must separately provide the [behavior native qualification depends on](../operate/platform-requirements.md).
 
 Native qualification runs the installed application, worker image, and qualification gateway through the complete boundary and produces commit-bound, verifiable evidence; [Testing and Evidence](testing.md) describes the cases, evidence, and verification.

@@ -27,6 +27,15 @@ from typing import Any
 _CONFIG = Path(__file__).resolve().parents[1] / "images/worker/candidate"
 _MAX_ARCHIVE = 50 * 1024 * 1024
 _MAX_EXTRACTED = 1024 * 1024 * 1024
+# The gateway binary contains both compute drivers. With more than one driver compiled in,
+# a gateway without a `compute_driver` setting selects one by probing its environment, so
+# every gateway configuration this repository writes names its driver.
+_GATEWAY_FEATURES = (
+    "telemetry",
+    "compute-driver-docker",
+    "compute-driver-kubernetes",
+    "vendored-z3",
+)
 
 
 def _digest(data: bytes) -> str:
@@ -313,19 +322,14 @@ def _gateway_version(checkout: Path, version: str) -> None:
     lock.write_text(locked.replace('version = "0.0.0"', f'version = "{version}"'))
 
 
-def _gateway_tests(container: list[str], rust: str, output: Path) -> dict[str, Any]:
-    """Run deletion regressions before packaging, retaining the exact command and log."""
-    command = list(container)
-    command[command.index("--memory") + 1] = "12g"
-    command[command.index("--memory-swap") + 1] = "12g"
-    command.extend(
-        [
-            rust,
-            "cargo",
-            "test",
-            "--locked",
-            "--release",
-            "--package",
+def _gateway_tests(container: list[str], rust: str, output: Path) -> list[dict[str, Any]]:
+    """Run gateway deletion and Kubernetes driver tests before packaging, retaining their logs."""
+    container = list(container)
+    container[container.index("--memory") + 1] = "12g"
+    container[container.index("--memory-swap") + 1] = "12g"
+    suites = {
+        # The deletion tests of `openshell-server`, which include those of its two patches.
+        "gateway": [
             "openshell-server",
             "--lib",
             "--no-default-features",
@@ -338,17 +342,31 @@ def _gateway_tests(container: list[str], rust: str, output: Path) -> dict[str, A
             "delete",
             "--",
             "--test-threads=1",
-        ]
-    )
-    (output / "gateway-test-command.json").write_text(json.dumps(command, indent=2) + "\n")
-    log = output / "gateway-tests.log"
-    print(f"Running gateway deletion regressions; log: {log}", flush=True)
-    with log.open("w") as stream:
-        subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True)
-    result = re.search(r"test result: ok\. (\d+) passed; 0 failed;", log.read_text())
-    if result is None or int(result[1]) == 0:
-        raise ValueError("Gateway deletion tests did not report a nonempty passing suite")
-    return {"command": command, "passed": int(result[1]), "log_sha256": _digest(log.read_bytes())}
+        ],
+        # The Kubernetes driver crate's library tests, which include those of its patch.
+        "kubernetes-driver": ["openshell-driver-kubernetes", "--lib", "--jobs", "1"],
+    }
+    records = []
+    for suite, arguments in suites.items():
+        command = [*container, rust, "cargo", "test", "--locked", "--release", "--package"]
+        command.extend(arguments)
+        (output / f"{suite}-test-command.json").write_text(json.dumps(command, indent=2) + "\n")
+        log = output / f"{suite}-tests.log"
+        print(f"Running {suite} tests before the build; log: {log}", flush=True)
+        with log.open("w") as stream:
+            subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True)
+        result = re.search(r"test result: ok\. (\d+) passed; 0 failed;", log.read_text())
+        if result is None or int(result[1]) == 0:
+            raise ValueError(f"The {suite} tests did not report a nonempty passing suite")
+        records.append(
+            {
+                "suite": suite,
+                "command": command,
+                "passed": int(result[1]),
+                "log_sha256": _digest(log.read_bytes()),
+            }
+        )
+    return records
 
 
 def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> None:
@@ -453,7 +471,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             "openshell-gateway",
             "--no-default-features",
             "--features",
-            "telemetry,compute-driver-docker,vendored-z3",
+            ",".join(_GATEWAY_FEATURES),
             "--jobs",
             "1",
         ]
@@ -479,6 +497,7 @@ def build_gateway(output: Path, cache: Path, *, gateway_tests: bool = False) -> 
             "builder_sha256": builder_digest,
             "architecture": arch,
             "version": manifest["version"],
+            "features": list(_GATEWAY_FEATURES),
             "build": build,
             "tests": tests,
             "source_revision": manifest["source"]["revision"],
@@ -624,7 +643,7 @@ def main() -> None:
     parser.add_argument(
         "--gateway-tests",
         action="store_true",
-        help="Run gateway deletion regressions before building (requires 12 GiB container memory)",
+        help="Run gateway and Kubernetes driver tests first (requires 12 GiB container memory)",
     )
     parser.add_argument("--uv", default="uv", help="Path to the pinned uv executable")
     args = parser.parse_args()

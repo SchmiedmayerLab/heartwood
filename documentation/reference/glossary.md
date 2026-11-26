@@ -135,6 +135,9 @@ SPDX-License-Identifier: MIT
 **kind**
 : Kubernetes in Docker, a tool that runs a Kubernetes cluster in containers; continuous integration uses it for the Kubernetes cluster stage.
 
+**Kubernetes pod**
+: The unit in which a Kubernetes cluster runs one or more containers that share a network identity and volumes; the OpenShell Kubernetes driver runs each sandbox as a workload pod and a supervisor pod.
+
 **Landlock**
 : A Linux security module that lets an unprivileged process restrict its own filesystem access.
 
@@ -212,6 +215,9 @@ SPDX-License-Identifier: MIT
 
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.
+
+**Pod Security level**
+: One of the Kubernetes Pod Security Standards `privileged`, `baseline`, and `restricted`, which a namespace label makes the cluster enforce on every pod created in that namespace.
 
 **Project**
 : The process current directory and its descendants that define the research-file boundary. Managed workers receive selected projections rather than the complete directory.

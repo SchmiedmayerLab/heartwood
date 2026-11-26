@@ -30,24 +30,27 @@ from heartwood.core_adapter.worker_attempts import (
 )
 from heartwood.gateway._deployment import validate_worker_deployment
 from heartwood.gateway._project import ProjectContext
-from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
+from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment, WorkerDeployment
 from heartwood.persistence import read_private_text
 
 # Revocation and cleanup evidence depends on these deletion behaviors of the gateway and its
-# Docker driver: deletion waits for provisioning to settle, and an explicit delete of a sandbox
-# already marked deleting calls the driver again.
+# Docker or Kubernetes driver: deletion waits for provisioning to settle, and an explicit delete
+# of a sandbox already marked deleting calls the driver again.
 REQUIRED_GATEWAY_CAPABILITIES = frozenset(
     {
         "openshell.compute.delete-awaits-provisioning",
         "openshell.compute.delete-retries-deleting",
     }
 )
+# With this behavior, a deletion that finds no sandbox under a name makes the gateway reject a
+# creation under that name, so its answer is evidence that an unresolved creation made nothing.
+ABSENCE_REJECTS_CREATION = "openshell.compute.create-rejects-deleted-name"
 
 
 class NativeWorkerControl:
     """Retain native connection material without selecting ambient gateway credentials."""
 
-    def __init__(self, settings: OpenShellWorkerDeployment, project: ProjectContext) -> None:
+    def __init__(self, settings: WorkerDeployment, project: ProjectContext) -> None:
         """Validate native connection material without opening a control channel."""
         self.settings = settings
         self.project = project
@@ -147,7 +150,7 @@ class NativeWorkerControl:
             missing = REQUIRED_GATEWAY_CAPABILITIES.difference(self.gateway.capabilities)
             detail = (
                 f": version {self.gateway.version} lacks {', '.join(sorted(missing))}"
-                if self.gateway.driver == "openshell/docker"
+                if self.gateway.driver == self.settings.gateway_driver
                 else ""
             )
             raise WorkerGatewayCapabilityError(
@@ -156,7 +159,7 @@ class NativeWorkerControl:
             )
 
     def _gateway_report(self) -> WorkerGatewayReport:
-        """Decide on the one Docker compute driver's negotiated capabilities from the gateway."""
+        """Decide on the one selected compute driver's negotiated capabilities from the gateway."""
         info = self.client.gateway_info()
         drivers = [
             extension
@@ -167,7 +170,7 @@ class NativeWorkerControl:
         capabilities = tuple(driver.supported_capabilities) if driver is not None else ()
         accepted = (
             driver is not None
-            and driver.implementation_name == "openshell/docker"
+            and driver.implementation_name == self.settings.gateway_driver
             and REQUIRED_GATEWAY_CAPABILITIES.issubset(capabilities)
         )
         return WorkerGatewayReport(
@@ -186,6 +189,12 @@ class NativeWorkerControl:
             or policy.process.run_as_user != "10001"
             or policy.process.run_as_group != "10001"
             or not {"/inputs", "/skills"}.issubset(policy.filesystem.read_only)
+            # The Kubernetes driver's own working directory is its `/sandbox` volume, so
+            # the policy must list the worker's working directory as writable.
+            or (
+                isinstance(self.settings, KubernetesWorkerDeployment)
+                and "/workspace" not in policy.filesystem.read_write
+            )
         ):
             raise WorkerAttemptError(
                 "native policy does not match the qualified worker identity and projections"

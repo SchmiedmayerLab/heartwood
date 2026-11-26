@@ -54,6 +54,7 @@ class WorkerControlPlane(_WorkerRecord):
     """Stable identities of the sandbox control plane and container runtime of one launch."""
 
     control_plane_sha256: Digest
+    # The Docker daemon, or the cluster and namespace with the Kubernetes driver.
     container_runtime_sha256: Digest
 
 

@@ -64,7 +64,7 @@ In [`review-outside-effects`](#action-review), these controls are the only limit
 The gateway enforces everything that decides authority, independently of anything the worker reports:
 
 - the deployment manifest's paths, ownership and policy ceiling, before any store opens;
-- both deletion capabilities reported for the sandbox gateway's Docker compute driver, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification);
+- both deletion capabilities reported for the sandbox gateway's one compute driver, which must be the implementation the manifest's `driver` selects, and stops with `HW-WORKER-001` otherwise; this relies on the gateway's self-report and does not verify its behavior, so the operator must still confirm the [gateway behavior behind native qualification](platform-requirements.md#gateway-behavior-behind-native-qualification);
 - outside inspection of the worker container, which rejects an unexpected image, a network other than `none`, privileged mode, any retained capability, a missing `no-new-privileges`, a shared host or container process, IPC, user or cgroup namespace, a device, a bind mount, mounts that expose withheld host paths, missing CPU and memory limits or process limit, and any security option other than `no-new-privileges`, AppArmor `docker-default`, or an SELinux `container_t` type with individual categories;
 - admission of the sandbox's accepted policy hash and process generation against `sandbox_policy_sha256`;
 - worker attempts bound to project, session, image, policy and input-manifest identity, journaled and fenced so that only one attempt can write a session;
@@ -72,6 +72,38 @@ The gateway enforces everything that decides authority, independently of anythin
 - a 120-second deadline per worker request and fixed size limits per response, with a fenced attempt on violation;
 - action review, outside authorization and audit records, which a worker message cannot create or settle; and
 - revocation of a fenced attempt and removal of its volumes, and of attempts left by an earlier gateway process at the next `gateway serve --deployment` start.
+
+The [Kubernetes admission](../architecture/system.md#kubernetes-worker-admission) inspects the pods the OpenShell Kubernetes driver creates, also from outside the worker, and lists its accepted values next to the Docker values.
+It differs from Docker inspection in these points:
+
+- A pod has no network mode.
+  Admission confirms that the driver's two NetworkPolicies exist with the driver's rules.
+  It refuses any other NetworkPolicy of the namespace that selects the workload pod and has a rule.
+  Cluster-wide and plugin-specific policies are not read.
+  The Kubernetes API does not report whether the cluster's network plugin enforces the policies.
+- The process limit is the kubelet's `podPidsLimit`, a node setting that no pod field reports.
+- The cgroup namespace is not reported.
+  Container runtimes on cgroup version 2 give each container a private one.
+- The driver sets no AppArmor profile and no SELinux options, so the node's defaults apply.
+  Admission refuses a pod that sets either, and the pod does not report the profile in effect.
+  The `restricted` Pod Security level is the namespace's label; exemptions configured in the API server and pods created before the label was set are not visible to admission.
+- A persistent volume claim can be backed by a host path.
+  Only the cluster-scoped PersistentVolume shows that, and admission compares the claim names in the pod.
+- CPU and memory limits are compared with the manifest for the `agent` container only.
+  The driver sets none on the init containers and the supervisor pod.
+- Admission reads the pods once.
+  A principal with `pods/ephemeralcontainers`, `pods/exec`, or `pods/attach` in the namespace, or one that can patch pods, can change or enter a pod afterwards.
+- [Staging](../architecture/system.md#kubernetes-worker-staging) runs in a pod, which cannot disable its own network.
+  The gateway requires NetworkPolicies that select the staging pod, cover ingress and egress, and allow nothing, and it relies on the cluster's network plugin to enforce them.
+  Only `networking.k8s.io` NetworkPolicies of the namespace are read; a cluster-wide or plugin-specific policy that allows traffic is not visible to the gateway.
+- The staging pod runs as user `10002` with every capability dropped, where the Docker preparation container runs as user `0` with `FOWNER`.
+  The staged files belong to user `10002`, so the worker, user `10001`, has no write permission on them.
+- Admission does not compare container commands, node placement, or tolerations.
+- The attempt key is a plain environment value in the workload pod and in its Sandbox resource.
+  Every principal that can read them can read the key, as with `docker inspect` on Docker.
+
+The platform must therefore provide an enforcing network plugin, a kubelet process limit, nodes on cgroup version 2 with a default AppArmor or SELinux confinement for containers, and access rules for the sandbox namespace.
+For staging it must also provide, in the sandbox namespace, a service account `hw-staging` without permissions, a storage class `heartwood-attempt`, and NetworkPolicies that deny the staging pods all traffic.
 
 An uncertain revocation keeps the attempt fenced and the session's writer ownership retained until outside reconciliation observes that its resources are gone.
 After a recorded revocation, the next task can start a replacement worker in a new sandbox; it shares no credential, placeholder, conversation memory or workspace file with the revoked worker.

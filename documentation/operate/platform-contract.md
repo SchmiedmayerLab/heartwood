@@ -235,7 +235,7 @@ Required:
 - Provider credentials, signing authority, launch capabilities, management sockets and peer-worker state outside worker access.
 - Authenticated admission bound to project, session, attempt and runtime identity, with a changed generation or configuration fencing the old attempt.
 - Revocation observed outside the worker before replacement or writer release, with reconciliation instead of duplicate execution when creation or deletion is uncertain.
-- A sandbox gateway that provides the [deletion behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification), and reports both deletion capabilities for its Docker compute driver.
+- A sandbox gateway that provides the [deletion behavior native qualification depends on](platform-requirements.md#gateway-behavior-behind-native-qualification), and reports both deletion capabilities for the one compute driver the manifest's `driver` selects.
 
 The reference adapter uses OpenShell on a local Docker engine with the native OpenHands remote conversation, workspace and event contracts.
 OpenShell names, policy objects and control credentials belong to that adapter, not to portable platform messages; another adapter must keep the same authority, lifecycle and evidence properties on its own infrastructure.

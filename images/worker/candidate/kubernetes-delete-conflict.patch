@@ -1,0 +1,155 @@
+diff --git a/crates/openshell-driver-kubernetes/src/driver.rs b/crates/openshell-driver-kubernetes/src/driver.rs
+index e1a4226..092163c 100644
+--- a/crates/openshell-driver-kubernetes/src/driver.rs
++++ b/crates/openshell-driver-kubernetes/src/driver.rs
+@@ -611,6 +611,9 @@ fn admission_error(error: tonic::Status) -> KubernetesDriverError {
+         _ => KubernetesDriverError::Message(error.message().into()),
+     }
+ }
++/// Deletion never reports absence while a Sandbox resource may still exist: create and
++/// delete share the per-sandbox lifecycle gate, and a conflicting delete is an error.
++pub const DELETE_AWAITS_PROVISIONING: &str = "openshell.compute.delete-awaits-provisioning";
+ const SANDBOX_RUNTIME_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+ fn random_sandbox_runtime_token() -> Result<String, KubernetesDriverError> {
+     use std::fmt::Write as _;
+@@ -1324,6 +1327,7 @@ impl KubernetesComputeDriver {
+                 "openshell/kubernetes",
+                 openshell_core::VERSION,
+                 [
++                    DELETE_AWAITS_PROVISIONING.to_string(),
+                     openshell_core::extension_protocol::COMPUTE_UPDATE_SANDBOX_CONFIGURATION
+                         .to_string(),
+                 ],
+@@ -4925,10 +4929,21 @@ impl KubernetesComputeDriver {
+                 }
+                 Ok(true)
+             }
+-            Ok(Err(KubeError::Api(err))) if err.code == 404 || err.code == 409 => {
+-                debug!(sandbox_id = %sandbox_id, "Sandbox not found in Kubernetes (already deleted or replaced)");
++            Ok(Err(KubeError::Api(err))) if err.code == 404 => {
++                debug!(sandbox_id = %sandbox_id, "Sandbox not found in Kubernetes (already deleted)");
+                 Ok(false)
+             }
++            // The delete carries the UID and resourceVersion read by the lookup above.
++            // A conflict means another writer changed or replaced the Sandbox in between,
++            // so the resource may still exist. Report an error, never absence; the caller
++            // retries and the next lookup reads the current resource.
++            Ok(Err(KubeError::Api(err))) if err.code == 409 => {
++                warn!(
++                    sandbox_id = %sandbox_id,
++                    "Sandbox changed during deletion; deletion must be retried"
++                );
++                Err("Sandbox resource changed during deletion; retry deletion".to_string())
++            }
+             Ok(Err(err)) => {
+                 warn!(
+                     sandbox_id = %sandbox_id,
+@@ -14259,6 +14274,87 @@ mod tests {
+         assert!(steps.lock().unwrap().is_empty());
+     }
+ 
++    fn sandbox_delete_steps(response: http::Response<kube::client::Body>) -> Vec<KubeTestStep> {
++        vec![
++            (
++                http::Method::GET,
++                "/apis/agents.x-k8s.io/v1beta1/namespaces/openshell/sandboxes",
++                kube_test_response(
++                    http::StatusCode::OK,
++                    serde_json::json!({
++                        "apiVersion": "agents.x-k8s.io/v1beta1",
++                        "kind": "SandboxList",
++                        "items": [{
++                            "apiVersion": "agents.x-k8s.io/v1beta1",
++                            "kind": "Sandbox",
++                            "metadata": {
++                                "name": "sandbox-cr",
++                                "namespace": "openshell",
++                                "uid": "sandbox-uid",
++                                "resourceVersion": "41"
++                            }
++                        }]
++                    }),
++                ),
++            ),
++            (
++                http::Method::DELETE,
++                "/apis/agents.x-k8s.io/v1beta1/namespaces/openshell/sandboxes/sandbox-cr",
++                response,
++            ),
++        ]
++    }
++
++    #[tokio::test]
++    async fn delete_reports_a_conflict_as_an_error_not_as_absence() {
++        let (driver, steps, bodies) = scripted_driver(
++            KubernetesComputeConfig::default(),
++            sandbox_delete_steps(kube_test_response(
++                http::StatusCode::CONFLICT,
++                serde_json::json!({
++                    "apiVersion": "v1",
++                    "kind": "Status",
++                    "status": "Failure",
++                    "message": "the object has been modified",
++                    "reason": "Conflict",
++                    "code": 409
++                }),
++            )),
++        );
++        driver
++            .sandbox_api_version
++            .set(SANDBOX_VERSION_V1BETA1)
++            .expect("set test Sandbox API version");
++
++        let error = driver
++            .delete_sandbox("sandbox-1")
++            .await
++            .expect_err("a conflicting delete must not report absence");
++
++        assert!(error.contains("retry deletion"), "{error}");
++        assert!(steps.lock().unwrap().is_empty());
++        // The conflict is only meaningful because the delete is conditional.
++        assert_eq!(
++            bodies.lock().unwrap()[0]["preconditions"],
++            serde_json::json!({"resourceVersion": "41", "uid": "sandbox-uid"})
++        );
++    }
++
++    #[tokio::test]
++    async fn delete_reports_a_missing_sandbox_as_absent() {
++        let (driver, steps, _) = scripted_driver(
++            KubernetesComputeConfig::default(),
++            sandbox_delete_steps(kube_test_not_found("sandboxes", "sandbox-cr")),
++        );
++        driver
++            .sandbox_api_version
++            .set(SANDBOX_VERSION_V1BETA1)
++            .expect("set test Sandbox API version");
++
++        assert_eq!(driver.delete_sandbox("sandbox-1").await, Ok(false));
++        assert!(steps.lock().unwrap().is_empty());
++    }
++
+     #[test]
+     fn namespace_owned_with_correct_labels() {
+         let labels = BTreeMap::from([
+@@ -14343,6 +14439,20 @@ mod tests {
+         assert!(gpu.count_selection_supported);
+     }
+ 
++    #[tokio::test]
++    async fn capabilities_report_delete_awaiting_provisioning() {
++        let driver = KubernetesComputeDriver::new_for_test(KubernetesComputeConfig::default());
++        let capabilities = driver.capabilities().unwrap();
++        assert!(
++            capabilities
++                .extension
++                .unwrap()
++                .supported_capabilities
++                .iter()
++                .any(|capability| capability == DELETE_AWAITS_PROVISIONING)
++        );
++    }
++
+     #[test]
+     fn sandbox_runtime_control_availability_requires_a_ready_pod() {
+         let mut pod = Pod::default();

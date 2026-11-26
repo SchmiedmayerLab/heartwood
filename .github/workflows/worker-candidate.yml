@@ -73,8 +73,7 @@ jobs:
           path: test-results/gateway-cache
           key: >-
             gateway-linux-amd64-${{ hashFiles('images/worker/candidate/gateway.json',
-            'images/worker/candidate/docker-provisioning.patch',
-            'images/worker/candidate/gateway-delete-retry.patch') }}
+            'images/worker/candidate/*.patch', 'deploy/build-worker-candidate.py') }}
       - name: Build from verified upstream inputs
         run: >-
           uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py
@@ -91,6 +90,8 @@ jobs:
             test-results/gateway-candidate/gateway-build-record.json
             test-results/gateway-candidate/gateway-test-command.json
             test-results/gateway-candidate/gateway-tests.log
+            test-results/gateway-candidate/kubernetes-driver-test-command.json
+            test-results/gateway-candidate/kubernetes-driver-tests.log
           include-hidden-files: true
           retention-days: 14
 

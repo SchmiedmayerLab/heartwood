@@ -44,7 +44,11 @@ from heartwood.gateway.checkpoint_deployment import (
     CheckpointEvidenceDeployment,
     validate_evidence_deployment,
 )
-from heartwood.gateway.worker_deployment import OpenShellWorkerDeployment
+from heartwood.gateway.worker_deployment import (
+    OpenShellWorkerDeployment,
+    WorkerDeployment,
+    worker_deployment_from_mapping,
+)
 from heartwood.model_policy import (
     PolicyInputError,
     inherit_absent_fields,
@@ -89,7 +93,7 @@ class ProjectDeployment:
 
     project: ProjectContext
     policy: PolicyProfile
-    worker: OpenShellWorkerDeployment | None = None
+    worker: WorkerDeployment | None = None
     evidence: CheckpointEvidenceDeployment | None = None
     requirements: DeploymentRequirements = field(default_factory=DeploymentRequirements)
     # Platform connections, with any model declarations, that the manifest supplies.
@@ -226,9 +230,7 @@ def _read_manifest(
     if resolved == project.state_root or project.state_root in resolved.parents:
         raise ProjectStateError("deployment manifest must remain separate from project state")
     requirements = DeploymentRequirements.model_validate(record.get("requirements", {}))
-    worker = (
-        OpenShellWorkerDeployment.model_validate(record["worker"]) if "worker" in record else None
-    )
+    worker = worker_deployment_from_mapping(record["worker"]) if "worker" in record else None
     evidence = (
         CheckpointEvidenceDeployment.model_validate(record["evidence"])
         if "evidence" in record
@@ -398,13 +400,39 @@ def _validate_trusted_parents(directory: Path) -> None:
             raise ProjectStateError("deployment paths have a writable parent directory")
 
 
-def validate_worker_deployment(worker: OpenShellWorkerDeployment, project: ProjectContext) -> None:
+def validate_worker_deployment(worker: WorkerDeployment, project: ProjectContext) -> None:
     """Reject workspace authority and changed policy before native clients are constructed."""
-    for path in (worker.openshell_cli, worker.docker_cli, worker.policy_path):
+    if isinstance(worker, OpenShellWorkerDeployment):
+        driver_cli = worker.docker_cli
+    else:
+        driver_cli = worker.kubectl_cli
+    for path in (worker.openshell_cli, driver_cli, worker.policy_path):
         validate_operator_file(path, project)
-    for binary in (worker.openshell_cli, worker.docker_cli):
+    for binary in (worker.openshell_cli, driver_cli):
         if not os.access(binary, os.X_OK):
             raise ProjectStateError("native worker tools must be executable")
+    if isinstance(worker, OpenShellWorkerDeployment):
+        _validate_docker_socket(worker, project)
+    else:
+        # The cluster credential may be embedded in this file or referenced from it.
+        validate_operator_file(worker.kubeconfig, project)
+        if stat.S_IMODE(worker.kubeconfig.stat().st_mode) & 0o077:
+            raise ProjectStateError("Kubernetes client configuration requires owner-only access")
+    home = worker.native_config_home
+    _validate_operator_location(home, project)
+    _validate_trusted_parents(home)
+    gateway = home / "openshell" / "gateways" / worker.gateway
+    for name in ("metadata.json", "mtls/ca.crt", "mtls/tls.crt", "mtls/tls.key"):
+        path = gateway / name
+        validate_operator_file(path, project)
+        if name.endswith(".key") and stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise ProjectStateError("native gateway keys require owner-only access")
+    content = read_private_text(worker.policy_path, max_bytes=64 * 1024)
+    if hashlib.sha256(content.encode()).hexdigest() != worker.policy_file_sha256:
+        raise ProjectStateError("native worker policy changed after qualification")
+
+
+def _validate_docker_socket(worker: OpenShellWorkerDeployment, project: ProjectContext) -> None:
     socket_path = Path(urlsplit(worker.docker_host).path)
     _validate_operator_location(socket_path, project)
     _validate_trusted_parents(socket_path.parent)
@@ -420,18 +448,6 @@ def validate_worker_deployment(worker: OpenShellWorkerDeployment, project: Proje
         or (socket_metadata.st_mode & stat.S_IWGRP and worker.docker_socket_group is None)
     ):
         raise ProjectStateError("native Docker access requires an operator-owned local socket")
-    home = worker.native_config_home
-    _validate_operator_location(home, project)
-    _validate_trusted_parents(home)
-    gateway = home / "openshell" / "gateways" / worker.gateway
-    for name in ("metadata.json", "mtls/ca.crt", "mtls/tls.crt", "mtls/tls.key"):
-        path = gateway / name
-        validate_operator_file(path, project)
-        if name.endswith(".key") and stat.S_IMODE(path.stat().st_mode) & 0o077:
-            raise ProjectStateError("native gateway keys require owner-only access")
-    content = read_private_text(worker.policy_path, max_bytes=64 * 1024)
-    if hashlib.sha256(content.encode()).hexdigest() != worker.policy_file_sha256:
-        raise ProjectStateError("native worker policy changed after qualification")
 
 
 def _validate_operator_location(path: Path, project: ProjectContext) -> None:
