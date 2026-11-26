@@ -219,9 +219,11 @@ class SignIn:
 
     state: Literal["live", "ended", "refused", "provider-unavailable"] = "live"
     issuer: FakeTokenIssuer | None = None
+    attempts: int = 0
 
     def __call__(self, scope: str, audience: str) -> str | None:
         del scope
+        self.attempts += 1
         if self.state == "provider-unavailable":
             raise AccessUnavailableError(502)
         if self.state == "refused":

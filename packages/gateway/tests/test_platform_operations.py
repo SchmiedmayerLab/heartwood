@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -303,7 +304,9 @@ def test_an_expired_review_is_replaced_only_once_the_platform_can_describe_the_c
             item.phase for item in external_action_records(service.session.replay_events()).values()
         ] == ["expired"]
 
+        # The refusal is repeated without a provider request until the interval passes.
         sign_in.state = "live"
+        service.adapter.clock = lambda: time.monotonic() + 11
         service.advance()
         (replacement,) = (
             item
@@ -321,6 +324,43 @@ def test_an_expired_review_is_replaced_only_once_the_platform_can_describe_the_c
         assert _observed(service.record(replacement)) == "queued"
         assert service.jobs.task_count == 1
     assert "HW-OPS-001" not in "\n".join(format_projection_lines(projection))
+
+
+def test_an_identity_refusal_is_asked_again_once_per_interval_not_on_every_read(
+    tmp_path: Path,
+) -> None:
+    sign_in = SignIn()
+    with job_platform(tmp_path, sign_in=sign_in) as service:
+        now = {"value": 1000.0}
+        service.adapter.clock = lambda: now["value"]
+        sign_in.state = "provider-unavailable"
+        attempts = sign_in.attempts
+        assert service.attempt("create_task", CPU) is None
+        assert sign_in.attempts == attempts + 1
+
+        for _ in range(5):
+            service.advance()
+        assert sign_in.attempts == attempts + 1
+        now["value"] += 11
+        service.advance()
+        service.advance()
+        assert sign_in.attempts == attempts + 2
+
+        notices = [
+            event.payload["code"]
+            for event in service.session.replay_events()
+            if event.kind == EventKind.ERROR_RECORDED and "pending_call" in event.payload
+        ]
+        assert notices == ["HW-INGRESS-005"]
+
+        sign_in.state = "live"
+        now["value"] += 11
+        service.advance()
+        (review,) = external_action_records(service.session.replay_events()).values()
+        assert review.phase == "proposed"
+        operation = review.proposal.request.operation
+        assert operation is not None
+        assert operation.proposal is not None
 
 
 def test_a_missing_platform_proposal_cannot_be_approved(tmp_path: Path) -> None:

@@ -696,11 +696,15 @@ class McpOutsideAdapter:
         bound: Sequence[McpBoundTool],
         *,
         planning: PlatformPlanning | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._manager = manager
         self._bound = {item.worker_name: item for item in bound}
         self._planning = planning
+        self.clock = clock
         self.last_reconciled = 0.0
+        # The last identity refusal per service while describing a submission, and when.
+        self._identity_refusals: dict[str, tuple[float, McpServerError]] = {}
         # The last session event whose platform operation records were linked to planning.
         self.linked_sequence = 0
 
@@ -804,17 +808,26 @@ class McpOutsideAdapter:
         )
         if project is None:
             return None
+        service = bound.destination.service_id
+        held = self._identity_refusals.get(service)
+        # Every read proposes pending calls; within an interval after an identity refusal
+        # the refusal is repeated without asking the identity provider again.
+        if held is not None and self.clock() - held[0] < _RECONCILE_INTERVAL_SECONDS:
+            raise _outside_error(held[1])
         try:
             with self._manager.connect(bound.server, bound.destination) as client:
-                return request_proposal(
+                proposal = request_proposal(
                     client, bound.destination, bound.tool.name, project, arguments
                 )
         except McpServerError as error:
             # An identity refusal opens no review, so no review lacks a proposal that the
             # next sign-in could supply; a later read proposes the call again.
             if error.code.startswith("HW-INGRESS-"):
+                self._identity_refusals[service] = (self.clock(), error)
                 raise _outside_error(error) from None
             return None
+        self._identity_refusals.pop(service, None)
+        return proposal
 
     def _estimate(self, proposal: PlatformOperationProposal | None) -> ExternalOperationEstimate:
         if self._planning is None:
