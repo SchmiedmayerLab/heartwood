@@ -161,6 +161,10 @@ Without expanding anything, the review shows:
 - each submitted input by reference, size, and digest, without its bytes;
 - the time until which the review is valid.
 
+For a [platform job](../operate/platform-contract.md#platform-job-operations), the review also shows the platform's description of the job with its runtime profile, resource limits, data scope and results destination, the plan estimate it refers to or why there is none, the platform project context, and that approval is not admission.
+A cancellation names the earlier job it cancels and states that it undoes no completed work or incurred charges.
+After dispatch, each job shows the platform's status, its platform record and any diagnostic among the agent actions.
+
 The browser shows the request or result content directly.
 When it is longer than the 2,000-character preview, the browser marks the preview as truncated and offers all of it under **Complete reviewed proposal prepared by the gateway**; the terminal and notebook print the complete proposal.
 The summary of these reviews comes from the outside-service adapter or the gateway and is labelled **Gateway-provided summary**.

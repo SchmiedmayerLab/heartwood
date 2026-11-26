@@ -23,7 +23,9 @@ from heartwood.schemas._planning_contract import (
     PlanningOverview,
     PlatformAuthorization,
     PlatformEstimate,
+    PlatformOperationCapabilities,
     PlatformOperationObservation,
+    PlatformOperationProposal,
     ResearcherDecision,
     WorkloadPrediction,
 )
@@ -66,6 +68,8 @@ _DRAFT_MODELS: dict[str, type[BaseModel]] = {
     "budget-observation.schema.json": BudgetObservation,
     "platform-authorization.schema.json": PlatformAuthorization,
     "operation-observation.schema.json": PlatformOperationObservation,
+    "operation-proposal.schema.json": PlatformOperationProposal,
+    "operation-capabilities.schema.json": PlatformOperationCapabilities,
     "planning-overview.schema.json": PlanningOverview,
 }
 

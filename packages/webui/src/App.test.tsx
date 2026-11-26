@@ -27,6 +27,7 @@ import {
   genericCapabilities,
   syntheticAction,
   syntheticOutsideOperation,
+  syntheticPlatformJob,
   syntheticEvents,
   syntheticProjection,
 } from "./test/fixtures";
@@ -3667,6 +3668,32 @@ describe("App", () => {
         "approve",
       ]),
     );
+  });
+
+  it("shows a platform job's limits, estimate and admission notice before approval", async () => {
+    const client = new OutsidePendingClient(syntheticPlatformJob());
+    render(<App client={client} initialSessionId="session-test" />);
+
+    const approval = await screen.findByRole("region", {
+      name: "Review outside operation",
+    });
+    const operation = within(approval).getByRole("list", {
+      name: "Platform operation",
+    });
+    for (const line of [
+      "Resource limits: cpu 2 core, duration 1800 s, gpu 1 synthetic-gpu",
+      "Data scope: Project objects drs://data.synthetic.invalid/obj-cohort",
+      "Results destination: Project results prefix results/synthetic/",
+      "Platform project context: launch-synthetic-1",
+    ]) {
+      expect(within(operation).getByText(line)).toBeVisible();
+    }
+    expect(
+      within(operation).getByText(/^Estimate est-synthetic for element batch/u),
+    ).toHaveTextContent("19.8 USD, complete coverage, current when proposed");
+    expect(
+      within(operation).getByText(/^Approval is not admission\./u),
+    ).toBeVisible();
   });
 
   it("states that a long outside result preview is truncated and offers all of it", async () => {

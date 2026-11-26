@@ -360,6 +360,8 @@ def test_discovery_reports_each_tool_with_its_annotations() -> None:
         "create_task": (False, False, True, False),
         "get_task": (True, False, True, False),
         "cancel_task": (False, True, True, False),
+        "describe_operations": (True, False, True, False),
+        "propose_task": (True, False, True, False),
     }
     assert found["create_task"].mcp_tool.input_schema["required"] == [
         "project_id",
@@ -994,7 +996,7 @@ def test_client_tool_from_discovery_runs_nothing_inside_the_conversation(tmp_pat
         server = _server(f"{origin}/mcp", issuer.exchange(audience=JOBS_AUDIENCE))
         with discovered(server) as (_, tools):
             spec = _client_spec(tools["create_task"], "submit_synthetic_job")
-        assert set(spec.parameters["properties"]) == {"name", "command"}
+        assert set(spec.parameters["properties"]) == {"name", "command", "inputs"}
         worker_tools = register_client_tools([spec])
         # The specification the worker conversation carries passes the gateway's admission.
         _admit_client_tools(

@@ -222,9 +222,36 @@ def test_test_output_marks_listing_as_not_authorization() -> None:
             ],
             "resources": {"advertised": True, "support": "unsupported"},
             "prompts": {"advertised": False, "support": "unsupported"},
+            "operations": {
+                "status": "available",
+                "operations": [
+                    {
+                        "tool": "find_records",
+                        "operation": "submit",
+                        "required_permission": "records:search",
+                        "permitted": False,
+                        "listed": True,
+                        "read_only": True,
+                        "consistent": False,
+                    }
+                ],
+                "capabilities": [
+                    {"capability": "gpu-resources", "status": "not-permitted", "reason": "None"},
+                    {"capability": "dataset-attachment", "status": "unavailable", "reason": None},
+                ],
+                "limitations": ["Synthetic \x1b[31mnote"],
+            },
         },
     )
     output = format_mcp_test(result)
+    assert (
+        "  find_records  submit; requires records:search; not permitted; "
+        "differs from the deployment or its read-only hint"
+    ) in output
+    assert "  gpu-resources: not permitted (None)" in output
+    assert "  dataset-attachment: unavailable" in output
+    # Service text is escaped before it reaches the terminal.
+    assert "\x1b" not in output
     assert "not authorized by listing" in output
     assert f"select as find_records={'a' * 64}" in output
     assert '"term"' in output

@@ -20,6 +20,10 @@ jobs:
   native-qualification:
     name: Native Worker Qualification
     uses: ./.github/workflows/worker-candidate.yml
+  # A cluster failure fails this run; it does not block the native evidence attestation.
+  kubernetes-qualification:
+    name: Kubernetes Qualification
+    uses: ./.github/workflows/kubernetes-qualification.yml
   evidence-attestation:
     name: Attest Native Qualification Evidence
     needs: native-qualification

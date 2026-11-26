@@ -735,10 +735,43 @@ export interface McpDestinationResponse {
  * The result of connecting to one server and listing its tools.
  */
 export interface McpServerTestResponse {
+  operations: McpOperationsResponse | null;
   prompts: McpCapabilityResponse;
   resources: McpCapabilityResponse;
   server: McpServerResponse;
   tools: McpDiscoveredToolResponse[];
+}
+/**
+ * What a platform operation service declares; discovery authorizes nothing.
+ */
+export interface McpOperationsResponse {
+  capabilities: McpOptionalCapabilityResponse[];
+  limitations: string[];
+  operations: McpOperationResponse[];
+  status: "available" | "unavailable";
+}
+/**
+ * An optional platform capability; one the service does not declare is unavailable.
+ */
+export interface McpOptionalCapabilityResponse {
+  capability: "gpu-resources" | "dataset-attachment" | "application-discovery";
+  reason: string | null;
+  status: "available" | "not-permitted" | "unavailable";
+}
+/**
+ * One operation a platform service declares, with the permission it requires.
+ *
+ * ``consistent`` is false when the declared operation differs from the role the
+ * deployment gives the tool or from its read-only hint.
+ */
+export interface McpOperationResponse {
+  consistent: boolean;
+  listed: boolean;
+  operation: "submit" | "status" | "cancel" | "proposal";
+  permitted: boolean | null;
+  read_only: boolean | null;
+  required_permission: string;
+  tool: string;
 }
 /**
  * Whether a server advertises a capability Heartwood does not use.

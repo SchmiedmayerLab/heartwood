@@ -12,6 +12,9 @@ SPDX-License-Identifier: MIT
 **Agent**
 : Software that uses a model and tools iteratively to pursue a task rather than returning only one text response.
 
+**Agent Sandbox**
+: A Kubernetes project whose controller creates and manages sandbox pods from Sandbox resources; the OpenShell Kubernetes driver uses it.
+
 **Agent Skills**
 : An open directory format for agent instructions and optional scripts, references, assets, and tool declarations; Heartwood loads it through OpenHands.
 
@@ -35,6 +38,9 @@ SPDX-License-Identifier: MIT
 
 **Authorization Domain**
 : A Terra access restriction that limits a workspace and its data to members of named groups.
+
+**Calico**
+: A Kubernetes network plugin that enforces NetworkPolicy; the Kubernetes cluster stage installs it on kind.
 
 **Candidate build**
 : A reproducible build of worker, application, or sandbox gateway artifacts from pinned upstream sources and reviewed patches, used for native qualification.
@@ -126,6 +132,9 @@ SPDX-License-Identifier: MIT
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
+**kind**
+: Kubernetes in Docker, a tool that runs a Kubernetes cluster in containers; continuous integration uses it for the Kubernetes cluster stage.
+
 **Landlock**
 : A Linux security module that lets an unprivileged process restrict its own filesystem access.
 
@@ -158,6 +167,9 @@ SPDX-License-Identifier: MIT
 
 **Mutual TLS (mTLS)**
 : Transport Layer Security configured so both the client and server authenticate with certificates trusted by the other side.
+
+**NetworkPolicy**
+: A Kubernetes resource that allows pod traffic by label, port and direction; it takes effect only when the cluster's network plugin enforces it.
 
 **OAuth**
 : A standard authorization protocol that lets a user grant account access without giving Heartwood the account password.
@@ -194,6 +206,9 @@ SPDX-License-Identifier: MIT
 
 **Planning service**
 : A platform service that reports budget observations and produces cost estimates for workload predictions; the platform keeps the accounts and decides admission.
+
+**Platform job service**
+: A research MCP server that runs work, such as batch or GPU jobs, which the gateway proposes with the platform's description and estimate, sends after review, reconciles by operation identifier, and can cancel by naming an earlier operation.
 
 **Pilot evaluation**
 : A bounded trial in which a small group of researchers uses one standard research environment so the deployment can record installation, workflow, reproducibility, and support evidence before a wider rollout.

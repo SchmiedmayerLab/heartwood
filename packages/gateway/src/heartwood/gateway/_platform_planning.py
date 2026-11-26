@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from pydantic import BaseModel, ValidationError
 
+from heartwood.core_adapter.external_actions import ExternalOperationEstimate
 from heartwood.gateway._diagnostics import DiagnosticDefinition, diagnostic_for
 from heartwood.persistence import DurableFileError, LockedJsonlStore
 from heartwood.schemas import (
@@ -434,6 +435,89 @@ class PlatformPlanning:
         action review or from the platform; Heartwood checks its links, not its origin.
         """
         self._link(record)
+
+    def estimate(self, estimate_id: str) -> PlatformEstimate | None:
+        """Return a recorded estimate of this launch context by identity."""
+        return next(
+            (
+                item
+                for item in _of(self._entries(), PlatformEstimate)
+                if item.estimate_id == estimate_id
+            ),
+            None,
+        )
+
+    def operation_estimate(self, runtime_profile_ref: str) -> ExternalOperationEstimate:
+        """Locate the batch element and the latest estimate that a platform operation runs.
+
+        The element is the one batch element of the latest revision of each plan that uses
+        the operation's runtime profile. No element, several elements, or no estimate
+        covering the element are reported as a missing estimate with the reason.
+        """
+        entries = self._entries()
+        latest: dict[str, WorkloadPrediction] = {}
+        for prediction in _predictions(entries).values():
+            current = latest.get(prediction.plan.record_id)
+            order = (prediction.plan.revision, prediction.prediction.revision)
+            if current is None or order > (current.plan.revision, current.prediction.revision):
+                latest[prediction.plan.record_id] = prediction
+        candidates = [
+            (prediction, element)
+            for _, prediction in sorted(latest.items())
+            for element in prediction.elements
+            if element.kind == "batch" and element.runtime_profile_ref == runtime_profile_ref
+        ]
+        if len(candidates) != 1:
+            return ExternalOperationEstimate(
+                state="missing",
+                limitation=(
+                    f"No batch element of a current plan revision uses {runtime_profile_ref}."
+                    if not candidates
+                    else f"Several batch elements use {runtime_profile_ref}."
+                )[:512],
+            )
+        prediction, element = candidates[0]
+        covering = [
+            item
+            for item in _of(entries, PlatformEstimate)
+            if _key(item.prediction) == _key(prediction.prediction)
+            and element.element_id in item.covered_element_ids
+        ]
+        estimate = covering[-1] if covering else None
+        component = (
+            None
+            if estimate is None
+            else next(
+                (
+                    item.cost
+                    for item in estimate.element_estimates
+                    if item.included_in_total and item.element_ids == (element.element_id,)
+                ),
+                None,
+            )
+        )
+        return ExternalOperationEstimate(
+            state=(
+                "missing"
+                if estimate is None
+                else "expired"
+                if self.clock() >= estimate.valid_until
+                else "current"
+            ),
+            element_id=element.element_id,
+            plan=prediction.plan,
+            prediction=prediction.prediction,
+            estimate_id=None if estimate is None else estimate.estimate_id,
+            total=None if estimate is None else component or estimate.total,
+            valid_until=None if estimate is None else estimate.valid_until,
+            limitation=(
+                "No estimate covers this plan element."
+                if estimate is None
+                else None
+                if component is not None or estimate.covered_element_ids == (element.element_id,)
+                else "The estimate total covers more than this element."
+            ),
+        )
 
     def projection(self) -> PlanningProjection:
         """Return plans, estimates, budgets and outcomes as of now."""

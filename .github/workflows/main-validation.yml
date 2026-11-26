@@ -41,6 +41,9 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/python.yml
+  reference-platform:
+    name: Reference Platform
+    uses: ./.github/workflows/reference-platform.yml
   secrets:
     name: Secret Scan
     uses: ./.github/workflows/gitleaks.yml
@@ -63,6 +66,7 @@ jobs:
       - gpu-containers
       - native-assets
       - python
+      - reference-platform
       - secrets
       - validation
       - web-ui

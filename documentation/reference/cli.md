@@ -113,7 +113,7 @@ See [Move a Model Into an Offline Environment](../models/offline.md) for the bun
 |---|---|
 | `heartwood services list` | Servers, token state, reviewed tools and the tools enabled for new sessions |
 | `heartwood services add --label TEXT [--token-stdin] [--remember] ID URL` | Add a server at a deployment-approved origin; it stays disabled |
-| `heartwood services test [--token-stdin] [--remember] ID` | Connect and list the server's tools; listing authorizes nothing |
+| `heartwood services test [--token-stdin] [--remember] ID` | Connect and list the server's tools, and for a platform job service its declared operations and optional capabilities; listing authorizes nothing |
 | `heartwood services select [--token-stdin] [--remember] ID [TOOL=SHA256 ...]` | Select tools with the definition digests printed by `services test`; no tool removes the selection |
 | `heartwood services enable ID`, `disable ID` | Offer or stop offering the selected tools to new sessions |
 | `heartwood services disconnect ID` | Remove the server and forget its token; completed remote work is not undone |

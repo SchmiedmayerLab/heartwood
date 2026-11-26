@@ -29,7 +29,7 @@ A schema describes a message; it does not enable a service, authorize a request,
 | [Agent isolation](#agent-isolation) of the complete worker | Current for the OpenShell Docker reference adapter; qualified only against the qualification-only sandbox gateway build |
 | [Controlled data](#controlled-data) controls | Selected read-only inputs current; quarantine and steward-approved release unavailable |
 | [Audit and records](#audit-and-records) | Signed checkpoints and deployment-bound evidence current; signer and records-service qualification is the platform's |
-| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
+| [Platform services](#platform-services) over MCP, outside operations, launch context and budgets | Draft; the content-bound [outside operation](#outside-operation-admission) authorization, [research MCP servers](#research-mcp-servers), [platform job operations](#platform-job-operations) and [planning against platform budgets](#planning-against-platform-budgets) are current, but built-in launchers install no planning service |
 | Hosted per-project gateways with verified OpenID Connect identity | Unavailable |
 | Realtime voice | Unavailable |
 
@@ -285,6 +285,7 @@ Required:
 
 - Expose services over MCP Streamable HTTP with a stable server identity.
 - Describe each tool's purpose, input and output schemas, and required permission; read access never implies permission to allocate resources or attach data.
+  A [platform job service](#platform-job-operations) declares its operations and permissions in `heartwood.platform-operation-capabilities.v1`.
 - Annotate each tool with explicit boolean `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` values.
 - Enforce identity, quotas and dataset entitlements on every call, independently of Heartwood's approval.
 - Accept delegated or platform-held credentials that never reach model context, tool environments or exports.
@@ -298,10 +299,12 @@ A tool that allocates compute, submits work, attaches data or starts an applicat
 Required:
 
 - Before approval, return a proposal with resource limits, expected duration, estimated cost when available, data scope and destination.
+  A platform job service returns `heartwood.platform-operation-proposal.v1`, and Heartwood adds the estimate from its planning state.
 - Accept a caller-supplied operation identifier, scoped to the authorized project and service and bound to the exact proposal; a repeat with the same contents is the same operation, and different contents under the same identifier are a conflict.
 - An estimate or preparation call that persists data, incurs charges or reserves resources follows the normal review and authorization path.
 - Report status by operation identifier, so an uncertain outcome is reconciled rather than resubmitted.
 - Report cancellation as the observed result, without promising rollback.
+  A cancellation is its own operation that names the earlier one by `target_operation_id`.
 - Return a reference that joins the platform's audit record to Heartwood's session audit without copying payloads.
 
 ```mermaid
@@ -509,6 +512,69 @@ A reported balance or estimate never guarantees that the platform admits work, a
 Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
 Cost figures reported by a worker are not planning records.
 
+### Platform Job Operations
+
+A [research MCP destination](#research-mcp-servers) whose manifest entry has an [`operations`](../reference/configuration.md#mcp-destinations) table is a platform job service.
+Each selectable tool at that origin submits work, except the cancellation tool.
+Besides its observation tool, the service provides:
+
+- a read-only capability tool that takes `project_id` and returns `heartwood.platform-operation-capabilities.v1`, with each operation it offers, the permission the platform requires for it, and the optional capabilities `gpu-resources`, `dataset-attachment` and `application-discovery` it offers the project;
+- a read-only proposal tool that takes `project_id`, the submission's `tool` and its `arguments`, and returns `heartwood.platform-operation-proposal.v1` with what the platform would run, its runtime profile, resource limits, data scope and results destination; and
+- optionally a cancellation tool that requires `target_operation_id` besides `project_id` and `operation_id`.
+
+Resource limits state the run time limit as the metric `duration` in seconds, and GPUs as the metric `gpu` with the GPU type as unit and the count as maximum.
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant G as Gateway
+    participant R as Researcher
+    participant S as Job service
+    participant P as Planning state
+    W->>G: Client tool call with job arguments
+    G->>S: Proposal tool with the same arguments
+    S->>G: Platform proposal
+    G->>R: Review with proposal, estimate and launch context
+    R->>G: Approve
+    G->>S: Submission with project_id and operation_id
+    S->>G: Observation, such as queued or denied
+    G->>S: Status tool until the operation finishes
+    G->>P: Reviewed proposal, decision, admission and observations
+```
+
+The gateway does the following:
+
+- **Discovery:** testing the server shows the declared operations with their permissions and whether the project holds them, and each optional capability as available, not permitted or, when the service does not declare it, unavailable.
+  Discovery authorizes nothing, and reading status or proposals is never permission to submit work or attach data.
+- **Proposal:** before review the gateway asks the proposal tool about the worker's exact arguments, which has no effect at the service.
+  The session waits for that answer, at most the destination's `call_timeout_seconds`.
+  The review shows the platform's text as such, with the runtime profile, resource limits, data scope, results destination and launch context.
+  A submission without a usable platform proposal can be reviewed and rejected, but not approved.
+- **Estimate:** the review names the batch element of the latest revision of each recorded plan that uses the proposal's runtime profile, and the latest platform estimate that covers it, with its amount, coverage and validity.
+  No matching element, several, or no covering estimate is shown as a missing estimate with the reason; an estimate past its validity is shown as expired; without a planning service, estimates are shown as not offered.
+- **Binding:** the platform proposal, the estimate reference and the launch context are part of the reviewed proposal and its digest.
+  Other arguments are another call with its own operation identifier and review, so a changed proposal cannot reuse an approval.
+- **Launch context:** with a [planning binding](#planning-against-platform-budgets), every call names the launch context's platform project as `project_id`, and every observation must report its `project_context_id`; dispatch and status reads under another launch context are refused.
+  Without one, calls name the project's identifier, as for other research services.
+- **Admission:** the platform authorizes each submission against identity, quotas, entitlements, budget and policy.
+  A denial after the researcher approved shows the platform's report with HW-PLAN-006.
+  A reported balance or estimate never guarantees admission, and an approval neither reserves funds nor raises a limit.
+- **Status:** a submitted or queued operation is shown as pending, then as running, completed, failed, cancelled or denied.
+  A lost reply or a timeout leaves the outcome unknown until the observation tool reports it, and until then nothing else is proposed to or sent to that service.
+  An identifier the service never received is reported as failed and refused afterwards, so such an operation settles without a second submission.
+- **Cancellation:** the worker names an earlier operation by its identifier.
+  The gateway proposes the cancellation only for an operation this session sent to the same service under the same launch context, shows that operation in the review, and sends `target_operation_id` from its own record.
+  The cancellation has its own operation identifier and observation, which reports what the platform observed, such as a cancelled task or one that had already completed.
+  It undoes no completed work and no incurred charges.
+- **Planning links:** for a submission bound to a plan element, the gateway links the reviewed operation document derived from the proposal, each researcher decision with its session event as audit reference, the platform's admission as reported by the first observation that shows it, and every observation to the plan revision through `PlatformPlanning.link_operation_set` and `link_platform_record`.
+  A failed or unknown observation records no admission, because the platform may never have received the operation.
+  The element's review state then follows the researcher's decision, and its platform state the admission, or no request when there is none.
+- **Projection:** the session projection shows each operation with its platform proposal, estimate, status, platform reference, platform record and diagnostic in the terminal, browser and notebook.
+  The audit records the operation identifier, digest, decision, status, platform record reference and cancellation target without request content.
+
+Heartwood adds no scheduler, accounting, dataset entitlement or agent loop of its own.
+The worker proposes, the researcher decides, and the platform runs and authorizes the work.
+
 ### Failure States
 
 | Condition | The platform returns | Heartwood shows |
@@ -529,7 +595,10 @@ Cost figures reported by a worker are not planning records.
 | Expired estimate | An estimate past its validity time | HW-PLAN-003 |
 | Budget changed after the estimate | A later budget observation with other amounts | HW-PLAN-004 |
 | Partial or unknown estimate coverage | An estimate with limitations | HW-PLAN-005 |
-| Denied operation | A denied or revoked authorization, or a denied operation observation | HW-PLAN-006 |
+| Denied operation | A denied or revoked authorization, or a denied operation observation, also after the researcher approved | HW-PLAN-006 |
+| Submission without a platform proposal | No usable answer from the proposal tool | [HW-OPS-001](../reference/troubleshooting.md#platform-job-operations) |
+| Operation failed | An operation observation with status `failed` | HW-OPS-002 |
+| Lost reply or timeout | No observation for a dispatched operation | HW-OPS-003 |
 
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
@@ -539,7 +608,7 @@ Model setup in the terminal, browser and notebook reports a failed model list wi
 Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
 Planning outcomes appear in the planning projection, and the terminal, browser and notebook show their diagnostics.
-Other platform-operation failures have no runtime presentation because the operation profile is draft.
+Platform job operation states appear with each operation in the session projection; a denied operation there shows HW-PLAN-006 as well.
 
 ### Security Properties
 
@@ -593,6 +662,7 @@ The classes are not an ordered permission hierarchy, an allowance for one class 
 | `launch-context.schema.json`, `budget-observation.schema.json` | Platform project binding and budget observations | Draft |
 | `workload-prediction.schema.json`, `platform-estimate.schema.json` | Predictions and platform estimates with coverage, units and validity | Draft |
 | `operation-set.schema.json`, `researcher-decision.schema.json`, `platform-authorization.schema.json`, `operation-observation.schema.json`, `planning-overview.schema.json` | Reviewed proposals, decisions, platform authorization and observed operations | Draft |
+| `operation-capabilities.schema.json`, `operation-proposal.schema.json` | Operations, permissions and optional capabilities a platform job service declares, and its proposal for a submission | Draft |
 
 The bundle does not export the deployment manifest or the worker profile; [Configuration and State](../reference/configuration.md#deployment-manifest) specifies them.
 
@@ -678,7 +748,7 @@ The fakes hold synthetic data only and are not reference implementations of a pl
 | Token issuer | Exchanged, audience-restricted JWT access tokens with a project claim | Valid, expired, wrong-audience and wrong-project tokens |
 | Data service | MCP tools `list_objects`, `get_object` and `get_access_url`, returning DRS object and access URL fields | A selected object, an unselected object, another project's object, an expired access grant and an unavailable service |
 | Budget service | MCP tools `get_budgets` and `estimate_workload`, returning `heartwood.budget-observation.v1` and `heartwood.platform-estimate.v1` priced from a synthetic price sheet | Allocations changed by other work or an administrator, estimates for a whole plan or for named elements, unsupported workload kinds and unpriced runtime profiles reported as unknown cost, a prediction for another project context and an unavailable service |
-| Job service | MCP tools `create_task`, `get_task` and `cancel_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations | Submission, status, cancellation, a lost reply that reconciles to one task, a conflicting resubmission, a denied GPU request and a task that fails after it started |
+| Job service | MCP tools `create_task`, `get_task`, `cancel_task`, `describe_operations` and `propose_task`, keyed by operation identifier and returning `heartwood.platform-operation-observation.v1` with the TES task identifier as backend reference and the TES state among its limitations, the declared operations, and the proposal for a submission | Submission, status, cancellation of a named operation, status of an identifier the service never received, a lost or delayed reply that reconciles to one task, a conflicting resubmission, a denied GPU request, an exhausted budget, revoked access and a task that fails after it started |
 
 The data, job and budget services verify each token's signature, issuer, audience and expiry before a tool runs, and refuse a token for another project in the tool.
 Their tools carry the four required annotations: submission and cancellation are not read-only, and cancellation is marked destructive.
@@ -734,11 +804,11 @@ A call whose reply is lost or times out is recorded with an unknown outcome.
 The gateway reconciles it through the observation tool, and until then it neither opens review of another call to the same service nor sends one already reviewed.
 An operation reported as submitted, queued or running is observed again until it finishes, and its result release is offered on the next check after that.
 
-Heartwood cancels no remote work.
 Denying a review sends nothing.
 A call still running at the destination's `call_timeout_seconds` is abandoned and recorded with an unknown outcome, and the service may still complete it.
 Pausing the session waits for a call in progress to end.
-The service's own cancel tool can be selected like any other tool, but it receives the new call's `operation_id`, so it cannot name an earlier operation.
+Neither cancels remote work.
+Only a destination with an operation profile offers cancellation, as a reviewed operation that names an earlier one; see [Platform Job Operations](#platform-job-operations).
 
 ### MCP Client Behavior
 

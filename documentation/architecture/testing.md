@@ -30,6 +30,8 @@ Release documentation states the supported contract; run-specific results stay i
 | Supply chain | `pytest` with an ephemeral TUF repository | Skill refresh, offline verification, expiry, rollback, substitution, path confinement, exact-digest approval, and revocation |
 | Container and native smoke | Container smoke and native release workflows | Entrypoints, filesystem layout, no secrets in image layers, offline operation, and installation of the release archive in an empty Ubuntu 24.04 container |
 | Capable-model acceptance | Capable model workflow, optional GPU qualification | Real inference driving the gateway and OpenHands through approval, rejection, replay, and audit export |
+| Reference platform boundary and services | Reference platform workflow | Application packages free of cloud SDKs, cloud infrastructure identifiers and platform code; platform service lint, types and tests |
+| Kubernetes cluster stage | Kubernetes qualification workflow | A kind cluster with Calico and the Agent Sandbox controller; a reachable-connection control and two blocked-connection controls show that the cluster enforces NetworkPolicy |
 | Native qualification | Worker candidate workflow | The installed application, worker image, and qualification gateway across the complete managed worker boundary |
 | Live synthetic validation | Operator run in Terra or Carina | The exact published artifact in the named platform without protected data |
 
@@ -44,8 +46,10 @@ Platform-service tests run the [live endpoint checks](../operate/platform-contra
 
 ## Continuous Integration
 
-Pull-request and main-branch validation both end in the required `Release Candidate Ready` aggregate, which requires every validation workflow, including capable-model acceptance; on pull requests it also requires native worker qualification.
+Pull-request and main-branch validation both end in the required `Release Candidate Ready` aggregate, which requires every validation workflow, including capable-model acceptance; on pull requests it also requires native worker qualification and the Kubernetes cluster stage.
 On a pull request, native qualification and its candidate builds are skipped only when every changed path is under `documentation/` or `.github/` other than the worker candidate and pull-request validation workflows; any other path, including one the selection does not recognize, requires them.
+The Kubernetes cluster stage runs on pull requests that change its inputs and on every main commit.
+The stage fails when a blocked connection does not time out, when the reachable connection fails, or when a blocked pod cannot connect after its policies are deleted.
 On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
 
 Pull-request jobs that build and run candidate code hold no signing or package-write permission; the Python job holds an identity token only to upload coverage to Codecov.
@@ -258,7 +262,7 @@ On the main branch, a separate Native Qualification job, which runs no candidate
 Pull-request, manual, local, and capable-model runs, and manual Native Qualification runs on another branch, are not attested.
 
 Release creation keeps the evidence beyond its artifact retention.
-It locates the successful Native Qualification run of the release commit, downloads its evidence and attestation, verifies both as below, and fails when any of these is missing or does not verify.
+It locates the Native Qualification run of the release commit whose evidence attestation job succeeded, downloads its evidence and attestation, verifies both as below, and fails when any of these is missing or does not verify.
 The release then carries `native-qualification-evidence.tar.gz`, the evidence directory with its `SHA256SUMS`, and `native-qualification-evidence.sigstore.jsonl`, the attestation bundle for that `SHA256SUMS`.
 
 To verify release evidence, check out the release tag and run these commands in a directory holding both assets:

@@ -19,7 +19,13 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from heartwood.core_adapter._facade import ProposedToolCall, pending_action_group
 from heartwood.core_adapter.worker_attempts import WorkerAttemptIntent
-from heartwood.schemas import JsonValue, PlatformOperationObservation
+from heartwood.schemas import (
+    EstimatedCost,
+    JsonValue,
+    PlanningReference,
+    PlatformOperationObservation,
+    PlatformOperationProposal,
+)
 from heartwood.schemas.experiments import Digest, Reference
 from heartwood.session import EventKind, SessionEvent
 
@@ -82,8 +88,71 @@ class ExternalInputReference(_Record):
     size_bytes: int = Field(ge=0, le=_MAX_INPUT_BYTES)
 
 
+def _absent(value: object) -> bool:
+    return value is None
+
+
+class ExternalOperationEstimate(_Record):
+    """The platform estimate a reviewed operation refers to, as recorded when it was proposed.
+
+    ``missing`` means no recorded plan element or estimate matches the operation, and
+    ``not-offered`` that the deployment connects no planning service.
+    """
+
+    state: Literal["current", "expired", "missing", "not-offered"]
+    element_id: Reference | None = None
+    plan: PlanningReference | None = None
+    prediction: PlanningReference | None = None
+    estimate_id: Reference | None = None
+    total: EstimatedCost | None = None
+    valid_until: AwareDatetime | None = None
+    limitation: str | None = Field(default=None, max_length=512)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        located = (self.element_id, self.plan, self.prediction)
+        if any(item is None for item in located) and any(item is not None for item in located):
+            raise ValueError("a plan element needs its plan and prediction revision")
+        estimated = (self.estimate_id, self.total, self.valid_until)
+        if any(item is None for item in estimated) and any(item is not None for item in estimated):
+            raise ValueError("an estimate reference needs its total and validity")
+        if (self.state in {"current", "expired"}) != (self.estimate_id is not None):
+            raise ValueError("only a current or expired estimate has an estimate reference")
+        if self.estimate_id is not None and self.element_id is None:
+            raise ValueError("an estimate reference belongs to a plan element")
+        return self
+
+
+class ExternalOperationReview(_Record):
+    """What a platform operation does, as the platform and the planning state described it.
+
+    A submission carries the platform's proposal, or none when the platform returned
+    none, and the estimate it refers to. A cancellation names its target in the request.
+
+    The serialized review is part of each recorded proposal's digest. A field added here,
+    or to a message it embeds, must be left out when absent, or recorded proposals stop
+    matching their decisions.
+    """
+
+    kind: Literal["submit", "cancel"]
+    proposal: PlatformOperationProposal | None = None
+    estimate: ExternalOperationEstimate | None = None
+
+    @model_validator(mode="after")
+    def _kind(self) -> Self:
+        if self.kind == "cancel" and (self.proposal is not None or self.estimate is not None):
+            raise ValueError("a cancellation carries no proposal or estimate")
+        if self.kind == "submit" and self.estimate is None:
+            raise ValueError("a submission states its estimate, even when there is none")
+        return self
+
+
 class ExternalActionRequest(_Record):
-    """Native operation content resolved from trusted service configuration."""
+    """Native operation content resolved from trusted service configuration.
+
+    The optional fields are left out of the serialized record when absent, so a
+    proposal recorded before they existed keeps its digest.
+    """
 
     service_id: Reference
     tool_name: Reference
@@ -91,6 +160,11 @@ class ExternalActionRequest(_Record):
     summary: str = Field(min_length=1, max_length=512)
     request_json: str = Field(max_length=_MAX_REQUEST_BYTES)
     inputs: tuple[ExternalInputReference, ...] = Field(default=(), max_length=16)
+    # The platform project context the operation runs in; its observations must carry it.
+    project_context_id: Reference | None = Field(default=None, exclude_if=_absent)
+    # The earlier operation a cancellation names, checked against this session's records.
+    target_operation_id: UUID | None = Field(default=None, exclude_if=_absent)
+    operation: ExternalOperationReview | None = Field(default=None, exclude_if=_absent)
 
     @model_validator(mode="after")
     def _content(self) -> Self:
@@ -100,6 +174,10 @@ class ExternalActionRequest(_Record):
             raise ValueError("outside operation input references must be unique")
         if sum(item.size_bytes for item in self.inputs) > _MAX_INPUT_BYTES:
             raise ValueError("outside operation inputs exceed the byte limit")
+        if (self.target_operation_id is not None) != (
+            self.operation is not None and self.operation.kind == "cancel"
+        ):
+            raise ValueError("only a cancellation names a target operation")
         return self
 
 
@@ -216,7 +294,10 @@ class ExternalActionRecord(_Record):
             if (
                 observed.proposal_sha256 != self.proposal.sha256
                 or operation.operation_id != str(self.proposal.operation_id)
-                or operation.project_context_id != str(self.proposal.worker.project_id)
+                or operation.project_context_id
+                != (
+                    self.proposal.request.project_context_id or str(self.proposal.worker.project_id)
+                )
                 or operation.service_id != self.proposal.request.service_id
             ):
                 raise ValueError("outside observation belongs to another operation")
