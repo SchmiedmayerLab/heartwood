@@ -124,6 +124,7 @@ The candidate does not move release or `edge` tags.
 
 Pull-request and main validation run on standard GitHub-hosted runners (`ubuntu-24.04`, `ubuntu-24.04-arm` for ARM images, and `ubuntu-latest` for some checks), with two exceptions.
 Capable-model acceptance runs on the organization's `heartwood-ubuntu-large` hosted runner, because llama.cpp prompt processing on a standard runner misses the qualification deadline; the job requires at least 30 GiB of memory and matches llama.cpp threads to the runner's cores.
+The end-to-end stage of the Kubernetes qualification also runs on it, because a session worker and a batch task together request more CPU than a four-CPU kind node has.
 That runner group is limited to this repository and fork pull requests need approval before their workflows run; keep its label out of every other workflow.
 GPU coding-agent qualification is a manually started workflow on a self-hosted GPU runner.
 GPU image builds start with the `reclaim-runner-disk` action, which removes unused preinstalled toolchains.
