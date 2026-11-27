@@ -884,7 +884,7 @@ class McpOutsideAdapter:
             project_context_id=self._context(),
         )
 
-    def _refused(self, proposal: ExternalActionProposal) -> ExternalActionObservation:
+    def _refused(self, proposal: ExternalActionProposal, reason: str) -> ExternalActionObservation:
         request = proposal.request
         return ExternalActionObservation(
             proposal_sha256=proposal.sha256,
@@ -896,7 +896,7 @@ class McpOutsideAdapter:
                 observed_at=datetime.now(UTC),
                 status="failed",
                 platform_record_ref=f"refusal:{proposal.operation_id}",
-                limitations=(str(json.loads(request.request_json)["refusal"]),),
+                limitations=(reason,),
             ),
         )
 
@@ -976,7 +976,7 @@ class McpOutsideAdapter:
                 raise ExternalActionError("a planning call names its launch context")
             self._project(proposal)
             return
-        if proposal.request.destination == _REFUSED:
+        if _refusal_reason(proposal.request) is not None:
             if not proposal.created_at <= now < proposal.expires_at:
                 raise ExternalActionError("outside proposal is expired")
             self._project(proposal)
@@ -1020,8 +1020,8 @@ class McpOutsideAdapter:
                     operation_id=str(proposal.operation_id),
                 ),
             )
-        if proposal.request.destination == _REFUSED:
-            return self._refused(proposal)
+        if (reason := _refusal_reason(proposal.request)) is not None:
+            return self._refused(proposal, reason)
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
@@ -1057,8 +1057,8 @@ class McpOutsideAdapter:
                     operation_id=str(proposal.operation_id),
                 ),
             )
-        if proposal.request.destination == _REFUSED:
-            return self._refused(proposal)
+        if (reason := _refusal_reason(proposal.request)) is not None:
+            return self._refused(proposal, reason)
         bound = self._tool(proposal.request.tool_name)
         with self._connect(bound) as client:
             operation = self._call(
@@ -1081,7 +1081,7 @@ class McpOutsideAdapter:
             if record.observation is None:
                 raise ExternalActionError("the planning call has no result")
             return canonical_request(record.observation.operation.model_dump_json())
-        if record.proposal.request.destination == _REFUSED and record.observation is not None:
+        if _refusal_reason(record.proposal.request) is not None and record.observation is not None:
             return canonical_request(record.observation.operation.model_dump_json())
         observed = self.observe(record.proposal)
         return canonical_request(observed.operation.model_dump_json())
@@ -1099,7 +1099,7 @@ class McpOutsideAdapter:
             if len(content_json.encode()) > AGENT_RESULT_BYTES:
                 raise ExternalActionError("the planning result exceeds its size limit")
             return
-        if record.proposal.request.destination == _REFUSED:
+        if _refusal_reason(record.proposal.request) is not None:
             return
         bound = self._tool(record.proposal.request.tool_name)
         if self._manager.live_identity(bound) is None:
@@ -1128,7 +1128,26 @@ class McpOutsideAdapter:
 # Fields OpenHands adds to every client tool's schema and keeps in the call's arguments.
 _SDK_FIELDS = frozenset({"summary", "security_risk"})
 # The destination of a research call the gateway refused; a refusal contacts no service.
-_REFUSED = "heartwood-refusal"
+# A server's destination is its URL's host, which `urlsplit` always renders in lower case,
+# so no configured server can name this marker.
+_REFUSED = "Heartwood-Refusal"
+
+
+def _refusal_reason(request: ExternalActionRequest) -> str | None:
+    """Return the reason of a refusal record, or None for a call to a service.
+
+    A request naming the refusal marker must carry exactly the reason, or it is refused.
+    """
+    if request.destination != _REFUSED:
+        return None
+    content = json.loads(request.request_json)
+    if (
+        not isinstance(content, dict)
+        or set(content) != {"refusal"}
+        or not isinstance(content["refusal"], str)
+    ):
+        raise ExternalActionError("a refusal record carries only its reason")
+    return content["refusal"]
 
 
 def _tool_arguments(arguments: dict[str, JsonValue], declared: set[str]) -> dict[str, JsonValue]:

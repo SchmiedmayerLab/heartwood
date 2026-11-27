@@ -48,8 +48,10 @@ from heartwood.core_adapter import (
     TokenDeltaSink,
 )
 from heartwood.core_adapter.external_actions import (
+    ExternalActionDecision,
     ExternalActionError,
     ExternalActionRecord,
+    canonical_request,
     external_action_records,
 )
 from heartwood.core_adapter.external_results import external_result_records
@@ -1051,6 +1053,61 @@ def test_a_refused_call_reaches_the_agent_and_contacts_no_service(
             assert json.loads(release.proposal.content_json)["limitations"] == [reason]
             assert service.catalog.calls == []
             assert service.catalog.operations == {}
+
+
+def test_a_server_named_like_a_refusal_is_called_as_a_service(tmp_path: Path) -> None:
+    """A server at `http://heartwood-refusal/mcp` has the destination `heartwood-refusal`."""
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            proposal = _call(session, worker, adapter).proposal
+            named = proposal.model_copy(
+                update={
+                    "request": proposal.request.model_copy(
+                        update={"destination": "heartwood-refusal"}
+                    )
+                }
+            )
+            now = datetime.now(UTC)
+            decision = ExternalActionDecision(
+                command_id="command",
+                actor_id="researcher",
+                decision="approved",
+                decided_at=now,
+                proposal_sha256=named.sha256,
+            )
+            adapter.check_policy(named, "researcher", now)
+            observed = adapter.submit(named, decision, ())
+            assert observed.operation.status == "completed"
+            assert service.catalog.calls == ["synthetic"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [{"refusal": "reason", "term": "synthetic"}, {"refusal": 5}, {"term": "synthetic"}],
+)
+def test_a_refusal_record_carrying_more_than_its_reason_is_refused(
+    tmp_path: Path, content: dict[str, JsonValue]
+) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            worker.call(tool, {})
+            advance_outside_calls(session, adapter)
+            proposal = _records(session)[-1].proposal
+            altered = proposal.model_copy(
+                update={
+                    "request": proposal.request.model_copy(
+                        update={"request_json": canonical_request(json.dumps(content))}
+                    )
+                }
+            )
+            with pytest.raises(ExternalActionError, match="carries only its reason"):
+                adapter.check_policy(altered, "researcher", datetime.now(UTC))
+            with pytest.raises(ExternalActionError, match="carries only its reason"):
+                adapter.observe(altered)
+            assert service.catalog.calls == []
 
 
 def test_tools_outside_the_session_binding_are_refused(tmp_path: Path) -> None:
