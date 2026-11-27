@@ -306,7 +306,7 @@ def test_an_expired_review_is_replaced_only_once_the_platform_can_describe_the_c
         ] == ["expired"]
 
         # The refusal is repeated without a provider request until the interval passes.
-        sign_in.state = "live"
+        sign_in.sign_in_again()
         service.adapter.clock = lambda: time.monotonic() + 11
         service.advance()
         (replacement,) = (
@@ -375,7 +375,7 @@ def test_a_new_sign_in_ends_the_held_identity_refusal_at_the_next_read(
         service.advance()
         assert external_action_records(service.session.replay_events()) == {}
 
-        sign_in.state = "live"
+        sign_in.sign_in_again()
         attempts = sign_in.attempts
         service.advance()
 
@@ -410,7 +410,7 @@ def test_a_connection_after_the_next_sign_in_ends_the_held_identity_refusal(
         first = service.call("create_task", CPU)
         sign_in.state = "ended"
         assert service.attempt("create_task", CPU) is None
-        sign_in.state = "live"
+        sign_in.sign_in_again()
         # The approval connects with a token within the interval, which ends the hold.
         service.decide(first)
         assert _observed(service.record(first)) == "queued"

@@ -214,6 +214,7 @@ def decide_external_action(
                 EventKind.ERROR_RECORDED,
                 {
                     "reason": "outside operation already has a decision",
+                    "outside_review": True,
                     "affects_lifecycle": False,
                 },
             ),
@@ -331,6 +332,7 @@ def decide_external_result(
                 EventKind.ERROR_RECORDED,
                 {
                     "reason": "outside result release validation failed",
+                    "outside_review": True,
                     "affects_lifecycle": False,
                 },
             ),

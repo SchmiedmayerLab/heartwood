@@ -1953,7 +1953,10 @@ def test_a_bearer_token_is_the_subject_token_only_without_a_browser_sign_in(
 
     # A browser sign-in takes over, and its own service token replaces the earlier one.
     _sign_in(access, provider)
-    assert access.sign_in_revision() == revision + 2
+    # Neither a browser sign-in nor another token while a token is live is a new sign-in.
+    another = provider.token(exp=int(time.time()) + 200)
+    assert access.principal(_bearer(another)) == _ACTOR
+    assert access.sign_in_revision() == revision + 1
     signed_in = _researcher_token(access)
     assert signed_in != bearer
     assert access.service_token("svc-data", "heartwood-data") != from_bearer
@@ -1964,7 +1967,11 @@ def test_a_bearer_token_is_the_subject_token_only_without_a_browser_sign_in(
     vars(access)["_logins"].clear()
     assert _researcher_token(access) is None
     assert access.service_token("svc-data", "heartwood-data") is None
-    for secret in (bearer, short):
+    # A sign-in after none was live is a new one.
+    _sign_in(access, provider)
+    assert access.sign_in_revision() == revision + 2
+    vars(access)["_logins"].clear()
+    for secret in (bearer, short, another):
         assert secret not in repr(access)
         assert secret not in repr(vars(access)["_bearer"])
 

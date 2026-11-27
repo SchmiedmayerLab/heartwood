@@ -222,11 +222,10 @@ class SignIn:
     attempts: int = 0
     revision: int = 0
 
-    def __setattr__(self, name: str, value: object) -> None:
-        # Becoming live again is a new sign-in, as the gateway's identity access counts it.
-        if name == "state" and value == "live" and getattr(self, "state", "live") != "live":
-            object.__setattr__(self, "revision", self.revision + 1)
-        object.__setattr__(self, name, value)
+    def sign_in_again(self) -> None:
+        """Sign in again after the sign-in ended: live, and a new sign-in revision."""
+        self.state = "live"
+        self.revision += 1
 
     def sign_in_revision(self) -> int:
         return self.revision
