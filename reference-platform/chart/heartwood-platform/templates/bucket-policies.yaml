@@ -1,0 +1,103 @@
+{{- /*
+This source file is part of the Heartwood open-source project
+
+SPDX-FileCopyrightText: 2026 Stanford University and the project authors (see CONTRIBUTORS.md)
+
+SPDX-License-Identifier: MIT
+*/ -}}
+
+{{- if .Values.projects }}
+{{- /*
+The grants of each project bucket. The store keeps one policy for each bucket, so one
+writer sets it with every grant: the data service's account reads all objects, and the
+project's job account reads all objects and writes below results/.
+*/ -}}
+{{- $buckets := dict -}}
+{{- range .Values.projects -}}
+{{- $jobs := printf "hw-jobs-%s" .id -}}
+{{- $grants := list (dict "account_file" "/etc/heartwood-store/data/access-key" "actions" (list "s3:GetObject")) (dict "account" $jobs "actions" (list "s3:GetObject")) (dict "account" $jobs "actions" (list "s3:PutObject") "prefix" "results/") -}}
+{{- $_ := set $buckets (printf "hw-project-%s" .id) $grants -}}
+{{- end -}}
+{{- $settings := dict "endpoint" "https://versitygw:7070" "region" "us-east-1" "ca_file" "/etc/platform-ca/ca.crt" "root_access_key_file" "/etc/heartwood-store/root/access-key" "root_secret_key_file" "/etc/heartwood-store/root/secret-key" "buckets" $buckets -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: heartwood-bucket-policies
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  bucket-policies.json: |
+    {{- toPrettyJson $settings | nindent 4 }}
+---
+# Sets the policy of each project bucket once the data and job accounts exist.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: heartwood-bucket-policies
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "heartwood.selector" (dict "context" . "component" "versitygw-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- include "heartwood.podSecurityContext" 65532 | nindent 8 }}
+      containers:
+        - name: policies
+          image: {{ .Values.images.platformServices }}
+          args: [heartwood_platform.common.bucket_policies, /etc/heartwood-store/settings/bucket-policies.json]
+          securityContext:
+            {{- include "heartwood.containerSecurityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/heartwood-store/settings
+              readOnly: true
+            - name: root
+              mountPath: /etc/heartwood-store/root
+              readOnly: true
+            - name: data
+              mountPath: /etc/heartwood-store/data
+              readOnly: true
+            - name: platform-ca
+              mountPath: /etc/platform-ca
+              readOnly: true
+      volumes:
+        - name: settings
+          configMap:
+            name: heartwood-bucket-policies
+        - name: root
+          secret:
+            secretName: versitygw-root
+        # Only the access key: a policy names the account by its key identifier.
+        - name: data
+          secret:
+            secretName: versitygw-data
+            items:
+              - key: access-key
+                path: access-key
+        - name: platform-ca
+          configMap:
+            name: platform-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+{{- end }}

@@ -79,3 +79,76 @@ storageClassName: {{ . }}
 {{- define "heartwood.hostCidr" -}}
 {{- printf "%s/%d" . (ternary 128 32 (contains ":" .)) -}}
 {{- end }}
+
+{{- /*
+The addresses under which pods reach the Kubernetes API server, as a JSON list of
+{cidr, port}. Without configured addresses, the Service address and the endpoints of the
+API server are read from the cluster.
+*/ -}}
+{{- define "heartwood.apiServer" -}}
+{{- $apiServer := .Values.sessions.apiServer -}}
+{{- if not $apiServer -}}
+{{- $service := lookup "v1" "Service" "default" "kubernetes" -}}
+{{- if $service -}}
+{{- $apiServer = append $apiServer (dict "cidr" (include "heartwood.hostCidr" $service.spec.clusterIP) "port" 443) -}}
+{{- end -}}
+{{- $slice := lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "kubernetes" -}}
+{{- if $slice -}}
+{{- range $endpoint := $slice.endpoints -}}
+{{- range $address := $endpoint.addresses -}}
+{{- $apiServer = append $apiServer (dict "cidr" (include "heartwood.hostCidr" $address) "port" (index $slice.ports 0).port) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $apiServer -}}
+{{- fail "sessions.apiServer is empty and the API server addresses cannot be read from the cluster" -}}
+{{- end -}}
+{{- toJson $apiServer -}}
+{{- end }}
+
+{{- /*
+Egress of the Funnel server and workers: DNS and the API server.
+Arguments: context, apiServer (a list of {cidr, port}).
+*/ -}}
+{{- define "heartwood.jobsEgress" -}}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+{{- range .apiServer }}
+- to:
+    - ipBlock:
+        cidr: {{ .cidr }}
+  ports:
+    - protocol: TCP
+      port: {{ int .port }}
+{{- end }}
+{{- end }}
+
+{{- /* The environment of a versitygw admin client with the root account. */ -}}
+{{- define "heartwood.versitygwAdmin" -}}
+- name: ADMIN_ENDPOINT_URL
+  value: https://versitygw:7070
+# The admin client verifies the store against the platform CA alone, mounted here.
+- name: SSL_CERT_FILE
+  value: /etc/platform-ca/ca.crt
+- name: ADMIN_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: versitygw-root
+      key: access-key
+- name: ADMIN_SECRET_KEY
+  valueFrom:
+    secretKeyRef:
+      name: versitygw-root
+      key: secret-key
+{{- end }}

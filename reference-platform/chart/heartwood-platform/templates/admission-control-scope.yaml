@@ -72,8 +72,9 @@ spec:
         && (!('pod-security.kubernetes.io/enforce-version' in object.metadata.labels)
         || object.metadata.labels['pod-security.kubernetes.io/enforce-version'] == 'latest')
         && 'heartwood.platform/session' in object.metadata.labels
-        && 'hw-s-' + object.metadata.labels['heartwood.platform/session'] == object.metadata.name)
-      message: a session namespace carries its session label and the restricted Pod Security label
+        && 'hw-s-' + object.metadata.labels['heartwood.platform/session'] == object.metadata.name
+        && !('heartwood.platform/jobs' in object.metadata.labels))
+      message: a session namespace carries its session label and the restricted Pod Security label, and no jobs label
     - expression: >-
         variables.resource != 'rolebindings'
         || (request.operation in ['CREATE', 'DELETE'] && variables.sessionNamespace

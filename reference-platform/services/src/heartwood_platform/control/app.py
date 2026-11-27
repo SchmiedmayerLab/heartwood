@@ -100,7 +100,7 @@ def create_app(
     ``operators`` accepts the platform operators' service accounts, which may rotate
     project client secrets; without it nobody may. ``contexts`` accepts the platform
     services that read the launch context of a researcher and project, such as the data
-    service for its operation observations.
+    service and the job service for their operation observations.
     """
 
     def handled(endpoint: Callable[[Request], Response]) -> Callable[[Request], Response]:

@@ -51,7 +51,7 @@ by the platform CA for the names of each Service. An existing certificate is kep
 while the CA is kept.
 */ -}}
 {{- $authority := buildCustomCert ($certificate | b64enc) ($key | b64enc) -}}
-{{- $services := list "keycloak" "heartwood-control" "heartwood-data" "versitygw" "litellm" -}}
+{{- $services := list "keycloak" "heartwood-control" "heartwood-data" "versitygw" "litellm" "heartwood-jobs" -}}
 {{- if .Values.inference.syntheticModel.enabled -}}
 {{- $services = append $services "synthetic-model" -}}
 {{- end -}}
@@ -85,6 +85,49 @@ type: kubernetes.io/tls
 data:
   tls.crt: {{ $servingCertificate | b64enc }}
   tls.key: {{ $servingKey | b64enc }}
+{{- end }}
+{{- /*
+The serving certificate of each project's Funnel server, for the names of its Service, and
+the CA certificate for the workers that verify it, in the project's jobs namespace.
+*/ -}}
+{{- range $project := .Values.projects }}
+{{- $namespace := printf "hw-jobs-%s" $project.id -}}
+{{- $servingCertificate := "" -}}
+{{- $servingKey := "" -}}
+{{- $servingExisting := lookup "v1" "Secret" $namespace "funnel-server-tls" -}}
+{{- if and $existing $servingExisting -}}
+{{- $servingCertificate = index $servingExisting.data "tls.crt" | b64dec -}}
+{{- $servingKey = index $servingExisting.data "tls.key" | b64dec -}}
+{{- else -}}
+{{- $qualified := printf "funnel-server.%s" $namespace -}}
+{{- $names := list $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified) -}}
+{{- $serving := genSignedCert $qualified nil $names 825 $authority -}}
+{{- $servingCertificate = $serving.Cert -}}
+{{- $servingKey = $serving.Key -}}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: funnel-server-tls
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $servingCertificate | b64enc }}
+  tls.key: {{ $servingKey | b64enc }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-ca
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "heartwood.labels" $ | nindent 4 }}
+data:
+  ca.crt: |
+    {{- $certificate | nindent 4 }}
 {{- end }}
 {{- /*
 The serving certificate of the Hub's proxy, for the names of its public and API Services

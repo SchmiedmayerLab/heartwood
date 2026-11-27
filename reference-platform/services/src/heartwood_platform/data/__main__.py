@@ -23,12 +23,12 @@ from starlette.applications import Starlette
 
 from heartwood_platform.common.kubernetes import Kubernetes, in_cluster_client
 from heartwood_platform.common.serving import TlsSettings, serve
+from heartwood_platform.common.signing import Credentials
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.data.access import ObjectAccess
 from heartwood_platform.data.app import create_app
 from heartwood_platform.data.catalog import Catalog
 from heartwood_platform.data.catalog_tools import Operations, create_catalog_app
-from heartwood_platform.data.signing import Credentials
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -42,7 +42,8 @@ _BINARIES = (
 )
 _IMAGES = ["--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
 _RUNTIME = "images.modelRuntime=registry.example.test/runtime@sha256:" + "6" * 64
-_IMAGES += ["--set-json", _MODELS, "--set-json", _BINARIES, "--set", _RUNTIME]
+_FUNNEL = "images.funnel=registry.example.test/funnel@sha256:" + "7" * 64
+_IMAGES += ["--set-json", _MODELS, "--set-json", _BINARIES, "--set", _RUNTIME, "--set", _FUNNEL]
 # Without a cluster, Helm cannot read the API server addresses.
 _API_SERVER = ["--set-json", 'sessions.apiServer=[{"cidr":"10.96.0.1/32","port":443}]']
 _IMAGES += _API_SERVER
@@ -73,11 +74,25 @@ def objects(request: pytest.FixtureRequest) -> list[dict[str, Any]]:
     return _render(request.param)
 
 
-def _named(objects: list[dict[str, Any]], kind: str, name: str) -> dict[str, Any]:
+def _named(
+    objects: list[dict[str, Any]], kind: str, name: str, namespace: str | None = None
+) -> dict[str, Any]:
     (found,) = [
-        item for item in objects if item["kind"] == kind and item["metadata"]["name"] == name
+        item
+        for item in objects
+        if item["kind"] == kind
+        and item["metadata"]["name"] == name
+        and (namespace is None or item["metadata"].get("namespace") == namespace)
     ]
     return found
+
+
+def _jobs_namespaces(objects: list[dict[str, Any]]) -> list[str]:
+    return [
+        item["metadata"]["name"]
+        for item in objects
+        if item["kind"] == "Namespace" and item["metadata"]["name"].startswith("hw-jobs-")
+    ]
 
 
 def _pod_specs(objects: list[dict[str, Any]]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -117,10 +132,10 @@ def test_schema_rejects_an_image_without_a_digest() -> None:
 
 def test_pods_meet_the_restricted_pod_security_standard(objects: list[dict[str, Any]]) -> None:
     for name, spec in _pod_specs(objects):
-        # The control and data services and the Hub use their ServiceAccount tokens.
-        assert spec["automountServiceAccountToken"] is (
-            name in {"heartwood-control", "heartwood-data", "hub"}
-        ), name
+        # The control and data services, the Hub and the Funnel servers use their
+        # ServiceAccount tokens.
+        tokens = {"heartwood-control", "heartwood-data", "hub", "funnel-server"}
+        assert spec["automountServiceAccountToken"] is (name in tokens), name
         assert spec["securityContext"]["runAsNonRoot"] is True, name
         assert spec["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}, name
         for container in spec["containers"] + spec.get("initContainers", []):
@@ -147,7 +162,7 @@ def test_fixed_cluster_roles_grant_no_role_management(objects: list[dict[str, An
         "heartwood-control",
         "heartwood-data",
         "heartwood-hub-spawner",
-    }
+    } | ({"funnel-server", "funnel-worker"} if _jobs_namespaces(objects) else set())
     for role in roles:
         for rule in role["rules"]:
             assert "*" not in rule["verbs"] + rule["resources"] + rule["apiGroups"]
@@ -217,7 +232,7 @@ def test_control_service_reads_the_platform_ca_certificate(objects: list[dict[st
     assert volume["configMap"]["items"] == [{"key": "ca.crt", "path": path.name}]
     assert Path(mount["mountPath"]) == path.parent
     assert mount["readOnly"] is True
-    assert "ca.crt" in _named(objects, "ConfigMap", "platform-ca")["data"]
+    assert "ca.crt" in _named(objects, "ConfigMap", "platform-ca", "heartwood-platform")["data"]
 
 
 def test_control_service_reads_the_generated_actor_key(objects: list[dict[str, Any]]) -> None:
@@ -371,6 +386,7 @@ def test_credentials_are_generated_for_each_installation() -> None:
             # The JupyterHub chart's values.yaml key holds its rendered values, which carry
             # no generated credential.
             if key not in {"username", "access-key"}
+            and not key.endswith("-access-key")
             and f"{item['metadata']['name']}/{key}" != "hub/values.yaml"
         }
 
@@ -453,7 +469,8 @@ def test_platform_ca_certificate_is_a_certificate_authority(
         for item in objects
         if item["kind"] == "ConfigMap" and item["metadata"]["name"] == "platform-ca"
     ]
-    assert len(published) == 1
+    # The release namespace and each project's jobs namespace hold the certificate.
+    assert len(published) == 1 + len(_jobs_namespaces(objects))
     for text in published:
         assert text.strip() == certificate.decode().strip()
         assert "PRIVATE KEY" not in text
@@ -649,6 +666,15 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
                         }
                     }
                 },
+                {
+                    "podSelector": {
+                        "matchLabels": {
+                            "app.kubernetes.io/name": "heartwood-platform",
+                            "app.kubernetes.io/instance": "heartwood-platform",
+                            "app.kubernetes.io/component": "jobs",
+                        }
+                    }
+                },
             ],
             "ports": [{"protocol": "TCP", "port": 8443}],
         }
@@ -657,7 +683,7 @@ def test_control_service_configuration_holds_the_registry(objects: list[dict[str
 
 def test_installation_needs_the_api_server_addresses() -> None:
     command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
-    command += ["--set-json", _MODELS, "--set-json", _BINARIES]
+    command += ["--set-json", _MODELS, "--set-json", _BINARIES, "--set", _FUNNEL]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "sessions.apiServer is empty" in result.stderr
@@ -665,7 +691,7 @@ def test_installation_needs_the_api_server_addresses() -> None:
 
 def test_the_model_route_needs_the_programs_of_the_worker_image() -> None:
     command = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED, "--set", _WORKER]
-    command += ["--set-json", _MODELS, "--set", _RUNTIME, *_API_SERVER]
+    command += ["--set-json", _MODELS, "--set", _RUNTIME, "--set", _FUNNEL, *_API_SERVER]
     result = subprocess.run(command, capture_output=True, text=True)
     assert result.returncode != 0
     assert "hub.modelRoute.binaries must name the programs of hub.worker.image" in result.stderr
@@ -676,7 +702,7 @@ def test_the_model_route_needs_the_programs_of_the_worker_image() -> None:
     assert result.returncode != 0
     assert "names /agnhost, the program of the stand-in worker image" in result.stderr
     stand_in = [*_BASE, "--set", _SERVICES, "--set", _GATEWAY, "--set", _HOSTED]
-    stand_in += ["--set-json", _MODELS, "--set", _RUNTIME, *_API_SERVER]
+    stand_in += ["--set-json", _MODELS, "--set", _RUNTIME, "--set", _FUNNEL, *_API_SERVER]
     stand_in += ["--values", str(_CHART / "values-kind.yaml")]
     assert subprocess.run(stand_in, capture_output=True, text=True).returncode == 0
 
@@ -1009,7 +1035,7 @@ def test_the_model_route_refuses_unpriced_models_and_credentials_in_values(
 def _render_kind_route() -> list[dict[str, Any]]:
     """Render the kind values with their own models of the route."""
     images = [*_IMAGES[: _IMAGES.index("--set-json")], "--set-json", _BINARIES]
-    images += ["--set", _RUNTIME, *_API_SERVER]
+    images += ["--set", _RUNTIME, "--set", _FUNNEL, *_API_SERVER]
     output = subprocess.run(
         [*_BASE, *images, "--values", str(_CHART / "values-kind.yaml")],
         check=True,
@@ -1071,7 +1097,7 @@ def test_the_local_model_serves_tls_with_a_key_file_and_no_web_interface() -> No
 
 
 def test_the_local_model_needs_the_runtime_image_and_its_weights() -> None:
-    images = [*_IMAGES[: _IMAGES.index("--set-json")], *_API_SERVER]
+    images = [*_IMAGES[: _IMAGES.index("--set-json")], "--set", _FUNNEL, *_API_SERVER]
     kind = ["--values", str(_CHART / "values-kind.yaml")]
     result = subprocess.run([*_BASE, *images, *kind], capture_output=True, text=True)
     assert result.returncode != 0

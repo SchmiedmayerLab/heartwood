@@ -19,8 +19,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from heartwood_platform.common.signing import Credentials, presign
 from heartwood_platform.data.catalog import Entry
-from heartwood_platform.data.signing import Credentials, presign
 
 # The validity of a URL: a fixed allowance for starting the copy pod, which may include
 # provisioning its volume and pulling its image, plus one second for each MiB at the

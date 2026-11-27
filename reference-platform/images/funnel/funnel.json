@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "version": "0.12.3+heartwood.1",
+  "source": {
+    "repository": "calypr/funnel",
+    "tag": "v0.12.3",
+    "revision": "738ab75a7056321d82cf57d9781d0af5a4433da6",
+    "url": "https://codeload.github.com/calypr/funnel/tar.gz/738ab75a7056321d82cf57d9781d0af5a4433da6",
+    "tree_sha256": "18d8b8ccba0ba451ff5e1fd5c41b1edbfa2de59c493da4b1a52f1d7e3b0cc7fe",
+    "patched_tree_sha256": "bd10c1e5078395909526d6240476ebe4bbaabb75b6eaf1cdc37b817b66d0ac18"
+  },
+  "patches": [
+    {
+      "path": "0001-optional-tls-for-server-listeners-and-rpc-client.patch",
+      "sha256": "96792eb97cbfc9c5d59afca8cea5591e7082ac0297f5a3a72e9794fd69033e47",
+      "purpose": "Optional TLS on the HTTP and gRPC listeners (Server.TLSCertFile, Server.TLSKeyFile) and in the internal gRPC client of workers (RPCClient.TLS, RPCClient.TLSCAFile, RPCClient.TLSServerName). Over TLS a worker sends its credential without FUNNEL_ALLOW_INSECURE_CREDENTIALS; without these settings Funnel behaves as v0.12.3.",
+      "upstream": "https://github.com/calypr/funnel/issues/324",
+      "removal": "A Funnel release that serves TLS on both listeners and lets the internal gRPC client verify a configured CA file without FUNNEL_ALLOW_INSECURE_CREDENTIALS."
+    },
+    {
+      "path": "0002-per-task-worker-credentials.patch",
+      "sha256": "c3ae111d128629d2b51204d35cc3e71fbc1997b9f4246fa4e07f02a4c21a9af5",
+      "purpose": "Per-task worker credentials. The server derives a Basic credential for each task from Server.WorkerCredentialKeyFile and stores it in the immutable Secret funnel-worker-credential-<task>, which the worker template mounts and RPCClient.CredentialFile reads. Such a credential may only get its own task, claim its execution and write its events.",
+      "upstream": null,
+      "removal": "A Funnel release that issues each worker a credential limited to its own task and authorizes GetTask, WriteEvent and ClaimExecution against that task.",
+      "related": "https://github.com/calypr/funnel/issues/1494",
+      "upstream_note": "No upstream issue proposes per-task credentials. The related issue proposes one authorization decision point in the server, which would not bind a credential to a task."
+    }
+  ],
+  "images": {
+    "go": "golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18",
+    "base": "gcr.io/distroless/static-debian13@sha256:1a64f46364620465ef9e9a8f5413757dfdf22695e050bbfd7303eeaf17a59383"
+  },
+  "tests": [
+    "./api/config/...",
+    "./internal/config/...",
+    "./internal/cli/server/...",
+    "./internal/taskcred/...",
+    "./internal/server/...",
+    "./internal/rpcclient/...",
+    "./internal/compute/kubernetes/..."
+  ]
+}

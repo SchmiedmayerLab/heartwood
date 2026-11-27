@@ -19,10 +19,11 @@ It is kept apart from the Heartwood application packages under `packages/`.
 |---|---|
 | `chart/heartwood-platform/` | Helm chart of the platform; `values-kind.yaml` and `values-gke.yaml` hold the cluster-specific values |
 | `cluster/` | kind cluster fixture: configuration, creation and deletion scripts, the network policy controls and the chart installation script |
+| `images/funnel/` | Build of the Funnel image: `funnel.json` with the pinned source and its recorded patches, the patches and the `Dockerfile` |
 | `infrastructure/gke/` | OpenTofu configuration of the GKE cluster; see its [README](infrastructure/gke/README.md) |
 | `services/` | Python project `heartwood-reference-platform` with its own `pyproject.toml` and `uv.lock`; package `heartwood_platform` in `src/`, service and chart template tests in `tests/`, and the `Dockerfile` of the platform services image |
 | `tests/cluster/` | Tests that run against a cluster with the chart installed |
-| `tools/` | `check_cloud_boundary.py`, the cloud boundary check, and `render_openshell.py` with its values file |
+| `tools/` | `check_cloud_boundary.py`, the cloud boundary check, `render_openshell.py` with its values file, and `prepare_funnel.py`, which prepares the Funnel build |
 
 ## Separation Rules
 
@@ -48,7 +49,7 @@ An exception that no longer matches a finding also fails the check.
 
 ## Chart
 
-The chart `chart/heartwood-platform` installs the platform into the namespace `heartwood-platform` and creates the namespace `heartwood-sessions`.
+The chart `chart/heartwood-platform` installs the platform into the namespace `heartwood-platform` and creates the namespace `heartwood-sessions`, and with the Funnel executor one namespace `hw-jobs-<project>` for each project.
 The platform is for synthetic and open data only.
 
 | Component | Content |
@@ -60,11 +61,13 @@ The platform is for synthetic and open data only.
 | Synthetic model | With `inference.syntheticModel.enabled`, a deterministic model behind LiteLLM for tests |
 | Local model | With `inference.localModel.enabled`, `llama-server` from `images.modelRuntime` behind LiteLLM |
 | Data service | One StatefulSet that serves HTTPS on port 8443, with the project data catalog, the DRS read endpoints and the MCP catalog tools |
+| Job service | With `projects`, one StatefulSet that serves HTTPS on port 8443, with the MCP tools of batch tasks, see [Job Service](#job-service) |
+| Job executors | With `jobs.executor` set to `funnel`, one Funnel server from `images.funnel` for each project in `hw-jobs-<project>`, see [Job Executors](#job-executors) |
 | versitygw | S3-compatible object store that serves HTTPS on port 7070, with one bucket `hw-project-<id>` for each entry in `projects` |
 | JupyterHub | The Hub, its HTTPS proxy and the idle culler from the pinned Zero to JupyterHub chart 4.4.5, which start one Heartwood gateway for each researcher and project in `heartwood-sessions` |
-| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `heartwood-data-tls`, `versitygw-tls`, `litellm-tls`, `synthetic-model-tls`, `llama-server-tls` and `proxy-tls` with the serving certificates of those services |
+| Platform certificate authority | Secret `platform-ca` with the key, ConfigMap `platform-ca` with the certificate, which the control service copies into each session namespace and each gateway Secret, and the Secrets `keycloak-tls`, `heartwood-control-tls`, `heartwood-data-tls`, `versitygw-tls`, `litellm-tls`, `heartwood-jobs-tls`, `synthetic-model-tls`, `llama-server-tls` and `proxy-tls` with the serving certificates of those services, and the Secret `funnel-server-tls` of each project's Funnel server |
 | Session roles | Six fixed ClusterRoles for session namespaces, the ServiceAccount and rights of the control service, the ServiceAccount `heartwood-operator`, which identifies platform operators at the control service and has no Kubernetes rights, and the Role `heartwood-hub-spawner` of the Hub in `heartwood-sessions` |
-| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services`, `heartwood-hub-pods` and `heartwood-project-data-copy` |
+| Admission policies | `heartwood-control-scope`, `heartwood-staging-shape`, `heartwood-staging-names`, `heartwood-session-services`, `heartwood-hub-pods`, `heartwood-project-data-copy` and `heartwood-funnel-worker-jobs` |
 | OpenShell objects | `files/openshell-session.json`, the objects of one session namespace |
 
 Every image in `values.yaml` is pinned by digest or has no default, and `values.schema.json` rejects an image reference without a digest.
@@ -135,13 +138,13 @@ A Heartwood gateway reaches its MCP endpoint as the planning service of its `[pl
 | `POST /v1/researchers/{researcher}/projects/{project}/model-key` | Platform operator | A new worker key of the session's model route with the remaining budget, see [Model Route](#model-route) |
 | `POST /v1/projects/{project}/client-secret` | Platform operator | A new secret of the project client, generated by Keycloak and written to the gateway Secrets of the members' sessions; the reply lists the rewritten sessions and those that could not be prepared, see [Recovery and Client Secret Rotation](#recovery-and-client-secret-rotation) |
 | `GET /v1/launch-context` | Heartwood gateway | The launch context of the researcher and project that the token names |
-| `POST /v1/projects/{project}/launch-context` | Platform service | The launch context of the session of the researcher whose subject the JSON body names, `{"subject": ...}`; the data service names it in its operation observations |
+| `POST /v1/projects/{project}/launch-context` | Platform service | The launch context identifier of the session of the researcher whose subject the JSON body names, `{"subject": ...}`, for the data service and the job service; HTTP 403 for a non-member and 404 without a session |
 | `/mcp`, MCP over streamable HTTP | Heartwood gateway | The read-only tools `get_budgets` and `estimate_workload` |
 
 A platform component sends a projected service account token with the audience `heartwood-control`.
 The service verifies it with a TokenReview and accepts the service accounts in `control.serviceCallers`.
 A platform operator sends the same kind of token, and the service accepts it for the rotation only from the service accounts in `control.operatorCallers`.
-A platform service sends the same kind of token for a launch context, and the service accepts it only from the data service's ServiceAccount.
+A platform service sends the same kind of token for a launch context, and the service accepts it only from the ServiceAccounts of the data service and the job service and from the service accounts in `control.contextCallers`.
 A Heartwood gateway sends a Keycloak access token that the project client obtained by token exchange.
 The service verifies its signature, issuer, expiry and type, requires `heartwood-control` as its only audience, and takes the project from the authorized party `hw-proj-<project>` and the researcher from the subject.
 Every request is checked against the registry, and the billing binding of a launch context comes from the registry only.
@@ -216,8 +219,8 @@ The control service sends a projected service account token with the audience `h
 
 A URL is a presigned S3 request of the data service's versitygw account `heartwood-data`, signed for one object and the method `GET`.
 It stays valid for 300 seconds, which covers starting the copy pod, plus one second for each MiB of the object, up to one hour.
-The account reads the objects of every project bucket through a bucket policy and can neither write nor list.
-Its key lives in the Secret `versitygw-data`; the root account of versitygw in `versitygw-root` is used only by versitygw and the bootstrap Jobs.
+The account reads the objects of every project bucket through the bucket policies of [Bucket Policies](#bucket-policies) and can neither write nor list.
+Its key lives in the Secret `versitygw-data`; the root account of versitygw in `versitygw-root` is used only by versitygw and the hook Jobs that create the buckets and accounts, write the objects and set the bucket policies.
 
 The catalog tools follow Heartwood's operation binding for research MCP servers.
 Each takes `project_id` and `operation_id`, requires an exchanged token for `heartwood-data` of a project member, refuses a `project_id` other than the token's project, and returns a `heartwood.platform-operation-observation.v1` that names the launch context of the researcher's session, which the service reads from the control service.
@@ -253,6 +256,115 @@ The gateway's deployment manifest declares it in `[worker.project_data]` with th
 A project without datasets has no project data volume.
 Until they expire, the URLs of a plan are readable by the ServiceAccount `openshell-certgen` of the OpenShell certificate Job, which reads Secrets of the session namespace, and by cluster administrators.
 The admission policy `heartwood-project-data-copy` keeps the label `heartwood.platform/role=project-data-copy`, which admits a pod to versitygw, to the pods that the Job controller creates for the control service's copy Jobs.
+
+### Job Service
+
+The job service, `python -m heartwood_platform.jobs`, runs batch tasks on the TES executor of each project and serves MCP tools that follow the operation profile of the [platform contract](../documentation/operate/platform-contract.md#platform-job-operations).
+A Heartwood gateway calls them with a researcher's token exchanged for the audience `heartwood-jobs`, verified like the control service's tokens.
+The project comes from the token's authorized party, and the service asks the control service for the launch context of the researcher's session in that project, with its own projected service account token.
+A non-member, a member without a session, and a `project_id` other than the token's project are refused, and every observation carries the session's `project_context_id`.
+
+| Tool | Annotations | Result |
+|---|---|---|
+| `describe_operations` | read-only | The operations, the permission each requires, and the GPU capability: available only to projects with a GPU entitlement |
+| `propose_task` | read-only | A `heartwood.platform-operation-proposal.v1` document for `create_task` arguments: limits of CPU cores, memory, disk, duration and GPUs, the runtime profile of the price sheet, the data scope and the results location; nothing is submitted |
+| `create_task` | side effects, idempotent | Submits one task per operation identifier and returns its observation |
+| `get_task` | read-only | The observation of an operation; an identifier that the service never received is reported as failed and refused afterwards |
+| `cancel_task` | side effects, destructive, idempotent | Cancels the queued or running task of `target_operation_id`, as an operation of its own that reports the TES state it observed |
+
+A task runs one container image, which must be one of the task images that the platform lists by digest.
+Its inputs are project objects by DRS identifier `<dataset>.<file>`, read below `/inputs`; its outputs are files below `/outputs`, written to `results/<operation>/<name>` in the project's bucket.
+An identifier `<dataset>.<file>` names the object `datasets/<dataset>/<file>` of the project's bucket, where the data service stores the catalog's objects.
+The service holds one object store account for each project and gives the executor only presigned URLs for single objects.
+It checks that each input exists before it submits the task.
+An input URL expires 300 seconds after the start deadline, and an output URL 300 seconds after the start deadline plus the task's run time limit.
+Task tags may not start with an underscore, which Funnel reads as instructions, or with `heartwood`; the service tags each task with `heartwood-operation` and its operation identifier.
+
+An operation belongs to the researcher who sent it: another member of the project can neither observe nor cancel it.
+A repeated operation identifier with the same arguments returns the existing task, and other arguments or another researcher are a conflict.
+A request outside the project's entitlements or limits is recorded and reported as denied, and no task is created.
+The limits include the GPUs of one task and the number of tasks that may wait or run at once.
+A request with an image that the platform does not run, or with an input that the project does not hold, is denied in the same way.
+An operation's observations carry the launch context that it was received in.
+The platform does not select GPU types, so a request that names one is denied.
+The service records each submission in its SQLite database before it reserves the budget and calls the executor.
+It runs as one replica and serializes the operations of each project.
+When the executor's reply is lost or is a server error, a repetition or the status finds the task by its operation tag and a creation time no earlier than 60 seconds before the record; a task that is not found within 120 seconds is reported as failed.
+A client error from the executor is reported as failed at once.
+At start and then every `reconcile_seconds`, 60 by default, the service lists each project's tasks that may still run and cancels those that no operation recorded, such as a task created around the service with the executor's credential, and those whose operation has ended.
+A proposal whose description or data scope is longer than 8192 characters is refused, because the researcher reviews it in full.
+
+| TES state | Status |
+|---|---|
+| `QUEUED`, `INITIALIZING` | queued |
+| `RUNNING`, `PAUSED`, `CANCELING` | running |
+| `COMPLETE` | completed |
+| `EXECUTOR_ERROR`, `SYSTEM_ERROR`, `PREEMPTED` | failed |
+| `CANCELED` | cancelled |
+| `UNKNOWN` | unknown |
+
+A reported state never moves back to an earlier one.
+The service cancels a task that does not start within the start deadline or runs longer than its run time limit and reports it as failed with the reason.
+A failure carries a fixed explanation: an exit code, a task that ran out of memory, a task killed with exit code 137 without an out-of-memory report, as when its pod is deleted or evicted, an input that could not be downloaded, an output that was not written, an image that could not be pulled, or a lost worker.
+System logs and task output are not passed on, because system logs contain presigned URLs.
+
+The service reserves a project's compute budget through the `JobBudgets` interface, for the task's hard limits at submission, and settles the reservation by its holder, `job/<project>/<operation>`, with the task's run time when the task ends.
+The control service offers no job reservations to other services, so the deployed service reserves nothing and says so in the limitations of its capabilities and proposals.
+
+The control service writes the job service into each hosted gateway's deployment manifest as an `[[mcp_destinations]]` entry with the service identifier `heartwood-jobs`, the selectable tools `create_task` and `cancel_task`, `get_task` as observation tool, the operation profile of `describe_operations`, `propose_task` and `cancel_task`, a call time limit of 60 seconds, the platform CA and the token exchange for `svc-jobs`.
+A researcher adds it as a research service at `https://heartwood-jobs.<release namespace>.svc.cluster.local:8443/mcp` and enables its tools; the gateway then shows each submission and cancellation of a worker as a proposal from `propose_task`, submits it after the researcher approves it, observes it with `get_task`, and releases its result to the worker after a further review.
+
+The executor is reached only through the `TesExecutor` interface, with five operations: service information, create, get, list and cancel.
+The deployed implementation calls a TES 1.1 HTTP API over HTTPS with a CA file and a Basic credential, and sends the colon of `:cancel` encoded.
+
+### Job Executors
+
+The chart value `jobs.executor` selects the executor of the job service; `funnel`, the only value, installs one Funnel server for each project, from `images.funnel`, in the namespace `hw-jobs-<project>`.
+The network policies and the admission policy select pods by the role labels `heartwood.platform/role` `funnel-server`, `funnel-worker` and `funnel-executor`.
+
+| Object in `hw-jobs-<project>` | Content |
+|---|---|
+| Namespace | Pod Security `restricted`, the label `heartwood.platform/jobs` |
+| ResourceQuota `jobs` | `jobs.quota` |
+| Deployment `funnel-server` | UID 65532, read-only root filesystem, BoltDB on the claim `funnel-db`, TLS on both ports with the certificate `funnel-server-tls` that the platform CA signs for the Service's names |
+| Secret `funnel-server-config` | The server's configuration, with the job service's password as the only Basic user, `TaskAccess: OwnerOrAdmin`, `Server.WorkerCredentialKeyFile` and only the HTTP storage backend |
+| Secret `funnel-worker-key` | The key from which the server derives each task's worker credential |
+| ConfigMap `funnel-worker-config` | The worker's configuration: the server's gRPC address, the platform CA and the credential file that the task's Secret provides; it holds no credential. Workers move the files of their tasks with presigned URLs over HTTPS and trust the platform CA alone (`SSL_CERT_FILE`) |
+| ServiceAccounts | `funnel-server` and `funnel-worker` with a token, `funnel-executor` without |
+| Role `funnel-server` | `jobs` `create, list, get, delete`; `persistentvolumeclaims` `create`; `pods` `get, list`; `secrets` `create, delete` |
+| Role `funnel-worker` | `jobs` `create`; `pods` `watch`; `pods/log` `get` |
+| NetworkPolicies | Default deny of ingress and egress; the server receives port 9090 from workers and port 8000 from the job service, and reaches DNS and the API server; workers reach the server's port 9090, the object store, DNS and the API server; executor pods reach nothing |
+
+For each task, the server creates the worker Job from `files/funnel/worker-job.yaml`, the workspace claim `<task>-workspace` and the Secret `funnel-worker-credential-<task>`, which only that worker Job mounts.
+The worker creates the executor Job from `files/funnel/executor-job.yaml`: the task image as the only container, as `funnel-executor` without a token, with `hostUsers: false`, the task's CPU and memory as requests and limits, and the workspace claim.
+The executor template sets no GPU limit and no toleration, so an executor Job requests no GPU.
+Worker and executor run as root in their own user namespaces, without capabilities and without privilege escalation; the server runs as a non-root user.
+
+The ValidatingAdmissionPolicy `heartwood-funnel-worker-jobs` applies to the Jobs that a `funnel-worker` ServiceAccount creates in a jobs namespace.
+A worker's token is bound to its pod, whose name is its task identifier with a suffix, and a Job of that worker must:
+
+- carry exactly the executor labels of that task, apart from the selector labels that the API server adds to its pod template, a name `<task>-<index>`, and no selector of its own;
+- run as `funnel-executor` without a ServiceAccount token, in a user namespace;
+- mount only the claim `<task>-workspace` of that task, and no other volume;
+- have one container, no init or ephemeral containers, no pull secrets, no environment from Secrets or ConfigMaps, and no node, scheduling, runtime class, proc mount or host name of its own;
+- tolerate nothing, except that a Job whose container requests GPUs in the namespace of a project with the GPU entitlement, labeled `heartwood.platform/gpu: "true"`, may tolerate exactly the GPU nodes' taint `nvidia.com/gpu=present:NoSchedule`, with the operator `Exists`, or `Equal` and the value `present`.
+
+A worker cannot change a Job, and each Job runs one pod once, without a pod failure policy and without a restart policy or restart rules of its container.
+The quota bounds the number of Jobs in the namespace and allows GPUs only to a project with the GPU entitlement.
+A worker can read the logs of every pod in its namespace, including the executor logs of other tasks of the same project.
+A session namespace that the control service creates may not carry the jobs label.
+The job service holds the Secret `heartwood-jobs-executors` with its password at each project's server, and `heartwood-jobs-store` with its account `hw-jobs-<project>` at the object store.
+The hook Job `heartwood-jobs-store` creates these accounts, and each account reads its project bucket's objects and writes below `results/` through the bucket policies of [Bucket Policies](#bucket-policies).
+The job service runs as one replica with its records on the claim `data-heartwood-jobs-0` and its certificate `heartwood-jobs-tls`; gateways in the sessions namespace reach it on port 8443.
+It reaches Keycloak for the keys of researchers' tokens, the control service with a projected token of the audience `heartwood-control`, the project servers, and the object store.
+
+### Bucket Policies
+
+versitygw keeps one policy for each bucket, and writing a policy replaces the previous one.
+So one hook Job, `heartwood-bucket-policies`, writes the policy of each project bucket with the statements of every account that reaches it, after the hooks that create the accounts.
+In each bucket `hw-project-<project>`, the data service's account reads every object, and the project's job account `hw-jobs-<project>` reads every object and writes below `results/`.
+The ConfigMap `heartwood-bucket-policies` holds these grants, and `heartwood_platform.common.bucket_policies` writes them with the root account over HTTPS.
+No other Job writes a bucket policy.
 
 ### Session Namespaces
 
@@ -463,14 +575,15 @@ It exists to test the route and is not suited to research tasks.
 
 ### Network Policies
 
-Both namespaces deny ingress by default.
+The namespaces `heartwood-platform` and `heartwood-sessions` deny ingress by default, and each namespace `hw-jobs-<project>` denies ingress and egress apart from the allowances in [Job Executors](#job-executors).
 PostgreSQL accepts connections from Keycloak and LiteLLM.
-Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service and from its bootstrap Job.
-The control service accepts connections from `heartwood-sessions` and from the Hub.
+Keycloak accepts connections from `heartwood-sessions`, from the Hub, from the control service, from the job service and from its bootstrap Job.
+The control service accepts connections from `heartwood-sessions`, from the Hub and from the job service.
 LiteLLM accepts connections on port 4000 from the control service, from the supervisors of session sandboxes and from the gateway pods in `heartwood-sessions`, and the synthetic model and `llama-server` accept connections from LiteLLM.
-versitygw accepts connections from its bootstrap Job, from the data bootstrap Job and from pods with the label `heartwood.platform/role=project-data-copy` in session namespaces.
+versitygw accepts connections from its bootstrap Job, from the hook Jobs `heartwood-jobs-store` and `heartwood-bucket-policies`, from the data bootstrap Job, from the job service, from Funnel workers in namespaces with the label `heartwood.platform/jobs` and from pods with the label `heartwood.platform/role=project-data-copy` in session namespaces.
 Keycloak also accepts connections from the data service.
 The data service accepts connections from `heartwood-sessions` and from the control service, and the control service also accepts connections from the data service.
+The policy `heartwood-jobs` lets the job service accept connections on port 8443 from `heartwood-sessions` only.
 The proxy accepts researchers' HTTPS connections on port 8443 from anywhere and configuration from the Hub on port 8001, and the Hub accepts connections from the proxy.
 A gateway pod accepts connections on port 8888 from the proxy and the Hub, so gateways reach each other only through the proxy, where each gateway verifies its researcher.
 
@@ -534,9 +647,33 @@ uv run python ../tools/render_openshell.py          # writes the file
 uv run python ../tools/render_openshell.py --check  # compares it with a fresh render
 ```
 
+## Funnel Image
+
+The job executor is Funnel, built from the source and the patches that `images/funnel/funnel.json` records.
+The manifest names the release tag, its revision and the archive of that revision.
+GitHub generates revision archives on request and does not keep their bytes stable, so the manifest records `tree_sha256`, the SHA-256 digest of the extracted tree, computed over each path, its kind, its executable bit, the digest of its content and the target of each link.
+`tools/prepare_funnel.py` verifies the source with the same extraction and digest as `deploy/build-worker-candidate.py`: the data filter, bounds on the archive and extracted size, no hard links, and a single root directory whose tree matches the digest.
+It verifies each patch against its SHA-256 digest and applies the patches in order with `git apply`, which refuses a patch whose context does not match, isolated from the caller's git configuration.
+The patched tree must then match `patched_tree_sha256`.
+It writes the patched tree to `OUTPUT/funnel`, where `OUTPUT` is an empty directory and the build context of `images/funnel/Dockerfile`, and with `--image` builds the image.
+With `--test` it first runs the tests of the packages that the patches change.
+The Go modules are verified against the source's `go.sum`, and the build and base images are pinned by digest.
+
+| Patch | Purpose |
+|---|---|
+| `0001-optional-tls-for-server-listeners-and-rpc-client.patch` | TLS on the HTTP and gRPC listeners of the server and in the gRPC client of the workers, verified against a configured CA file; without the settings Funnel behaves as the release |
+| `0002-per-task-worker-credentials.patch` | A credential for each task, derived from a key file of the server and delivered to the task's worker in a Secret that the worker Job mounts; it may read only its own task, claim its execution and write its events |
+
+Each entry of the manifest also names the upstream issue, or the related issue where none exists, and the upstream change that would allow its removal.
+When the pin changes, `prepare_funnel.py --print-tree-digest` prints the digest of the new archive, which is recorded only after it matches a reviewed checkout of the revision.
+
+```bash
+python3 reference-platform/tools/prepare_funnel.py "${TMPDIR:-/tmp}/funnel-context" --image heartwood-funnel:candidate --test
+```
+
 ## Checks
 
-The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check, the offline OpenTofu checks, the platform service checks, the chart template tests and the OpenShell render comparison.
+The [Reference Platform workflow](../.github/workflows/reference-platform.yml) runs the cloud boundary check, the offline OpenTofu checks, the platform service checks, the chart template tests, the OpenShell render comparison, and the Funnel build with the tests of its patched packages.
 To run the same checks locally, with Helm and OpenSSL installed:
 
 ```bash
@@ -569,8 +706,11 @@ docker build --file images/Dockerfile --target hosted-gateway-image --tag heartw
 hosted="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-hosted-gateway:candidate)"
 docker build --file images/Dockerfile --target runtime-image --tag heartwood-runtime:candidate .
 runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-runtime:candidate)"
+python3 reference-platform/tools/prepare_funnel.py "$(mktemp -d)/funnel" --image heartwood-funnel:candidate
+funnel="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-funnel:candidate)"
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
-  --set "images.hostedGateway=${hosted}" --set "images.modelRuntime=${runtime}"
+  --set "images.hostedGateway=${hosted}" --set "images.modelRuntime=${runtime}" \
+  --set "images.funnel=${funnel}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
   --ignore ../tests/cluster/test_hub_spawning.py --ignore ../tests/cluster/test_hosted_recovery.py \
   --ignore ../tests/cluster/test_hosted_worker.py)
@@ -604,6 +744,10 @@ The tests check that the control service refuses the researcher's own token, a t
 With an exchanged token the estimate tool prices a synthetic plan from the chart's price sheet.
 The tests check that it refuses a request without a token for the control service, another project, and the launch context of another project.
 The budget overview shows the chart's allocations and the reservation of each launched session, a launch and a deletion change it, and it answers only for the project of the token.
+`test_tes_contract.py` holds the contract of the TES executor that the job service relies on, using only the executor's URL, CA and credential: a task that reads a presigned input and writes its output completes, a failing command is an executor error with its exit code, a missing input and an output that is not written are system errors, a cancelled task's pods are removed, cancelling a finished task leaves its state, an unknown task does not exist, tasks are listed by tag and state, and states only move forward.
+`test_job_service.py` runs a synthetic batch job and a cancellation through the job service's tools with a researcher's exchanged token, and checks the refusal of another project, a GPU request and a reserved tag.
+It also checks that a task created around the job service is cancelled, that an executor pod has no token, no credential and no network, that a worker credential reaches only its own task, that one project's credential is refused by another project's server, and that sessions do not reach the executor API.
+Requests with a token bound to a worker pod show that the admission policy admits an executor Job of the worker's own task and refuses one of another task, one that mounts another task's claim or a Secret, and one with another ServiceAccount, a token or no user namespace.
 
 ### Worker Qualification
 
@@ -627,7 +771,7 @@ runtime="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-run
 bash reference-platform/cluster/install-chart.sh heartwood --set "images.platformServices=${image}" \
   --set "images.modelRuntime=${runtime}" \
   --set "images.openshellGateway=${gateway}" --set "images.openshellRepository=${openshell}" \
-  --set "images.hostedGateway=${hosted}" --set "hub.worker.image=${worker}" \
+  --set "images.hostedGateway=${hosted}" --set "images.funnel=${funnel}" --set "hub.worker.image=${worker}" \
   --set-json "sessions.stagingImages=${staging}" --set-json "hub.modelRoute.binaries=${interpreter}"
 (cd reference-platform/services && uv run pytest -c pyproject.toml ../tests/cluster \
   --cluster-context kind-heartwood --staging-image "${worker}")

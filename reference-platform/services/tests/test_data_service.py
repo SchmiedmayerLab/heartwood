@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -16,13 +15,13 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 from fakes import ISSUER, SigningKey, TokenReviews
+from heartwood_platform.common.signing import Credentials, presign
 from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.data.access import MAX_SECONDS, ObjectAccess, access_seconds
 from heartwood_platform.data.app import create_app
 from heartwood_platform.data.catalog import Catalog, content_sha256
 from heartwood_platform.data.copy import CopyError, Plan, copy
 from heartwood_platform.data.seed import SeedObject, SeedSettings, seed
-from heartwood_platform.data.signing import Credentials, presign
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 
@@ -376,10 +375,8 @@ def test_copy_refuses_a_plan_whose_objects_do_not_match_its_digest(tmp_path: Pat
         copy(plan, _store(_CONTENT), tmp_path)
 
 
-def test_seeding_writes_each_object_and_a_read_policy_for_the_data_account(
-    tmp_path: Path,
-) -> None:
-    for name, value in {"root-access": "root", "root-secret": "s", "data-access": "data"}.items():
+def test_seeding_writes_each_object_and_no_policy(tmp_path: Path) -> None:
+    for name, value in {"root-access": "root", "root-secret": "s"}.items():
         (tmp_path / name).write_text(value)
     (tmp_path / "object").write_bytes(b"content")
     settings = SeedSettings(
@@ -388,8 +385,6 @@ def test_seeding_writes_each_object_and_a_read_policy_for_the_data_account(
         ca_file=tmp_path / "ca.crt",
         root_access_key_file=tmp_path / "root-access",
         root_secret_key_file=tmp_path / "root-secret",
-        data_access_key_file=tmp_path / "data-access",
-        buckets=("hw-project-demo",),
         objects=(
             SeedObject(
                 bucket="hw-project-demo",
@@ -406,21 +401,11 @@ def test_seeding_writes_each_object_and_a_read_policy_for_the_data_account(
         return httpx.Response(200)
 
     seed(settings, httpx.Client(transport=httpx.MockTransport(handle)), lambda: _NOW)
+    # The bucket policies have their own writer, heartwood_platform.common.bucket_policies.
     assert [(r.method, r.url.path) for r in requests] == [
         ("PUT", "/hw-project-demo/datasets/synthetic-cohort/object"),
-        ("PUT", "/hw-project-demo"),
     ]
     assert requests[0].content == b"content"
-    assert "policy" in requests[1].url.params
-    policy = json.loads(requests[1].content)
-    assert policy["Statement"] == [
-        {
-            "Effect": "Allow",
-            "Principal": {"AWS": ["data"]},
-            "Action": ["s3:GetObject"],
-            "Resource": ["arn:aws:s3:::hw-project-demo/*"],
-        }
-    ]
     (tmp_path / "object").write_bytes(b"changed")
     with pytest.raises(RuntimeError, match="checksum"):
         seed(settings, httpx.Client(transport=httpx.MockTransport(handle)), lambda: _NOW)

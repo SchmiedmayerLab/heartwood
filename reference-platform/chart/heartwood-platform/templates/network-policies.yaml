@@ -64,6 +64,9 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "heartwood.selector" (dict "context" . "component" "control") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 14 }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
@@ -93,11 +96,22 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "heartwood.selector" (dict "context" . "component" "versitygw-bootstrap") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 14 }}
+        # Funnel workers move the files of their tasks with presigned URLs.
+        - namespaceSelector:
+            matchLabels:
+              heartwood.platform/jobs: "true"
+          podSelector:
+            matchLabels:
+              heartwood.platform/role: funnel-worker
       ports:
         - protocol: TCP
           port: 7070
 ---
-# The Hub and the Heartwood gateways call the control service, which verifies every caller.
+# The Hub, the Heartwood gateways and the job service call the control service, which
+# verifies every caller.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -120,6 +134,31 @@ spec:
               app.kubernetes.io/name: jupyterhub
               app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: hub
+        - podSelector:
+            matchLabels:
+              {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+# The Heartwood gateways call the job service, which verifies every caller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: heartwood-jobs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "heartwood.selector" (dict "context" . "component" "jobs") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.sessions.namespace }}
       ports:
         - protocol: TCP
           port: 8443

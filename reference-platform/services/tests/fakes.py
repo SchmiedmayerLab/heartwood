@@ -24,6 +24,7 @@ ISSUER = "https://keycloak.example.test/realms/heartwood"
 AUDIENCE = "heartwood-control"
 HUB = "system:serviceaccount:heartwood-sessions:hub"
 OPERATOR = "system:serviceaccount:heartwood-platform:heartwood-operator"
+JOBS = "system:serviceaccount:heartwood-platform:heartwood-jobs"
 
 
 def _sku_price(sku: str, unit_price: str, pricing_unit: str) -> dict[str, Any]:
@@ -159,6 +160,11 @@ class TokenReviews:
                 "authenticated": True,
                 "audiences": [AUDIENCE],
                 "user": {"username": OPERATOR},
+            },
+            "jobs-token": {
+                "authenticated": True,
+                "audiences": [AUDIENCE],
+                "user": {"username": JOBS},
             },
         }
 
