@@ -48,8 +48,10 @@ from heartwood.core_adapter import (
     TokenDeltaSink,
 )
 from heartwood.core_adapter.external_actions import (
+    ExternalActionDecision,
     ExternalActionError,
     ExternalActionRecord,
+    canonical_request,
     external_action_records,
 )
 from heartwood.core_adapter.external_results import external_result_records
@@ -1012,39 +1014,112 @@ def test_a_tool_that_declares_an_sdk_field_receives_it(tmp_path: Path) -> None:
             assert service.catalog.calls == ["label:Cohort A", "Cohort A"]
 
 
-def test_an_undeclared_argument_beside_the_sdk_fields_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("arguments", "reason"),
+    [
+        (
+            {"term": "synthetic", "summary": "Search", "security_risk": "LOW", "limit": 5},
+            "The call has arguments the reviewed tool does not define",
+        ),
+        (
+            {"term": "synthetic", "project_id": "other-project"},
+            "The call names a field the gateway supplies",
+        ),
+        ({}, "The call is missing arguments the reviewed tool requires"),
+    ],
+)
+def test_a_refused_call_reaches_the_agent_and_contacts_no_service(
+    tmp_path: Path, arguments: dict[str, JsonValue], reason: str
+) -> None:
     with served(tmp_path) as service:
         service.enable()
         with outside_session(tmp_path, service) as (session, worker, adapter):
             (tool,) = adapter.tool_names
-            arguments: dict[str, JsonValue] = {
-                "term": "synthetic",
-                "summary": "Search",
-                "security_risk": "LOW",
-                "limit": 5,
-            }
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, arguments)
             worker.call(tool, arguments)
             advance_outside_calls(session, adapter)
-            assert _records(session) == []
-            assert _tool_arguments(arguments, {"term"}) == {"term": "synthetic", "limit": 5}
+            (record,) = _records(session)
+            # The researcher sees the refusal and its reason; it carries none of the arguments.
+            assert record.proposal.request.summary == (
+                f"Tell the agent its find_records call was refused: {reason}"
+            )
+            assert json.loads(record.proposal.request.request_json) == {"refusal": reason}
+            _decide(session, record, CommandKind.APPROVE)
+            (observed,) = _records(session)
+            assert observed.observation is not None
+            assert observed.observation.operation.status == "failed"
+            assert observed.observation.operation.limitations == (reason,)
+            advance_outside_calls(session, adapter, clock=lambda: 1e9)
+            (release,) = external_result_records(session.replay_events()).values()
+            assert json.loads(release.proposal.content_json)["limitations"] == [reason]
+            assert service.catalog.calls == []
+            assert service.catalog.operations == {}
 
 
-def test_tools_outside_the_session_binding_and_gateway_fields_are_refused(tmp_path: Path) -> None:
+def test_a_server_named_like_a_refusal_is_called_as_a_service(tmp_path: Path) -> None:
+    """A server at `http://heartwood-refusal/mcp` has the destination `heartwood-refusal`."""
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            proposal = _call(session, worker, adapter).proposal
+            named = proposal.model_copy(
+                update={
+                    "request": proposal.request.model_copy(
+                        update={"destination": "heartwood-refusal"}
+                    )
+                }
+            )
+            now = datetime.now(UTC)
+            decision = ExternalActionDecision(
+                command_id="command",
+                actor_id="researcher",
+                decision="approved",
+                decided_at=now,
+                proposal_sha256=named.sha256,
+            )
+            adapter.check_policy(named, "researcher", now)
+            observed = adapter.submit(named, decision, ())
+            assert observed.operation.status == "completed"
+            assert service.catalog.calls == ["synthetic"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [{"refusal": "reason", "term": "synthetic"}, {"refusal": 5}, {"term": "synthetic"}],
+)
+def test_a_refusal_record_carrying_more_than_its_reason_is_refused(
+    tmp_path: Path, content: dict[str, JsonValue]
+) -> None:
     with served(tmp_path) as service:
         service.enable()
         with outside_session(tmp_path, service) as (session, worker, adapter):
             (tool,) = adapter.tool_names
+            worker.call(tool, {})
+            advance_outside_calls(session, adapter)
+            proposal = _records(session)[-1].proposal
+            altered = proposal.model_copy(
+                update={
+                    "request": proposal.request.model_copy(
+                        update={"request_json": canonical_request(json.dumps(content))}
+                    )
+                }
+            )
+            with pytest.raises(ExternalActionError, match="carries only its reason"):
+                adapter.check_policy(altered, "researcher", datetime.now(UTC))
+            with pytest.raises(ExternalActionError, match="carries only its reason"):
+                adapter.observe(altered)
+            assert service.catalog.calls == []
+
+
+def test_tools_outside_the_session_binding_are_refused(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
             with pytest.raises(ExternalActionError):
                 adapter.prepare("catalog__delete_records", {"term": "synthetic"})
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, {"term": "synthetic", "project_id": "other-project"})
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, {})
             worker.call("catalog__delete_records", {"term": "synthetic"})
             advance_outside_calls(session, adapter)
             assert _records(session) == []
+            assert _tool_arguments({"summary": "s", "limit": 5}, {"term"}) == {"limit": 5}
 
 
 def test_a_tool_changed_after_review_is_not_called(tmp_path: Path) -> None:

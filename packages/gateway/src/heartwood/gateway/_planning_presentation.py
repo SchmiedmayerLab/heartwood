@@ -35,6 +35,13 @@ def planning_lines(projection: PlanningProjection) -> tuple[str, ...]:
         lines.append(
             f"Budget service: {services.budgets}; estimate service: {services.estimates}{checked}"
         )
+    tools = projection.agent_tools
+    if tools is not None:
+        lines.append(
+            "Agent planning tools: available"
+            if tools.availability == "available"
+            else f"Agent planning tools: {tools.unavailable_code}: {tools.unavailable_reason}"
+        )
     if not projection.budgets:
         lines.append("Budgets: none observed")
     for budget in projection.budgets:

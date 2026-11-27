@@ -90,7 +90,7 @@ from heartwood.gateway._local_model_lifecycle import LocalModelLifecycle
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
 )
-from heartwood.gateway._mcp_policy import McpDestination
+from heartwood.gateway._mcp_policy import McpDestination, McpServerError
 from heartwood.gateway._mcp_servers import (
     McpOutsideAdapter,
     McpServerManager,
@@ -572,6 +572,23 @@ class SessionGateway:
                 "Research MCP servers and another outside service cannot share a gateway"
             )
         self._external_actions_factory = external_actions_factory
+        # Worker sessions receive planning tools only when no other outside service shares
+        # the gateway, and the planning projection reports the same condition. Research
+        # services report their own availability from ``worker_available`` below.
+        self._agent_tool_sessions = (
+            worker_plan_factory is not None and external_actions_factory is None
+        )
+        planning_tools_unavailable: McpServerError | None = None
+        if worker_plan_factory is None:
+            planning_tools_unavailable = McpServerError(
+                "mcp-worker-required", "planning tools run only in isolated worker sessions"
+            )
+        elif external_actions_factory is not None:
+            planning_tools_unavailable = McpServerError(
+                "mcp-planning-outside-service",
+                "planning tools are not offered while the embedding supplies another outside "
+                "service",
+            )
         if platform_planning is not None and self.project.protected_state is None:
             raise ValueError("Platform planning requires protected state")
         self._planning = (
@@ -580,6 +597,7 @@ class SessionGateway:
                 journal_path=self.project.state_root / "planning.jsonl",
                 contains_file=self.project.contains,
                 run_ids=lambda: {str(run.run_id) for run in self.experiment_records().runs},
+                agent_tools_unavailable=planning_tools_unavailable,
             )
             if platform_planning is not None
             else None
@@ -2682,7 +2700,7 @@ class SessionGateway:
             return worker.context()
 
         mcp_adapter: McpOutsideAdapter | None = None
-        if self._worker_plan_factory is not None and self._external_actions_factory is None:
+        if self._agent_tool_sessions:
             # Worker sessions receive research service tools, and planning tools when the
             # deployment offers planning; both run through outside review.
             bound = self.mcp_servers.bound_tools()

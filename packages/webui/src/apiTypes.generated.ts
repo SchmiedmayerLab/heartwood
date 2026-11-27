@@ -1083,6 +1083,10 @@ export interface ExperimentEvidence {
  */
 export interface PlanningProjection {
   /**
+   * Agent planning tool availability; absent when not offered.
+   */
+  agent_tools?: PlanningAgentTools | null;
+  /**
    * The latest observation of each platform budget.
    */
   budgets?: BudgetObservation[];
@@ -1095,6 +1099,14 @@ export interface PlanningProjection {
   plans?: PlanProjection[];
   schema_version?: "heartwood.planning-projection.v1";
   services?: PlanningServices | null;
+}
+/**
+ * Whether a session's agent can call the planning tools, reported like research services.
+ */
+export interface PlanningAgentTools {
+  availability: "available" | "unavailable";
+  unavailable_code?: string | null;
+  unavailable_reason?: string | null;
 }
 /**
  * Platform-reported snapshot, not a local ledger or a guarantee of future availability.

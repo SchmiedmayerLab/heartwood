@@ -550,7 +550,9 @@ A reported balance or estimate never guarantees that the platform admits work, a
 Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
 Cost figures reported by a worker are not planning records.
 
-A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one:
+A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one.
+An embedding that supplies its own outside service gives no session planning tools.
+The planning projection reports them in `agent_tools`, with `unavailable_code` `HW-MCP-004` without an isolated worker, as for research services, and `HW-MCP-007` with another outside service.
 
 | Tool | Behavior |
 |---|---|
@@ -826,6 +828,9 @@ The gateway connects to research services as an MCP client, with OpenHands' publ
 The agent receives no MCP configuration and no credential.
 A session's worker sees each enabled tool as a fixed client tool, and a call to it becomes an [outside operation](#outside-operation-admission).
 The `summary` and `security_risk` fields that OpenHands adds to every client tool call are left out of the reviewed request unless the tool declares them; the same holds for the planning tools.
+A call whose arguments the reviewed definition does not accept, such as an undefined or missing argument, a field the gateway supplies, a cancellation without an operation identifier, or a request over 64 KiB, opens a review of the refusal that names the reason.
+The refusal carries none of the arguments, contacts no service and dispatches nothing; once the researcher approves it and releases its result, the agent receives the reason as a failed call.
+A call refused for the researcher's sign-in is not such a refusal and keeps its HW-INGRESS-004 or HW-INGRESS-005 diagnostic.
 
 ```mermaid
 sequenceDiagram

@@ -250,6 +250,17 @@ export const PlanningOverview = ({
             </dd>
           </>
         : null}
+        {projection.agent_tools ?
+          <>
+            <dt>Agent Tools</dt>
+            <dd>
+              {projection.agent_tools.availability === "available" ?
+                "available"
+              : `${projection.agent_tools.unavailable_code}: ${projection.agent_tools.unavailable_reason}`
+              }
+            </dd>
+          </>
+        : null}
       </dl>
     : null}
     <section aria-label="Platform budgets">

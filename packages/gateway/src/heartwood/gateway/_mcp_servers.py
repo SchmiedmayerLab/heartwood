@@ -22,13 +22,14 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from heartwood.core_adapter.external_actions import (
+    REFUSAL_DESTINATION,
     ExternalActionDecision,
     ExternalActionError,
     ExternalActionObservation,
@@ -818,12 +819,27 @@ class McpOutsideAdapter:
         schema = worker_parameters(bound.tool.parsed)
         properties = set(schema["properties"])
         arguments = _tool_arguments(arguments, properties)
-        if (
-            GATEWAY_FIELDS & set(arguments)
-            or not set(arguments) <= properties
-            or not set(schema["required"]) <= set(arguments)
-        ):
-            raise ExternalActionError("arguments do not match the reviewed tool definition")
+        reason = (
+            "The call names a field the gateway supplies"
+            if GATEWAY_FIELDS & set(arguments)
+            else "The call has arguments the reviewed tool does not define"
+            if not set(arguments) <= properties
+            else "The call is missing arguments the reviewed tool requires"
+            if not set(schema["required"]) <= set(arguments)
+            else None
+        )
+        if reason is None and bound.destination.cancels(bound.tool.name):
+            try:
+                _target(arguments.get(TARGET_FIELD))
+            except ExternalActionError:
+                reason = "A cancellation must name an operation identifier"
+        if reason is None:
+            try:
+                canonical_request(json.dumps(arguments))
+            except ExternalActionError:
+                reason = "The call is invalid or exceeds the request size limit"
+        if reason is not None:
+            return self._refusal(bound, tool_name, reason)
         parsed = urlsplit(bound.server.url)
         destination = (parsed.hostname or bound.server.server_id) + (
             f":{parsed.port}" if parsed.port is not None else ""
@@ -852,6 +868,37 @@ class McpOutsideAdapter:
             project_context_id=self._context(),
             target_operation_id=target,
             operation=review,
+        )
+
+    def _refusal(self, bound: McpBoundTool, tool_name: str, reason: str) -> ExternalActionRequest:
+        """Describe a refused call; once released, the agent receives the reason.
+
+        The request names the gateway as its destination, which no worker can choose, so
+        dispatch only reports the refusal and never contacts the service.
+        """
+        return ExternalActionRequest(
+            service_id=bound.destination.service_id,
+            tool_name=tool_name,
+            destination=REFUSAL_DESTINATION,
+            summary=f"Tell the agent its {bound.tool.name} call was refused: {reason}"[:512],
+            request_json=canonical_request(json.dumps({"refusal": reason})),
+            project_context_id=self._context(),
+        )
+
+    def _refused(self, proposal: ExternalActionProposal, reason: str) -> ExternalActionObservation:
+        request = proposal.request
+        return ExternalActionObservation(
+            proposal_sha256=proposal.sha256,
+            operation=PlatformOperationObservation(
+                project_context_id=request.project_context_id or str(proposal.worker.project_id),
+                operation_id=str(proposal.operation_id),
+                service_id=request.service_id,
+                backend_operation_ref="refused",
+                observed_at=datetime.now(UTC),
+                status="failed",
+                platform_record_ref=f"refusal:{proposal.operation_id}",
+                limitations=(reason,),
+            ),
         )
 
     def _proposal(
@@ -930,6 +977,11 @@ class McpOutsideAdapter:
                 raise ExternalActionError("a planning call names its launch context")
             self._project(proposal)
             return
+        if _refusal_reason(proposal.request) is not None:
+            if not proposal.created_at <= now < proposal.expires_at:
+                raise ExternalActionError("outside proposal is expired")
+            self._project(proposal)
+            return
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         if not proposal.created_at <= now < proposal.expires_at:
@@ -969,6 +1021,8 @@ class McpOutsideAdapter:
                     operation_id=str(proposal.operation_id),
                 ),
             )
+        if (reason := _refusal_reason(proposal.request)) is not None:
+            return self._refused(proposal, reason)
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
@@ -1004,6 +1058,8 @@ class McpOutsideAdapter:
                     operation_id=str(proposal.operation_id),
                 ),
             )
+        if (reason := _refusal_reason(proposal.request)) is not None:
+            return self._refused(proposal, reason)
         bound = self._tool(proposal.request.tool_name)
         with self._connect(bound) as client:
             operation = self._call(
@@ -1026,6 +1082,8 @@ class McpOutsideAdapter:
             if record.observation is None:
                 raise ExternalActionError("the planning call has no result")
             return canonical_request(record.observation.operation.model_dump_json())
+        if _refusal_reason(record.proposal.request) is not None and record.observation is not None:
+            return canonical_request(record.observation.operation.model_dump_json())
         observed = self.observe(record.proposal)
         return canonical_request(observed.operation.model_dump_json())
 
@@ -1041,6 +1099,8 @@ class McpOutsideAdapter:
         if self._planner(record.proposal.request.tool_name) is not None:
             if len(content_json.encode()) > AGENT_RESULT_BYTES:
                 raise ExternalActionError("the planning result exceeds its size limit")
+            return
+        if _refusal_reason(record.proposal.request) is not None:
             return
         bound = self._tool(record.proposal.request.tool_name)
         if self._manager.live_identity(bound) is None:
@@ -1068,6 +1128,23 @@ class McpOutsideAdapter:
 
 # Fields OpenHands adds to every client tool's schema and keeps in the call's arguments.
 _SDK_FIELDS = frozenset({"summary", "security_risk"})
+
+
+def _refusal_reason(request: ExternalActionRequest) -> str | None:
+    """Return the reason of a refusal record, or None for a call to a service.
+
+    A request naming the refusal marker must carry exactly the reason, or it is refused.
+    """
+    if request.destination != REFUSAL_DESTINATION:
+        return None
+    content = json.loads(request.request_json)
+    if (
+        not isinstance(content, dict)
+        or set(content) != {"refusal"}
+        or not isinstance(content["refusal"], str)
+    ):
+        raise ExternalActionError("a refusal record carries only its reason")
+    return content["refusal"]
 
 
 def _tool_arguments(arguments: dict[str, JsonValue], declared: set[str]) -> dict[str, JsonValue]:

@@ -25,6 +25,7 @@ import pytest
 
 from heartwood.cli._interactive import format_action_record_lines, format_projection_lines
 from heartwood.core_adapter.external_actions import (
+    REFUSAL_DESTINATION,
     ExternalActionError,
     ExternalActionRecord,
     external_action_records,
@@ -702,7 +703,29 @@ def test_cancellation_of_an_operation_this_session_did_not_send_is_refused(
             "text": "task-0001",
         }[target]
 
-        assert service.attempt("cancel_task", {"target_operation_id": named}) is None
+        attempted = service.attempt("cancel_task", {"target_operation_id": named})
+        if target == "text":
+            # A target that is no operation identifier is refused to the agent, after review.
+            assert attempted is not None
+            assert attempted.proposal.request.target_operation_id is None
+            assert json.loads(attempted.proposal.request.request_json) == {
+                "refusal": "A cancellation must name an operation identifier"
+            }
+            service.decide(attempted)
+        else:
+            assert attempted is None
+        assert service.jobs.task_count == 0
+
+
+def test_a_refused_call_cannot_be_cancelled(tmp_path: Path) -> None:
+    with job_platform(tmp_path) as service:
+        refused = service.call("create_task", {**CPU, "project_id": "other-project"})
+        assert refused.proposal.request.destination == REFUSAL_DESTINATION
+        service.decide(refused)
+        assert service.record(refused).phase == "observed"
+
+        named = {"target_operation_id": str(refused.proposal.operation_id)}
+        assert service.attempt("cancel_task", named) is None
         assert service.jobs.task_count == 0
 
 

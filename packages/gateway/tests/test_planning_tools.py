@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal, cast
+from unittest.mock import Mock
 
 import pytest
 from openhands.sdk import LocalConversation
@@ -32,7 +33,7 @@ from openhands.sdk.settings import OpenHandsAgentSettings
 from openhands.sdk.testing import TestLLM
 from openhands.sdk.tool import ClientToolSpec, register_client_tools
 from openhands.sdk.tool.client_tool import extract_client_tool_specs
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, ValidationError
 
 from heartwood.core_adapter import PendingActionGroup, SessionService
 from heartwood.core_adapter.external_actions import ExternalActionError, ExternalActionRecord
@@ -48,6 +49,7 @@ from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_ca
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._openhands_sdk import _agent_context, _security_configuration, _tool_call
+from heartwood.gateway._planning_presentation import planning_lines
 from heartwood.gateway._platform_planning import (
     AGENT_RESULT_BYTES,
     ESTIMATE_AGENT_TOOL,
@@ -71,7 +73,7 @@ from heartwood.schemas import (
     PolicyProfile,
     WorkloadPrediction,
 )
-from heartwood.schemas.planning import PlanningEstimateRequest
+from heartwood.schemas.planning import PlanningAgentTools, PlanningEstimateRequest
 from heartwood.session import CommandKind, SessionCommand
 from packages.gateway.tests.test_mcp_servers import (
     _CONTROL_PLANE,
@@ -112,7 +114,10 @@ def fakes(clock: _Clock) -> Iterator[RunningFakes]:
 
 
 def _worker_gateway(
-    tmp_path: Path, binding: PlatformPlanningBinding | None, platform: Platform | None
+    tmp_path: Path,
+    binding: PlatformPlanningBinding | None,
+    platform: Platform | None,
+    external_actions_factory: Callable[[str], Any] | None = None,
 ) -> SessionGateway:
     root = tmp_path / "project"
     root.mkdir()
@@ -124,6 +129,7 @@ def _worker_gateway(
         worker_plan_factory=None if platform is None else platform.prepare,
         platform_planning=binding,
         env={},
+        external_actions_factory=external_actions_factory,
     )
     profile = ModelProfile(
         profile_id="synthetic",
@@ -246,6 +252,8 @@ def test_worker_sessions_receive_the_planning_tools(
         assert {item.name for item in request.client_tools} == _TOOLS
         assert gateway._mcp_adapters[id(session)].tool_names == _TOOLS
         assert all(item.annotations is None for item in request.client_tools)
+        assert gateway.planning().agent_tools == PlanningAgentTools(availability="available")
+        assert "Agent planning tools: available" in planning_lines(gateway.planning())
     finally:
         gateway.stop()
 
@@ -260,8 +268,57 @@ def test_sessions_without_a_worker_receive_no_planning_tools(
         session = gateway._service("session-local")
         assert id(session) not in gateway._mcp_adapters
         assert id(session) not in gateway._worker_sessions
+        tools = gateway.planning().agent_tools
+        settings = gateway.mcp_servers.settings()
+        assert tools is not None
+        assert tools.availability == settings["availability"] == "unavailable"
+        assert tools.unavailable_code == settings["unavailable_code"] == "HW-MCP-004"
+        assert tools.unavailable_reason == "planning tools run only in isolated worker sessions"
     finally:
         gateway.stop()
+
+
+def test_sessions_with_another_outside_service_receive_no_planning_tools(
+    tmp_path: Path, fakes: RunningFakes, clock: _Clock
+) -> None:
+    platform = Platform()
+    gateway = _worker_gateway(
+        tmp_path,
+        PlatformPlanningBinding(_LAUNCH, _client(fakes), clock),
+        platform,
+        external_actions_factory=lambda _session_id: Mock(),
+    )
+    try:
+        session = gateway._service("session-outside")
+        assert gateway._worker_sessions[id(session)]._request.client_tools == ()
+        assert id(session) not in gateway._mcp_adapters
+        tools = gateway.planning().agent_tools
+        assert tools is not None
+        assert (tools.availability, tools.unavailable_code) == ("unavailable", "HW-MCP-007")
+        assert tools.unavailable_reason == (
+            "planning tools are not offered while the embedding supplies another outside service"
+        )
+        assert (
+            planning_lines(gateway.planning()).count(
+                f"Agent planning tools: HW-MCP-007: {tools.unavailable_reason}"
+            )
+            == 1
+        )
+    finally:
+        gateway.stop()
+
+
+def test_agent_tool_availability_requires_a_reason_exactly_when_unavailable() -> None:
+    PlanningAgentTools(availability="unavailable", unavailable_reason="r", unavailable_code="c")
+    for fields in (
+        {"availability": "unavailable"},
+        {"availability": "unavailable", "unavailable_reason": "r"},
+        {"availability": "unavailable", "unavailable_code": "c"},
+        {"availability": "available", "unavailable_reason": "r"},
+        {"availability": "available", "unavailable_reason": "r", "unavailable_code": "c"},
+    ):
+        with pytest.raises(ValidationError):
+            PlanningAgentTools.model_validate(fields)
 
 
 # Calls
@@ -606,6 +663,7 @@ def test_a_planning_call_needs_its_launch_context_and_an_unexpired_review(
                 journal_path=tmp_path / "other-planning.jsonl",
                 contains_file=lambda _path: True,
                 run_ids=set,
+                agent_tools_unavailable=None,
             ),
         )
         assert other.policy_sha256 != adapter.policy_sha256

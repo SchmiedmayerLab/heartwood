@@ -17,6 +17,11 @@
     "estimates": "available",
     "checked_at": "2026-07-01T00:00:00Z"
   },
+  "agent_tools": {
+    "availability": "unavailable",
+    "unavailable_reason": "planning tools run only in isolated worker sessions",
+    "unavailable_code": "HW-MCP-004"
+  },
   "budgets": [
     {
       "schema_version": "heartwood.budget-observation.v1",

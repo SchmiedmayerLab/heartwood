@@ -329,6 +329,12 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
         "Select tools the deployment allows that accept a project and operation identifier.",
         "/reference/troubleshooting/#hw-mcp-006-research-service-tool-cannot-be-selected",
     ),
+    "mcp-planning-outside-service": DiagnosticDefinition(
+        "HW-MCP-007",
+        "Planning tools are not offered with another outside service",
+        "Use a gateway without the embedding's outside service to give agents planning tools.",
+        "/reference/troubleshooting/#hw-mcp-007-planning-tools-are-not-offered-with-another-outside-service",
+    ),
     "worker-gateway-capability": DiagnosticDefinition(
         "HW-WORKER-001",
         "Sandbox gateway lacks a required deletion capability",

@@ -65,6 +65,7 @@ from heartwood.schemas.planning import (
     EstimateComparison,
     EstimateState,
     ObservationEvidence,
+    PlanningAgentTools,
     PlanningEstimateRequest,
     PlanningOutcome,
     PlanningProjection,
@@ -460,14 +461,20 @@ class PlatformPlanning:
         journal_path: Path,
         contains_file: Callable[[Path], bool],
         run_ids: Callable[[], set[str]],
+        agent_tools_unavailable: McpServerError | None,
     ) -> None:
-        """Keep planning records in ``journal_path``; the binding's clock judges validity."""
+        """Keep planning records in ``journal_path``; the binding's clock judges validity.
+
+        ``agent_tools_unavailable`` is the diagnostic for why no session's agent receives
+        the planning tools, or None when worker sessions receive them.
+        """
         self.launch = binding.launch
         self.client = binding.client
         self.journal = PlanningJournal(journal_path)
         self.clock = binding.clock
         self._contains_file = contains_file
         self._run_ids = run_ids
+        self._agent_tools = _agent_tool_availability(agent_tools_unavailable)
         self._lock = Lock()
         self._discovery: PlanningDiscovery | None = None
         self._services = PlanningServices(budgets="unchecked", estimates="unchecked")
@@ -750,6 +757,7 @@ class PlatformPlanning:
             offered=True,
             launch=self.launch,
             services=services,
+            agent_tools=self._agent_tools,
             budgets=tuple(budgets[key] for key in sorted(budgets)),
             plans=tuple(projected),
             outcomes=tuple(outcomes),
@@ -1500,6 +1508,16 @@ def _agent_view(
         "plans": plans,
         "outcomes": [item.model_dump(mode="json") for item in projection.outcomes],
     }
+
+
+def _agent_tool_availability(unavailable: McpServerError | None) -> PlanningAgentTools:
+    if unavailable is None:
+        return PlanningAgentTools(availability="available")
+    return PlanningAgentTools(
+        availability="unavailable",
+        unavailable_reason=unavailable.detail,
+        unavailable_code=unavailable.code,
+    )
 
 
 def not_offered_projection() -> PlanningProjection:

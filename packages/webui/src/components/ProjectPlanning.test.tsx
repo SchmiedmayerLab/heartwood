@@ -49,6 +49,22 @@ describe("project planning", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("shows agent tools as available when worker sessions receive them", async () => {
+    render(
+      <ProjectPlanning
+        client={client({
+          ...projection,
+          agent_tools: { availability: "available" },
+        })}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Research Planning"));
+
+    expect(
+      screen.getByText("Agent Tools").nextElementSibling,
+    ).toHaveTextContent(/^available$/);
+  });
+
   it("shows budgets, revisions, estimates, the comparison and outcomes", async () => {
     render(<ProjectPlanning client={client()} />);
     fireEvent.click(await screen.findByText("Research Planning"));
@@ -60,6 +76,11 @@ describe("project planning", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("research-project-a")).toBeInTheDocument();
     expect(screen.getByText("binding-a")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "HW-MCP-004: planning tools run only in isolated worker sessions",
+      ),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/available 10 USD, allocated 50 USD, reserved 0 USD/),
     ).toBeInTheDocument();
