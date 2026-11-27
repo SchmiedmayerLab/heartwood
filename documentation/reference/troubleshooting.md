@@ -205,6 +205,7 @@ Otherwise open model settings, update the credential through the supported secre
 ### `HW-AGENT-009`: Model Provider Quota Exhausted
 
 The provider reported that the configured quota, credit, or budget is exhausted.
+For a platform connection, the deployment sets the budget; ask the operator to raise it.
 Review the approved provider account or select another approved model connection before continuing.
 
 ### `HW-AGENT-010`: Model Provider Rate Limited
@@ -215,6 +216,7 @@ Wait briefly and retry the task without repeating any action whose outcome is un
 ### `HW-AGENT-011`: Model Configuration Is Invalid
 
 The selected model, endpoint, or provider configuration cannot serve the requested task.
+A task reports it when the provider no longer allows the connection's credential to use the selected model.
 Model setup reports the same code when the model is no longer in the connection's model list or the deployment declares no protocol Heartwood supports for it.
 A withdrawn model stays selected until you choose another; Heartwood does not replace it.
 Open model settings, choose or correct the connection, and validate it before retrying.

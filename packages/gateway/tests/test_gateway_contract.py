@@ -66,6 +66,7 @@ from heartwood.gateway import (
     SessionLifecycle,
     SkillSettingsError,
 )
+from heartwood.gateway._openapi import gateway_openapi
 from heartwood.gateway._openhands_sdk import OpenHandsSdkError
 from heartwood.schemas import AuditEvent
 from heartwood.schemas.review import ReviewCandidate, ReviewProposals
@@ -2024,6 +2025,46 @@ def test_rest_event_replay_supports_reconnect_after_sequence(tmp_path: Path) -> 
     assert replay.status_code == 200
     assert [event["sequence"] for event in _events(replay)] == [1, 2, 3, 4, 5]
     assert [event.sequence for event in stream.receive()] == [1, 2, 3, 4, 5]
+
+
+def test_settled_event_replay_waits_for_final_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gateway = _gateway(tmp_path)
+    rest = RestGateway(gateway)
+    request = RestRequest(method="GET", path="/sessions/session-1/events?settled=true")
+    unowned = rest.handle(request)
+    assert unowned.status_code == 409
+    assert unowned.body == {"error": "No locally owned session run"}
+    for value in ("maybe", "", "true&settled=true"):
+        invalid = rest.handle(
+            RestRequest(method="GET", path=f"/sessions/session-1/events?settled={value}")
+        )
+        assert invalid.status_code == 400
+        assert invalid.body == {"error": "settled query parameter must be true or false"}
+    # A blank after parameter still reads the full replay.
+    blank_after = RestRequest(method="GET", path="/sessions/session-1/events?after=")
+    rest.handle(
+        RestRequest(
+            method="POST",
+            path="/sessions/session-1/commands",
+            body=_command(CommandKind.CHAT, prompt="summarize"),
+        )
+    )
+    service = gateway._services["session-1"]
+    with gateway._session_commands("session-1"):
+        assert rest.handle(request).status_code == 409
+    settled = iter((False, True))
+    monkeypatch.setattr(service, "wait_for_idle", lambda _: next(settled))
+    busy = rest.handle(request)
+    assert busy.status_code == 409
+    assert busy.body == {"error": "session execution is still settling"}
+    assert rest.handle(request).status_code == 200
+    assert rest.handle(blank_after).status_code == 200
+    parameters = gateway_openapi()["paths"]["/sessions/{session_id}/events"]["get"]["parameters"]
+    settled_parameter = next(item for item in parameters if item["name"] == "settled")
+    assert settled_parameter["in"] == "query"
+    assert settled_parameter["schema"] == {"type": "boolean", "default": False}
 
 
 def test_rest_rejects_invalid_session_id_before_accessing_state(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ import html
 import json
 import re
 import secrets
+import subprocess
 import warnings
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
@@ -138,27 +139,40 @@ def curl(
     Arguments that read standard input (``@-``) read ``text_input`` from a file that
     is written and checked first.
     """
-    with private_file(cluster, pod, text_input) if text_input else nullcontext() as path:
-        if path is not None:
-            arguments = tuple(
-                f"@{path}" if argument == "@-" else argument for argument in arguments
+    try:
+        with private_file(cluster, pod, text_input) if text_input else nullcontext() as path:
+            if path is not None:
+                arguments = tuple(
+                    f"@{path}" if argument == "@-" else argument for argument in arguments
+                )
+            result = cluster.kubectl(
+                "exec",
+                f"--namespace={SESSIONS}",
+                pod,
+                "--",
+                "curl",
+                "--silent",
+                "--show-error",
+                # Without URL globbing, curl has no error that repeats the URL.
+                "--globoff",
+                "--max-time",
+                str(max_time),
+                # Keycloak is verified against the platform CA alone.
+                "--cacert",
+                "/etc/platform-ca/ca.crt",
+                *arguments,
             )
-        result = cluster.kubectl(
-            "exec",
-            f"--namespace={SESSIONS}",
-            pod,
-            "--",
-            "curl",
-            "--silent",
-            "--show-error",
-            "--max-time",
-            str(max_time),
-            # Keycloak is verified against the platform CA alone.
-            "--cacert",
-            "/etc/platform-ca/ca.crt",
-            *arguments,
-        )
-    assert result.returncode == 0, result.stderr
+    except subprocess.TimeoutExpired:
+        raise AssertionError("Probe request timed out") from None
+    if result.returncode:
+        # curl can repeat an argument, such as a URL with a signature or token, verbatim.
+        # Option names and short values are kept so that the reason stays readable.
+        reason = result.stderr
+        for argument in sorted(arguments, key=len, reverse=True):
+            if len(argument) >= 4 and not argument.startswith("-"):
+                reason = reason.replace(argument, "<argument>")
+        reason = re.sub(r"\S+://\S+", "<url>", reason).strip()[-300:]
+        raise AssertionError(f"Probe request failed with exit status {result.returncode}: {reason}")
     return result.stdout
 
 

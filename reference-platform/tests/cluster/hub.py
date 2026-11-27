@@ -74,7 +74,8 @@ class Browser:
         result = self.cluster.kubectl(
             "exec", f"--namespace={SESSIONS}", self.pod, "--", "cat", self.jar
         )
-        assert result.returncode == 0, result.stderr
+        if result.returncode:
+            raise AssertionError("Could not read the browser cookie jar")
         for line in result.stdout.splitlines():
             parts = line.split("\t")
             if len(parts) == 7 and parts[5] == name:
@@ -87,9 +88,10 @@ class Browser:
         if status == 302:
             # Keycloak already holds this browser's sign-in and returns at once.
             return redirect
-        assert status == 200, page[:300]
+        assert status == 200, status
         form = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page)
-        assert form is not None, page[:300]
+        if form is None:
+            raise AssertionError("Missing login form")
         password = secret(self.cluster, PLATFORM, "keycloak-researchers", self.username)
         output = curl(
             self.cluster,
@@ -106,16 +108,16 @@ class Browser:
             text_input=urlencode({"username": self.username, "password": password}),
         )
         status_text, _, callback = output.rpartition("\n")[2].partition(" ")
-        assert status_text == "302", output[-300:]
+        assert status_text == "302", status_text
         return callback
 
     def sign_in_to_hub(self) -> None:
         """Sign in at the Hub through Keycloak."""
         status, location, _ = self.get("/hub/oauth_login")
-        assert status == 302, location
+        assert status == 302, status
         callback = self.keycloak(location)
-        status, location, body = self.get(callback)
-        assert status == 302, body[:300]
+        status, _, _ = self.get(callback)
+        assert status == 302, status
 
     def spawn(self, researcher: str, project: str) -> tuple[int, str]:
         """Start the named server of a project with the spawn form; return the answer.
@@ -151,21 +153,22 @@ class Browser:
         """Call the Hub's REST API with the browser's session."""
         xsrf = self.cookie("_xsrf")
         data = ["--data-binary", "@-"] if body is not None else []
-        output = curl(
-            self.cluster,
-            self.pod,
-            "--cookie",
-            self.jar,
-            "--request",
-            method,
-            "--header",
-            f"X-XSRFToken: {xsrf}",
-            *data,
-            "--write-out",
-            "\n%{http_code}",
-            f"{ORIGIN}/hub/api{path}",
-            text_input=json.dumps(body) if body is not None else "",
-        )
+        with private_file(self.cluster, self.pod, f"X-XSRFToken: {xsrf}") as headers:
+            output = curl(
+                self.cluster,
+                self.pod,
+                "--cookie",
+                self.jar,
+                "--request",
+                method,
+                "--header",
+                f"@{headers}",
+                *data,
+                "--write-out",
+                "\n%{http_code}",
+                f"{ORIGIN}/hub/api{path}",
+                text_input=json.dumps(body) if body is not None else "",
+            )
         answer, _, status = output.rpartition("\n")
         try:
             return int(status), json.loads(answer)
@@ -175,9 +178,9 @@ class Browser:
     def sign_in_to_gateway(self, base: str) -> tuple[int, str, str]:
         """Sign in at a gateway behind the proxy; return the gateway's callback answer."""
         status, location, _ = self.get(f"{base}/")
-        assert status in {302, 303, 307}, (status, location)
+        assert status in {302, 303, 307}, status
         status, location, _ = self.get(location)
-        assert status in {302, 303, 307}, (status, location)
+        assert status in {302, 303, 307}, status
         expected = project_url(base) + "/oauth_callback"
         assert parse_qs(urlsplit(location).query).get("redirect_uri") == [expected]
         callback = self.keycloak(location)
@@ -186,13 +189,14 @@ class Browser:
 
     def launch(self, base: str) -> str:
         """Sign in at a gateway and exchange the launch token for a capability."""
-        status, location, body = self.sign_in_to_gateway(base)
-        assert status in {302, 303}, (status, body[:300])
+        status, location, _ = self.sign_in_to_gateway(base)
+        assert status in {302, 303}, status
         token = parse_qs(urlsplit(location).fragment)["launch"][0]
         status, answer = self.api(base, "POST", "/launch", None, {"token": token})
-        assert status == 200, answer
+        assert status == 200, status
         capability = answer["capability"]
-        assert isinstance(capability, str)
+        if not isinstance(capability, str):
+            raise AssertionError("Invalid gateway capability response")
         return capability
 
     def api(
@@ -272,7 +276,7 @@ class Server:
     subject: str
     project: str
     session: str = ""
-    capability: str = ""
+    capability: str = field(default="", repr=False)
     conversation: str = ""
 
     @property
@@ -288,8 +292,12 @@ class Server:
         return pod
 
     def start(self) -> None:
-        status, body = self.browser.spawn(self.user, self.project)
-        assert status == 302, body[:300]
+        status, _ = self.browser.spawn(self.user, self.project)
+        assert status == 302, status
+        self.wait_started()
+
+    def wait_started(self) -> None:
+        """Finish connecting after the Hub accepts a spawn."""
         wait_for_gateway(self.browser, self.base)
         (pod,) = [
             pod
@@ -323,7 +331,9 @@ class Server:
         )
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
-            status, user = self.browser.hub_api("GET", f"/users/{self.user}")
+            status, user = self.browser.hub_api(
+                "GET", f"/users/{self.user}?include_stopped_servers=1"
+            )
             gone = status == 200 and self.project not in user.get("servers", {})
             if gone and not (self.session and self._session_objects()):
                 return
@@ -349,7 +359,12 @@ class Server:
             "--ignore-not-found",
         )
         assert named.returncode == 0, named.stderr
-        return [*result.stdout.split(), *named.stdout.split()]
+        namespace = self.browser.cluster.kubectl(
+            "get", f"namespace/hw-s-{self.session}", "--output=name", "--ignore-not-found"
+        )
+        if namespace.returncode:
+            raise AssertionError("Could not verify worker namespace removal")
+        return [*result.stdout.split(), *named.stdout.split(), *namespace.stdout.split()]
 
     def api(
         self, method: str, path: str, body: dict[str, Any] | None = None, max_time: int = 60
@@ -361,18 +376,19 @@ class Server:
         status, catalog = self.api(
             "POST", "/settings/models/catalog", {"connection_id": route, "refresh": True}
         )
-        assert status == 200, catalog
-        status, settings = self.api(
+        assert status == 200, status
+        status, _ = self.api(
             "POST", "/settings/models/connect", {"connection_id": route, "model_id": model}
         )
-        assert status == 200, settings
+        assert status == 200, status
         self.create_conversation()
-        assert isinstance(catalog, dict)
+        if not isinstance(catalog, dict):
+            raise AssertionError("Invalid model catalog response")
         return catalog
 
     def create_conversation(self) -> None:
         status, created = self.api("POST", "/sessions", {"title": "Model route"})
-        assert status == 201, created
+        assert status == 201, status
         self.conversation = created["session_id"]
 
     def command(self, kind: str, payload: dict[str, Any]) -> None:
@@ -385,15 +401,13 @@ class Server:
             "payload": payload,
         }
         # A command can start the session's worker before it answers.
-        status, answer = self.api(
-            "POST", f"/sessions/{self.conversation}/commands", body, max_time=600
-        )
-        assert status == 200, answer
+        status, _ = self.api("POST", f"/sessions/{self.conversation}/commands", body, max_time=600)
+        assert status == 200, status
 
     def snapshot(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Return the conversation's events and the gateway's projection of them."""
         status, answer = self.api("GET", f"/sessions/{self.conversation}/events")
-        assert status == 200, answer
+        assert status == 200, status
         return answer["events"], answer["projection"]
 
     def events(self) -> list[dict[str, Any]]:
@@ -408,7 +422,7 @@ class Server:
             if result:
                 return result
             time.sleep(3)
-        raise AssertionError(json.dumps(self.events()[-8:], indent=1)[-4000:])
+        raise AssertionError("Timed out waiting for the conversation observation")
 
 
 def events_of(events: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:

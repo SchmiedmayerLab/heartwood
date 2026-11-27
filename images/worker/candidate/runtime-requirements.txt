@@ -2438,14 +2438,14 @@ openapi-pydantic==0.6.0 \
 openhands-agent-server==1.62.0+heartwood.3 \
     --hash=sha256:6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792
     # via -r images/worker/candidate/runtime.in
-openhands-sdk==1.62.0+heartwood.3 \
-    --hash=sha256:926a57328eb4d526ce7edce5b97a889bcf0b01b40b91cf97da5eabadd29c86f5
+openhands-sdk==1.62.0+heartwood.5 \
+    --hash=sha256:d85f96f17db38b2012e687b96b86b91653b363d7ce4801cf6109a504ad0d7136
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server
     #   openhands-tools
-openhands-tools==1.62.0+heartwood.3 \
-    --hash=sha256:240742f7ed97ee02ac1baf25fa400ca8fd81f642c7dc41da9586a067f93b8697
+openhands-tools==1.62.0+heartwood.5 \
+    --hash=sha256:f90aaadd89c124cfc93b894d87d1e19bcecc05402d6f5d348d729b4572989afe
     # via
     #   -r images/worker/candidate/runtime.in
     #   openhands-agent-server

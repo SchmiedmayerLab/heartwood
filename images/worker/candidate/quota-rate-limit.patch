@@ -1,0 +1,68 @@
+--- a/openhands-sdk/openhands/sdk/event/error_classification.py
++++ b/openhands-sdk/openhands/sdk/event/error_classification.py
+@@ -47,6 +47,25 @@
+ AGENT_OUTCOME = ErrorClassification(
+     kind=FailureKind.AGENT_ACTION, retryable=True, user_action="retry"
+ )
++
++
++def _rate_limit_failure(error: BaseException) -> ErrorClassification:
++    from openhands.sdk.llm.exceptions.classifier import is_quota_exhaustion_error
++
++    if is_quota_exhaustion_error(error):
++        return _failure(FailureKind.QUOTA, user_action="settings")
++    return _failure(FailureKind.RATE_LIMIT, retryable=True, user_action="retry")
++
++
++def classify_exception(error: BaseException) -> ErrorClassification:
++    """Classify a live exception before provider metadata is discarded."""
++    from openai import RateLimitError
++
++    from openhands.sdk.llm.exceptions.types import LLMRateLimitError
++
++    if isinstance(error, (RateLimitError, LLMRateLimitError)):
++        return _rate_limit_failure(error)
++    return classify_error(type(error).__name__, str(error))
+ 
+ 
+ def classify_error(code: str, detail: str = "") -> ErrorClassification:
+@@ -64,8 +83,10 @@
+     # ── authoritative code-based classification (checked first) ──────────
+     if code in {"LLMAuthenticationError", "ACPAuthRequired"}:
+         return _failure(FailureKind.AUTH, user_action="settings")
+-    if code in {"LLMRateLimitError"}:
+-        return _failure(FailureKind.RATE_LIMIT, retryable=True, user_action="retry")
++    if code in {"RateLimitError", "LLMRateLimitError"}:
++        from openhands.sdk.llm.exceptions.types import LLMRateLimitError
++
++        return _rate_limit_failure(LLMRateLimitError(detail))
+     # Budget exhaustion is a quota outcome; consumers can direct users to
+     # raise the configured limit rather than treating this as an SDK failure.
+     if code in {"MaxBudgetReached"}:
+--- a/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py
++++ b/openhands-sdk/openhands/sdk/conversation/impl/local_conversation.py
+@@ -54,7 +54,7 @@
+     UserRejectObservation,
+ )
+ from openhands.sdk.event.conversation_error import ConversationErrorEvent
+-from openhands.sdk.event.error_classification import AGENT_OUTCOME
++from openhands.sdk.event.error_classification import AGENT_OUTCOME, classify_exception
+ from openhands.sdk.event.reaction import (
+     check_reaction_emoji,
+     find_reaction_target,
+@@ -2480,6 +2480,7 @@
+                             source="environment",
+                             code=e.__class__.__name__,
+                             detail=str(e),
++                            classification=classify_exception(e),
+                         )
+                     )
+ 
+@@ -3026,6 +3027,7 @@
+                             source="environment",
+                             code=e.__class__.__name__,
+                             detail=str(e),
++                            classification=classify_exception(e),
+                         )
+                     )
+             raise ConversationRunError(

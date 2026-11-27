@@ -202,11 +202,16 @@ class Route:
             sleep=self.sleep,
             clock=lambda: self.now,
         )
-        self.inference = ManagedInference(
-            tmp_path / "control.sqlite3",
-            LiteLLM(client, lambda: _MASTER),
+        self.database = tmp_path / "control.sqlite3"
+        self.litellm = LiteLLM(client, lambda: _MASTER)
+        self.inference = self.configured(_MODELS)
+
+    def configured(self, models: tuple[RouteModel, ...]) -> ManagedInference:
+        return ManagedInference(
+            self.database,
+            self.litellm,
             self.providers,
-            _MODELS,
+            models,
             _PRICES,
             settle_wait_seconds=25,
             poll_seconds=5,
@@ -288,14 +293,19 @@ def test_a_launch_gives_the_worker_key_to_the_provider_and_a_discovery_key_to_th
 
 
 def test_a_relaunch_keeps_the_worker_key_with_the_current_models(route: Route) -> None:
+    remaining = RouteModel("local-model", 4096, 1024)
+    route.inference = route.configured((*_MODELS, remaining))
     route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
     first, _ = route.worker_key()
     previous_discovery = {token for token, key in route.proxy.keys.items() if token != first}
 
+    route.inference = route.configured((remaining,))
     files = route.inference.prepare("abc", "demo", Decimal("0.006"), _ROUTE)
 
     assert route.worker_key()[0] == first
-    assert ("/key/update", {"key": first, "models": ["synthetic-coder"]}) in route.proxy.requests
+    assert ("/key/update", {"key": first, "models": ["local-model"]}) in route.proxy.requests
+    assert route.worker_key()[1]["models"] == ["local-model"]
+    assert route.proxy.keys[key_hash(files["model-discovery-key"])]["models"] == ["local-model"]
     # A gateway started before keeps the previous discovery key until the next launch.
     assert previous_discovery <= set(route.proxy.keys)
     assert key_hash(files["model-discovery-key"]) in route.proxy.keys

@@ -16,19 +16,27 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 import time
 from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
+import openai
 import pytest
+from openhands.sdk import LLM, Message, TextContent
+from openhands.sdk.event.error_classification import FailureKind, classify_error, classify_exception
+from openhands.sdk.llm.exceptions.types import LLMError, LLMRateLimitError
+from pydantic import SecretStr
 
 import heartwood.gateway._openhands_sdk as openhands_sdk_module
 from heartwood.cli import main as terminal_main
 from heartwood.cli._interactive import format_projection_lines
 from heartwood.core_adapter import (
     AgentBackend,
+    BackendErrorCode,
     BackendEvent,
     DeterministicAgentBackend,
     SessionService,
@@ -49,7 +57,7 @@ from heartwood.gateway import (
     SessionProjection,
     project_session,
 )
-from heartwood.gateway._openhands_failures import backend_error
+from heartwood.gateway._openhands_failures import backend_error, classified_error_code
 from heartwood.gateway.platform_conformance import run_platform_conformance
 from heartwood.gateway.platform_fakes import (
     INFERENCE_API_KEY,
@@ -185,6 +193,128 @@ def _assert_every_interface_shows(projection: SessionProjection, diagnostic: str
     assert any(item.endswith(f"\n{diagnostic}") for item in notebook)
 
 
+@pytest.mark.parametrize(
+    ("provider_code", "expected"),
+    [
+        ("insufficient_quota", FailureKind.QUOTA),
+        ("usage_limit_reached", FailureKind.QUOTA),
+        ("budget_exceeded", FailureKind.QUOTA),
+        ("rate_limit_exceeded", FailureKind.RATE_LIMIT),
+    ],
+)
+def test_rate_limit_events_preserve_provider_classification(
+    provider_code: str, expected: FailureKind
+) -> None:
+    response = httpx.Response(429, request=httpx.Request("POST", "https://example.invalid"))
+    provider = openai.RateLimitError(
+        "Request denied", response=response, body={"code": provider_code}
+    )
+    mapped = LLMRateLimitError("Request denied")
+    mapped.__cause__ = provider
+    for error in (provider, mapped):
+        classification = classify_exception(error)
+        assert classification.kind == expected
+        assert classification.retryable == (expected == FailureKind.RATE_LIMIT)
+    for code in ("RateLimitError", "LLMRateLimitError"):
+        assert classify_error(code, provider_code).kind == expected
+
+
+# Inference gateway refusals with the status, type and message of the recorded LiteLLM
+# responses; the key name in the budget message is synthetic.
+_GATEWAY_REFUSALS: dict[str, tuple[int, dict[str, object]]] = {
+    "budget": (
+        422,
+        {
+            "message": "Budget has been exceeded! Key=synthetic-key Current cost: 0.004, "
+            "Max budget: 0.003",
+            "type": "budget_exceeded",
+            "param": None,
+            "code": "422",
+        },
+    ),
+    "model-denied": (
+        403,
+        {
+            "message": "The requested model 'model-b' is not available for this API key, or "
+            "the model name is invalid. Check the models available to you and try again.",
+            "type": "key_model_access_denied",
+            "param": "model",
+            "code": "403",
+        },
+    ),
+}
+
+
+@pytest.fixture
+def refusing_gateway() -> Iterator[tuple[str, dict[str, str]]]:
+    """Serve one recorded refusal for every chat completion request."""
+    selected = {"name": "budget"}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("content-length", 0)))
+            status, error = _GATEWAY_REFUSALS[selected["name"]]
+            body = json.dumps({"error": error}).encode()
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, message: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1", selected
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize(
+    ("refusal", "expected"),
+    [
+        ("budget", BackendErrorCode.PROVIDER_QUOTA_EXHAUSTED),
+        ("model-denied", BackendErrorCode.MODEL_CONFIGURATION_INVALID),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_recorded_gateway_refusals_reach_their_diagnostics_through_the_pinned_clients(
+    refusing_gateway: tuple[str, dict[str, str]],
+    refusal: str,
+    expected: BackendErrorCode,
+    stream: bool,
+) -> None:
+    base_url, selected = refusing_gateway
+    selected["name"] = refusal
+    llm = LLM(
+        usage_id="refusal",
+        model="openai/model-b",
+        base_url=base_url,
+        api_key=SecretStr("synthetic-key"),
+        num_retries=0,
+        stream=stream,
+    )
+    with pytest.raises((LLMError, openai.APIError)) as raised:
+        llm.completion(
+            [Message(role="user", content=[TextContent(text="hi")])],
+            on_token=(lambda _: None) if stream else None,
+        )
+    fallback = BackendErrorCode.WORKER_STOPPED
+    assert classified_error_code(classify_exception(raised.value), fallback=fallback) == expected
+    # Conformance and model discovery call the endpoint with the OpenAI client.
+    client = openai.OpenAI(base_url=base_url, api_key="synthetic-key", max_retries=0)
+    with pytest.raises(openai.APIError) as direct:
+        client.chat.completions.create(
+            model="model-b", messages=[{"role": "user", "content": "hi"}]
+        )
+    assert classified_error_code(classify_exception(direct.value), fallback=fallback) == expected
+
+
 def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
     contract = (_ROOT / "documentation/operate/platform-contract.md").read_text("utf-8")
     table = contract.split("### Failure States", 1)[1].split("\n\n", 2)[1]
@@ -206,25 +336,7 @@ def test_fixture_covers_each_coded_failure_state_in_the_contract() -> None:
 
 @pytest.mark.parametrize(
     "state",
-    [
-        pytest.param(
-            state,
-            id=state["code"],
-            marks=(
-                pytest.mark.xfail(
-                    strict=True,
-                    reason=(
-                        "OpenHands also records its rate-limit classification of the quota "
-                        "response, so every interface shows HW-AGENT-010 beside HW-AGENT-009"
-                    ),
-                )
-                if state["inference_failure"] == "quota"
-                else ()
-            ),
-        )
-        for state in _STATES
-        if "inference_failure" in state
-    ],
+    [pytest.param(state, id=state["code"]) for state in _STATES if "inference_failure" in state],
 )
 def test_inference_failures_show_the_same_diagnostic_in_every_interface(
     tmp_path: Path, fakes: RunningFakes, state: dict[str, str]
