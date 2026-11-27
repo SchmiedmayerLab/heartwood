@@ -332,7 +332,8 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
     "mcp-planning-outside-service": DiagnosticDefinition(
         "HW-MCP-007",
         "Planning tools are not offered with another outside service",
-        "Use a gateway without the embedding's outside service to give agents planning tools.",
+        "No deployment manifest change enables the planning tools; use planning through "
+        "/plan, the browser or the notebook.",
         "/reference/troubleshooting/#hw-mcp-007-planning-tools-are-not-offered-with-another-outside-service",
     ),
     "worker-gateway-capability": DiagnosticDefinition(

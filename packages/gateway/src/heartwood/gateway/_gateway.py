@@ -575,9 +575,6 @@ class SessionGateway:
         # Worker sessions receive planning tools only when no other outside service shares
         # the gateway, and the planning projection reports the same condition. Research
         # services report their own availability from ``worker_available`` below.
-        self._agent_tool_sessions = (
-            worker_plan_factory is not None and external_actions_factory is None
-        )
         planning_tools_unavailable: McpServerError | None = None
         if worker_plan_factory is None:
             planning_tools_unavailable = McpServerError(
@@ -589,6 +586,7 @@ class SessionGateway:
                 "planning tools are not offered while the embedding supplies another outside "
                 "service",
             )
+        self._agent_tool_sessions = planning_tools_unavailable is None
         if platform_planning is not None and self.project.protected_state is None:
             raise ValueError("Platform planning requires protected state")
         self._planning = (
