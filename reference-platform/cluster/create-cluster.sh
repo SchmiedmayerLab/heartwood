@@ -51,6 +51,14 @@ kind create cluster --name "${name}" --image "${node_image}" \
 docker run --detach --name "${name}-registry" --network kind --network-alias "${registry}" \
   "${registry_image}" >/dev/null
 for node in $(kind get nodes --name "${name}"); do
+  # On hosts with DMI, the kind node bind-mounts files over its product name and UUID in
+  # /sys. The kernel then refuses a new sysfs mount in a user namespace, so pods with
+  # hostUsers: false, such as the Funnel workers and executors, cannot create their
+  # sandbox. The cluster has one node, which needs no UUID of its own.
+  docker exec "${node}" bash -euc '
+    while targets="$(findmnt --raw --noheadings --output TARGET | grep "^/sys/devices/virtual/dmi/id/")"; do
+      for target in ${targets}; do umount "${target}"; done
+    done'
   docker exec "${node}" mkdir -p "/etc/containerd/certs.d/${registry}:5000"
   docker exec --interactive "${node}" \
     sh -c "cat > '/etc/containerd/certs.d/${registry}:5000/hosts.toml'" <<EOF
