@@ -32,6 +32,7 @@ __all__ = [
     "ObservationEvidence",
     "PlanProjection",
     "PlanRevision",
+    "PlanningAgentTools",
     "PlanningEstimateRequest",
     "PlanningOutcome",
     "PlanningProjection",
@@ -66,6 +67,14 @@ class PlanningServices(_PlanningView):
     budgets: PlanningServiceStatus
     estimates: PlanningServiceStatus
     checked_at: AwareDatetime | None = None
+
+
+class PlanningAgentTools(_PlanningView):
+    """Whether a session's agent can call the planning tools, reported like research services."""
+
+    availability: Literal["available", "unavailable"]
+    unavailable_reason: str | None = None
+    unavailable_code: str | None = None
 
 
 class PlanningOutcome(_PlanningView):
@@ -148,6 +157,9 @@ class PlanningProjection(_PlanningView):
     offered: bool = Field(description="Whether this deployment connects a planning service.")
     launch: PlatformLaunchContext | None = None
     services: PlanningServices | None = None
+    agent_tools: PlanningAgentTools | None = Field(
+        default=None, description="Agent planning tool availability; absent when not offered."
+    )
     budgets: tuple[BudgetObservation, ...] = Field(
         default=(), description="The latest observation of each platform budget."
     )

@@ -71,7 +71,7 @@ from heartwood.schemas import (
     PolicyProfile,
     WorkloadPrediction,
 )
-from heartwood.schemas.planning import PlanningEstimateRequest
+from heartwood.schemas.planning import PlanningAgentTools, PlanningEstimateRequest
 from heartwood.session import CommandKind, SessionCommand
 from packages.gateway.tests.test_mcp_servers import (
     _CONTROL_PLANE,
@@ -246,6 +246,7 @@ def test_worker_sessions_receive_the_planning_tools(
         assert {item.name for item in request.client_tools} == _TOOLS
         assert gateway._mcp_adapters[id(session)].tool_names == _TOOLS
         assert all(item.annotations is None for item in request.client_tools)
+        assert gateway.planning().agent_tools == PlanningAgentTools(availability="available")
     finally:
         gateway.stop()
 
@@ -260,6 +261,12 @@ def test_sessions_without_a_worker_receive_no_planning_tools(
         session = gateway._service("session-local")
         assert id(session) not in gateway._mcp_adapters
         assert id(session) not in gateway._worker_sessions
+        tools = gateway.planning().agent_tools
+        settings = gateway.mcp_servers.settings()
+        assert tools is not None
+        assert tools.availability == settings["availability"] == "unavailable"
+        assert tools.unavailable_code == settings["unavailable_code"] == "HW-MCP-004"
+        assert tools.unavailable_reason == "planning tools run only in isolated worker sessions"
     finally:
         gateway.stop()
 
@@ -606,6 +613,7 @@ def test_a_planning_call_needs_its_launch_context_and_an_unexpired_review(
                 journal_path=tmp_path / "other-planning.jsonl",
                 contains_file=lambda _path: True,
                 run_ids=set,
+                worker_available=True,
             ),
         )
         assert other.policy_sha256 != adapter.policy_sha256

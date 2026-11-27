@@ -1202,6 +1202,7 @@ def test_correction_rechecks_evidence_and_cites_one_historical_observation(
             journal_path=gateway.project.state_root / "planning.jsonl",
             contains_file=gateway.project.contains,
             run_ids=set,
+            worker_available=False,
         )
         evidence = tuple(
             item.model_copy(update={"project_context_id": "other-context"})
@@ -1317,7 +1318,11 @@ def test_concurrent_writers_record_one_version_of_a_revision(tmp_path: Path, clo
     binding = PlatformPlanningBinding(_LAUNCH, _ScriptedClient(), clock)
     writers = [
         PlatformPlanning(
-            binding, journal_path=path, contains_file=ProjectContext(tmp_path).contains, run_ids=set
+            binding,
+            journal_path=path,
+            contains_file=ProjectContext(tmp_path).contains,
+            run_ids=set,
+            worker_available=False,
         )
         for _ in range(4)
     ]
