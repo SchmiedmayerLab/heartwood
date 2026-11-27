@@ -73,7 +73,11 @@ from heartwood.gateway._platform_operations import (
     operations_report,
     request_proposal,
 )
-from heartwood.gateway._platform_planning import PlanningStateError
+from heartwood.gateway._platform_planning import (
+    AGENT_RESULT_BYTES,
+    PLANNING_SERVICE_ID,
+    PlanningStateError,
+)
 from heartwood.schemas import JsonValue, PlatformOperationObservation, PlatformOperationProposal
 from heartwood.session import EventKind
 
@@ -694,6 +698,10 @@ class McpOutsideAdapter:
     its project context. A destination with an operation profile also describes each
     submission before review, and a cancellation names an earlier operation of the
     session, which the gateway sends from its own record.
+
+    With planning, the session also offers the gateway's planning tools. Their calls
+    pass the same review and result release, and run in the gateway's planning state,
+    so every interface shows what the agent recorded.
     """
 
     def __init__(
@@ -706,6 +714,9 @@ class McpOutsideAdapter:
         self._manager = manager
         self._bound = {item.worker_name: item for item in bound}
         self._planning = planning
+        self._planning_tools = (
+            {} if planning is None else {item.name: item for item in planning.client_tools}
+        )
         self.last_reconciled = 0.0
         # The last session event whose platform operation records were linked to planning.
         self.linked_sequence = 0
@@ -718,24 +729,44 @@ class McpOutsideAdapter:
     @property
     def client_tools(self) -> tuple[ClientToolSpec, ...]:
         """Return the fixed client tools the session's worker receives."""
-        return tuple(item.client_spec() for item in self._bound.values())
+        return (
+            *(item.client_spec() for item in self._bound.values()),
+            *self._planning_tools.values(),
+        )
 
     @property
     def tool_names(self) -> frozenset[str]:
-        """Client-tool names bound to research services for this session."""
-        return frozenset(self._bound)
+        """Client-tool names bound to research services and planning for this session."""
+        return frozenset(self._bound) | frozenset(self._planning_tools)
 
     @property
     def policy_sha256(self) -> str:
         """Change whenever a bound tool is disabled, changed, disconnected or disallowed."""
-        identities = [self._manager.live_identity(item) for _, item in sorted(self._bound.items())]
+        identities: list[object] = [
+            self._manager.live_identity(item) for _, item in sorted(self._bound.items())
+        ]
+        if self._planning is not None:
+            identities.append(
+                {
+                    "planning": self._planning.launch.model_dump(mode="json"),
+                    "tools": [
+                        item.model_dump(mode="json") for item in self._planning_tools.values()
+                    ],
+                }
+            )
         return hashlib.sha256(
             json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
     def service_id(self, tool_name: str) -> str:
         """Return the service a bound client tool calls."""
+        if tool_name in self._planning_tools:
+            return PLANNING_SERVICE_ID
         return self._tool(tool_name).destination.service_id
+
+    def _planner(self, tool_name: str) -> PlatformPlanning | None:
+        """Return the planning state when the tool is a planning tool."""
+        return self._planning if tool_name in self._planning_tools else None
 
     def _tool(self, tool_name: str) -> McpBoundTool:
         bound = self._bound.get(tool_name)
@@ -759,11 +790,29 @@ class McpOutsideAdapter:
         """Bind the worker's exact arguments to the server.
 
         A submission to an operation service also asks the service to describe it, which
-        has no effect at the service, and records the estimate it refers to.
+        has no effect at the service, and records the estimate it refers to. The fields
+        OpenHands adds to every call are left out unless the tool declares them. A planning
+        call is checked against the launch context and contacts nothing; a refused one
+        opens a review of its refusal.
         """
+        planning = self._planner(tool_name)
+        if planning is not None:
+            spec = self._planning_tools[tool_name]
+            summary, request_json = planning.agent_request(
+                tool_name, _tool_arguments(arguments, set(spec.parameters["properties"]))
+            )
+            return ExternalActionRequest(
+                service_id=PLANNING_SERVICE_ID,
+                tool_name=tool_name,
+                destination="heartwood-gateway",
+                summary=summary,
+                request_json=request_json,
+                project_context_id=planning.launch.project_context_id,
+            )
         bound = self._tool(tool_name)
         schema = worker_parameters(bound.tool.parsed)
         properties = set(schema["properties"])
+        arguments = _tool_arguments(arguments, properties)
         if (
             GATEWAY_FIELDS & set(arguments)
             or not set(arguments) <= properties
@@ -843,7 +892,15 @@ class McpOutsideAdapter:
         A submission whose platform proposal is missing, or whose launch context changed,
         is refused too. Listing tools has no effect on the service; a refusal here keeps
         the review open and records no dispatch, so nothing is left with an unknown outcome.
+        A planning call must name this session's launch context.
         """
+        if self._planner(proposal.request.tool_name) is not None:
+            if not proposal.created_at <= now < proposal.expires_at:
+                raise ExternalActionError("outside proposal is expired")
+            if proposal.request.project_context_id is None:
+                raise ExternalActionError("a planning call names its launch context")
+            self._project(proposal)
+            return
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         if not proposal.created_at <= now < proposal.expires_at:
@@ -868,7 +925,21 @@ class McpOutsideAdapter:
         decision: ExternalActionDecision,  # noqa: ARG002
         inputs: tuple[bytes, ...],  # noqa: ARG002
     ) -> ExternalActionObservation:
-        """Verify the reviewed definition, then send the call once."""
+        """Verify the reviewed definition, then send the call once.
+
+        A planning call runs once in the gateway's planning state.
+        """
+        planning = self._planner(proposal.request.tool_name)
+        if planning is not None:
+            self._project(proposal)
+            return ExternalActionObservation(
+                proposal_sha256=proposal.sha256,
+                operation=planning.agent_call(
+                    proposal.request.tool_name,
+                    proposal.request.request_json,
+                    operation_id=str(proposal.operation_id),
+                ),
+            )
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
@@ -889,7 +960,21 @@ class McpOutsideAdapter:
         return ExternalActionObservation(proposal_sha256=proposal.sha256, operation=operation)
 
     def observe(self, proposal: ExternalActionProposal) -> ExternalActionObservation:
-        """Ask the service's read-only status tool about the existing operation identifier."""
+        """Ask the service's read-only status tool about the existing operation identifier.
+
+        A planning call whose outcome was not recorded is not repeated; a prediction is
+        looked up in the journal, and the current planning overview is reported.
+        """
+        planning = self._planner(proposal.request.tool_name)
+        if planning is not None:
+            return ExternalActionObservation(
+                proposal_sha256=proposal.sha256,
+                operation=planning.agent_outcome(
+                    proposal.request.tool_name,
+                    proposal.request.request_json,
+                    operation_id=str(proposal.operation_id),
+                ),
+            )
         bound = self._tool(proposal.request.tool_name)
         with self._manager.connect(bound.server, bound.destination) as client:
             operation = self._call(
@@ -904,7 +989,14 @@ class McpOutsideAdapter:
         return ExternalActionObservation(proposal_sha256=proposal.sha256, operation=operation)
 
     def prepare_result(self, record: ExternalActionRecord) -> str:
-        """Read the operation's current observation for a reviewed release."""
+        """Read the operation's current observation for a reviewed release.
+
+        A planning call releases what it returned when it ran.
+        """
+        if self._planner(record.proposal.request.tool_name) is not None:
+            if record.observation is None:
+                raise ExternalActionError("the planning call has no result")
+            return canonical_request(record.observation.operation.model_dump_json())
         observed = self.observe(record.proposal)
         return canonical_request(observed.operation.model_dump_json())
 
@@ -917,6 +1009,10 @@ class McpOutsideAdapter:
         now: datetime,  # noqa: ARG002
     ) -> None:
         """Release only within the destination's size limit while the tool still holds."""
+        if self._planner(record.proposal.request.tool_name) is not None:
+            if len(content_json.encode()) > AGENT_RESULT_BYTES:
+                raise ExternalActionError("the planning result exceeds its size limit")
+            return
         bound = self._tool(record.proposal.request.tool_name)
         if self._manager.live_identity(bound) is None:
             raise ExternalActionError("the research service tool is no longer enabled")
@@ -939,6 +1035,17 @@ class McpOutsideAdapter:
     ) -> PlatformOperationObservation:
         content = call_structured(client, bound.destination, name, arguments)
         return PlatformOperationObservation.model_validate_json(json.dumps(content))
+
+
+# Fields OpenHands adds to every client tool's schema and keeps in the call's arguments.
+_SDK_FIELDS = frozenset({"summary", "security_risk"})
+
+
+def _tool_arguments(arguments: dict[str, JsonValue], declared: set[str]) -> dict[str, JsonValue]:
+    """Return a call's arguments without the SDK's fields, unless the tool declares them."""
+    return {
+        key: value for key, value in arguments.items() if key in declared or key not in _SDK_FIELDS
+    }
 
 
 def _target(value: JsonValue | None) -> UUID:

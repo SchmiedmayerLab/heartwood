@@ -204,9 +204,15 @@ def _terminal(record: dict[str, Any]) -> bool:
 
 
 def _of_tool(record: dict[str, Any], tool: str) -> bool:
-    """Whether an outside operation calls an MCP tool of that name, as the gateway names it."""
+    """Whether an outside operation calls a tool of that name, as the gateway names it.
+
+    A planning tool keeps its name; an MCP tool carries its server and digest.
+    """
     name = record["proposal"]["request"]["tool_name"]
-    return re.fullmatch(rf"[a-z0-9_]+__{re.escape(tool)}_[0-9a-f]{{8}}", name) is not None
+    return (
+        name == tool
+        or re.fullmatch(rf"[a-z0-9_]+__{re.escape(tool)}_[0-9a-f]{{8}}", name) is not None
+    )
 
 
 def _running(events: list[dict[str, Any]]) -> bool:
@@ -444,6 +450,33 @@ def jobs(platform: Platform) -> Jobs:
         timeout=300,
     )
     return Jobs(completed, cancelled, cancellation)
+
+
+def test_the_agent_discovers_the_platform_planning_capabilities(platform: Platform) -> None:
+    demo = platform.demo
+    _chat(
+        demo,
+        [
+            ["planning_overview", {}],
+            _WAITING,
+            ["finish", {"message": "The synthetic planning task completed."}],
+        ],
+    )
+    record = _review(demo, platform.reviewed, "planning_overview", _terminal)
+    assert record["approved"] == ["worker-call", "outside-operation", "outside-result"]
+    assert record["proposal"]["request"]["service_id"] == "heartwood-planning"
+    operation = record["observation"]["operation"]
+    assert operation["status"] == "completed", operation
+    assert operation["project_context_id"] == demo.session
+    services = operation["result"]["services"]
+    assert (services["budgets"], services["estimates"]) == ("available", "available")
+    assert all(
+        item["project_context_id"] == demo.session for item in operation["result"]["budgets"]
+    )
+    # The researcher's planning view holds the same discovery.
+    status, planning = demo.api("GET", "/project/planning")
+    assert status == 200, planning
+    assert planning["services"]["estimates"] == "available"
 
 
 def test_a_batch_job_runs_through_the_reviewed_operation_path(

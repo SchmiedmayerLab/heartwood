@@ -116,6 +116,12 @@ The repository's `fixtures/synthetic/platform-contract/research-plan.r1.predicti
 4. Record a revised prediction that supersedes the earlier one and estimate it again.
    The comparison lists the complete-plan estimate of each revision with its runtime profiles.
 
+In a session with an isolated worker, the agent can take the same steps with its [planning tools](../operate/platform-contract.md#planning-against-platform-budgets).
+It first reads the planning overview, which states whether the platform offers budgets and estimates.
+You review each call before it runs, and each result again before the model receives it.
+What the agent records appears in every interface.
+Without a planning service, the agent has no planning tools.
+
 Each estimate shows its coverage, range, cost components, limitations, exclusions, pricing assumptions, creation time and validity.
 An unknown cost is shown as unknown and never counted as zero.
 Each budget shows its allocation, reservations, spending and availability with the time the platform observed them.
