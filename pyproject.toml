@@ -16,7 +16,7 @@ exclude-newer-package = { filelock = "2026-11-13T00:00:00Z", tornado = "2026-11-
 [tool.uv.sources]
 openhands-sdk = { path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl" }
 openhands-tools = { path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.5-py3-none-any.whl" }
-openhands-agent-server = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }
+openhands-agent-server = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl" }
 openshell = { path = "vendor/runtime-wheels/openshell-0.1.9+heartwood.2-py3-none-any.whl" }
 
 [tool.uv.workspace]
@@ -39,7 +39,7 @@ members = [
 ]
 
 [dependency-groups]
-worker = ["openhands-agent-server==1.62.0+heartwood.3"]
+worker = ["openhands-agent-server==1.62.0+heartwood.5"]
 dev = [
     "ruff>=0.16.1",
     "mypy>=2.3.0",
