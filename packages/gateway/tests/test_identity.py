@@ -40,6 +40,7 @@ from heartwood.audit import AuditLog
 from heartwood.core_adapter.external_actions import ExternalActionError
 from heartwood.gateway import (
     GatewayAsgiApp,
+    GatewayEventStream,
     IdentityAccess,
     IdentityDeployment,
     IngressConfigurationError,
@@ -58,6 +59,7 @@ from heartwood.gateway._access import (
     AccessUnavailableError,
     TokenExchangeRefusedError,
 )
+from heartwood.gateway._gateway import GatewaySessionSnapshot
 from heartwood.gateway._identity import researcher_actor
 from heartwood.gateway._mcp_policy import McpDestination, McpServerError
 from heartwood.gateway._mcp_servers import McpServerManager
@@ -501,6 +503,7 @@ def test_logout_invalidates_only_the_presented_sign_in(tmp_path: Path) -> None:
         )
         assert status == 401
         assert stale["set-cookie"] == response["set-cookie"]
+        assert (await _call(app, "POST", "/logout", headers=headers))[0] == 401
         assert (await _call(app, "GET", "/identity/login"))[0] == 302
         assert (await _call(app, "GET", "/sessions", headers=headers))[0] == 401
         assert (await _call(app, "GET", "/sessions", headers={"x-heartwood-capability": second}))[
@@ -1341,8 +1344,11 @@ async def _socket(
     return sent
 
 
+@pytest.mark.parametrize("notify", [True, False])
 @pytest.mark.parametrize("transport", ["sse", "websocket"])
-def test_logout_ends_only_streams_bound_to_that_login(tmp_path: Path, transport: str) -> None:
+def test_logout_ends_only_streams_bound_to_that_login(
+    tmp_path: Path, transport: str, notify: bool
+) -> None:
     provider = _Provider()
     access = _access(tmp_path, provider)
     gateway = _gateway(tmp_path / "research")
@@ -1352,6 +1358,7 @@ def test_logout_ends_only_streams_bound_to_that_login(tmp_path: Path, transport:
     async def scenario() -> None:
         updates = [asyncio.Queue[bool](), asyncio.Queue[bool]()]
         inputs = [asyncio.Queue[dict[str, object]](), asyncio.Queue[dict[str, object]]()]
+        last: list[dict[str, object]] = [{}, {}]
 
         async def subscribe(index: int) -> None:
             path = f"{_BASE}/sessions/session-1/events"
@@ -1369,6 +1376,7 @@ def test_logout_ends_only_streams_bound_to_that_login(tmp_path: Path, transport:
                 )
 
             async def send(message: dict[str, object]) -> None:
+                last[index] = message
                 if message["type"] == "websocket.send" or message.get("more_body") is True:
                     updates[index].put_nowait(True)
 
@@ -1395,10 +1403,18 @@ def test_logout_ends_only_streams_bound_to_that_login(tmp_path: Path, transport:
                     app, "POST", "/logout", headers={"x-heartwood-capability": tokens[0]}
                 )
                 assert status == 204
-                gateway._streams.notify(session_id="session-1")
+                # Without a new event, an idle stream ends at its next revocation check.
+                if notify:
+                    gateway._streams.notify(session_id="session-1")
                 await tasks[0]
                 assert updates[0].empty()
-                await updates[1].get()
+                assert last[0] == (
+                    {"type": "http.response.body", "body": b"", "more_body": False}
+                    if transport == "sse"
+                    else {"type": "websocket.close", "code": 1008}
+                )
+                if notify:
+                    await updates[1].get()
                 assert not tasks[1].done()
         finally:
             for task in tasks:
@@ -1407,6 +1423,78 @@ def test_logout_ends_only_streams_bound_to_that_login(tmp_path: Path, transport:
             gateway.stop()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("transport", ["sse", "websocket"])
+def test_a_logout_while_a_stream_opens_sends_no_events(
+    tmp_path: Path, transport: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = _Provider()
+    access = _access(tmp_path, provider)
+    gateway = _gateway(tmp_path / "research")
+    app = GatewayAsgiApp(gateway, ingress=_ingress(), access=access)
+    capability, _ = _sign_in(access, provider)
+    opened = gateway.open_event_stream
+
+    def logout_then_open(
+        *, session_id: str, after_sequence: int | None = None
+    ) -> tuple[GatewayEventStream, GatewaySessionSnapshot]:
+        access.browser_response(
+            method="POST",
+            path="/logout",
+            query_string="",
+            headers={"x-heartwood-capability": (capability,)},
+        )
+        return opened(session_id=session_id, after_sequence=after_sequence)
+
+    monkeypatch.setattr(gateway, "open_event_stream", logout_then_open)
+
+    async def sse() -> list[dict[str, Any]]:
+        sent: list[dict[str, Any]] = []
+        path = f"{_BASE}/sessions/session-1/events/stream"
+        headers = {
+            "host": "research.example.test",
+            "origin": _ORIGIN,
+            "x-forwarded-proto": "https",
+            "x-heartwood-capability": capability,
+        }
+
+        async def receive() -> dict[str, object]:
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        await app(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": path,
+                "raw_path": path.encode(),
+                "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+                "query_string": b"",
+                "client": _PROXY,
+            },
+            receive,
+            send,
+        )
+        return sent
+
+    async def scenario() -> list[dict[str, Any]]:
+        try:
+            if transport == "sse":
+                return await sse()
+            frame = json.dumps({"type": "authenticate", "capability": capability})
+            return await _socket(app, headers={}, frames=(frame,))
+        finally:
+            gateway.stop()
+
+    sent = asyncio.run(scenario())
+    if transport == "sse":
+        assert sent[0]["status"] == 200
+        assert sent[1:] == [{"type": "http.response.body", "body": b"", "more_body": False}]
+    else:
+        assert sent == [{"type": "websocket.accept"}, {"type": "websocket.close", "code": 1008}]
 
 
 def test_event_streams_accept_the_sign_in_capability_and_a_bearer_token(tmp_path: Path) -> None:
