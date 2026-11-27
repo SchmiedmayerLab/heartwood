@@ -294,10 +294,13 @@ def test_sessions_with_another_outside_service_receive_no_planning_tools(
         assert id(session) not in gateway._mcp_adapters
         tools = gateway.planning().agent_tools
         assert tools is not None
-        assert (tools.availability, tools.unavailable_code) == ("unavailable", "HW-MCP-004")
+        assert (tools.availability, tools.unavailable_code) == ("unavailable", "HW-MCP-007")
+        assert tools.unavailable_reason == (
+            "planning tools are not offered while the embedding supplies another outside service"
+        )
         assert (
             planning_lines(gateway.planning()).count(
-                f"Agent planning tools: HW-MCP-004: {tools.unavailable_reason}"
+                f"Agent planning tools: HW-MCP-007: {tools.unavailable_reason}"
             )
             == 1
         )
@@ -310,6 +313,8 @@ def test_agent_tool_availability_requires_a_reason_exactly_when_unavailable() ->
     for fields in (
         {"availability": "unavailable"},
         {"availability": "unavailable", "unavailable_reason": "r"},
+        {"availability": "unavailable", "unavailable_code": "c"},
+        {"availability": "available", "unavailable_reason": "r"},
         {"availability": "available", "unavailable_reason": "r", "unavailable_code": "c"},
     ):
         with pytest.raises(ValidationError):

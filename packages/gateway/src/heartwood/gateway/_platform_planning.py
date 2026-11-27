@@ -461,12 +461,12 @@ class PlatformPlanning:
         journal_path: Path,
         contains_file: Callable[[Path], bool],
         run_ids: Callable[[], set[str]],
-        agent_tools_unavailable: str | None,
+        agent_tools_unavailable: McpServerError | None,
     ) -> None:
         """Keep planning records in ``journal_path``; the binding's clock judges validity.
 
-        ``agent_tools_unavailable`` is why no session's agent receives the planning tools,
-        or None when worker sessions receive them.
+        ``agent_tools_unavailable`` is the diagnostic for why no session's agent receives
+        the planning tools, or None when worker sessions receive them.
         """
         self.launch = binding.launch
         self.client = binding.client
@@ -1510,13 +1510,13 @@ def _agent_view(
     }
 
 
-def _agent_tool_availability(reason: str | None) -> PlanningAgentTools:
-    if reason is None:
+def _agent_tool_availability(unavailable: McpServerError | None) -> PlanningAgentTools:
+    if unavailable is None:
         return PlanningAgentTools(availability="available")
     return PlanningAgentTools(
         availability="unavailable",
-        unavailable_reason=reason,
-        unavailable_code=diagnostic_for("mcp-worker-required").code,
+        unavailable_reason=unavailable.detail,
+        unavailable_code=unavailable.code,
     )
 
 

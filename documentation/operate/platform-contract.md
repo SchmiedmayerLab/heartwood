@@ -551,7 +551,8 @@ Heartwood submits nothing for a plan and retries nothing after a denial; operati
 Cost figures reported by a worker are not planning records.
 
 A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one.
-The planning projection reports them in `agent_tools`; without an isolated worker, its `unavailable_code` is `HW-MCP-004`, as for research services.
+An embedding that supplies its own outside service gives no session planning tools.
+The planning projection reports them in `agent_tools`, with `unavailable_code` `HW-MCP-004` without an isolated worker, as for research services, and `HW-MCP-007` with another outside service.
 
 | Tool | Behavior |
 |---|---|

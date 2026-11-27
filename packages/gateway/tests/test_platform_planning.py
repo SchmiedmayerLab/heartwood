@@ -41,6 +41,7 @@ from heartwood.gateway import (
 from heartwood.gateway._access import AccessUnavailableError, TokenExchangeRefusedError
 from heartwood.gateway._deployment import ProjectDeployment, load_project_deployment
 from heartwood.gateway._experiment_store import ExperimentStore
+from heartwood.gateway._mcp_policy import McpServerError
 from heartwood.gateway._platform_planning import PlatformPlanningBinding
 from heartwood.gateway._project import ProjectStateError
 from heartwood.gateway._rest import RestGateway, RestRequest
@@ -1231,7 +1232,7 @@ def test_correction_rechecks_evidence_and_cites_one_historical_observation(
             journal_path=gateway.project.state_root / "planning.jsonl",
             contains_file=gateway.project.contains,
             run_ids=set,
-            agent_tools_unavailable="no worker",
+            agent_tools_unavailable=McpServerError("mcp-worker-required"),
         )
         evidence = tuple(
             item.model_copy(update={"project_context_id": "other-context"})
@@ -1351,7 +1352,7 @@ def test_concurrent_writers_record_one_version_of_a_revision(tmp_path: Path, clo
             journal_path=path,
             contains_file=ProjectContext(tmp_path).contains,
             run_ids=set,
-            agent_tools_unavailable="no worker",
+            agent_tools_unavailable=McpServerError("mcp-worker-required"),
         )
         for _ in range(4)
     ]
