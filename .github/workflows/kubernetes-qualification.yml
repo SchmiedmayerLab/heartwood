@@ -371,8 +371,9 @@ jobs:
         run: |
           [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
           echo "${QUALIFICATION_STAGE}=${ARTIFACT_ID}" >> "${GITHUB_OUTPUT}"
+      # Also when the job reaches its time limit, which cancels it.
       - name: Export cluster logs
-        if: failure()
+        if: failure() || cancelled()
         run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood
       - name: Retain the cluster evidence
         if: always()

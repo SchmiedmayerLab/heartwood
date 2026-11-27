@@ -111,6 +111,10 @@ inference:
       apiKeySecret:
         name: llama-server
         key: api-key
+  # Each session deletion waits for a settlement; LiteLLM writes the spending every one
+  # to six seconds, so the settlement waits eight seconds.
+  spendWriteSeconds: 1
+  settleWaitSeconds: 8
   syntheticModel:
     enabled: true
   localModel:

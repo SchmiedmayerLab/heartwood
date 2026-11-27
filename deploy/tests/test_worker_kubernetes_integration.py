@@ -705,7 +705,11 @@ def _policy_probe(
                         "allowPrivilegeEscalation": False,
                         "capabilities": {"drop": ["ALL"]},
                     },
-                    "resources": {"limits": {"cpu": "250m", "memory": "128Mi"}},
+                    # A small request, so the probe does not depend on the node's headroom.
+                    "resources": {
+                        "requests": {"cpu": "10m", "memory": "32Mi"},
+                        "limits": {"cpu": "250m", "memory": "128Mi"},
+                    },
                 }
             ],
         },
@@ -718,7 +722,15 @@ def _policy_probe(
             if phase in {"Succeeded", "Failed"}:
                 break
             time.sleep(1)
-        assert phase == "Succeeded", phase
+        # A pod that never ran names the reason in its conditions, such as Unschedulable.
+        if phase != "Succeeded":
+            try:
+                conditions = fixture.outside(
+                    "get", "pod", name, "--output=jsonpath={.status.conditions}"
+                )
+            except AssertionError as error:
+                conditions = str(error)
+            raise AssertionError((phase, conditions))
         return fixture.outside("logs", name).strip()
     finally:
         fixture.outside("delete", "pod", name, "--wait")
