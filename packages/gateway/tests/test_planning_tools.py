@@ -45,6 +45,7 @@ from heartwood.gateway import (
     ProjectContext,
     SessionGateway,
 )
+from heartwood.gateway._diagnostics import diagnostic_for
 from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
@@ -295,6 +296,10 @@ def test_sessions_with_another_outside_service_receive_no_planning_tools(
         tools = gateway.planning().agent_tools
         assert tools is not None
         assert (tools.availability, tools.unavailable_code) == ("unavailable", "HW-MCP-007")
+        assert diagnostic_for("mcp-planning-outside-service").next_action == (
+            "No deployment manifest change enables the planning tools; use planning through "
+            "/plan, the browser or the notebook."
+        )
         assert tools.unavailable_reason == (
             "planning tools are not offered while the embedding supplies another outside service"
         )
@@ -308,13 +313,14 @@ def test_sessions_with_another_outside_service_receive_no_planning_tools(
         gateway.stop()
 
 
-def test_agent_tool_availability_requires_a_reason_exactly_when_unavailable() -> None:
+def test_agent_tool_availability_requires_a_code_and_reason_exactly_when_unavailable() -> None:
     PlanningAgentTools(availability="unavailable", unavailable_reason="r", unavailable_code="c")
     for fields in (
         {"availability": "unavailable"},
         {"availability": "unavailable", "unavailable_reason": "r"},
         {"availability": "unavailable", "unavailable_code": "c"},
         {"availability": "available", "unavailable_reason": "r"},
+        {"availability": "available", "unavailable_code": "c"},
         {"availability": "available", "unavailable_reason": "r", "unavailable_code": "c"},
     ):
         with pytest.raises(ValidationError):

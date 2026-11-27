@@ -323,7 +323,8 @@ Test the server, compare the listed tools, and select them again.
 
 Research service calls run only in sessions with an isolated worker, because each call needs outside review.
 The planning projection reports the agent planning tools as unavailable with this code, because their calls need the same review.
-Start the gateway with a deployment manifest that configures an isolated worker and lists MCP destinations.
+Start the gateway with a deployment manifest that configures an isolated worker.
+Research services also need the manifest to list MCP destinations; planning tools need only the worker.
 `heartwood services` can still manage the servers of such a deployment.
 
 ### `HW-MCP-005`: Research Service Is Unavailable or Refused the Request
@@ -342,7 +343,8 @@ Tools without them cannot be selected.
 
 The gateway runs in an embedding that supplies its own outside service, so worker sessions receive no agent planning tools.
 The planning projection reports them as unavailable with this code.
-No deployment manifest change enables them; researchers can still use planning through `/plan`, the browser and the notebook.
+No deployment manifest change enables them.
+Researchers can still use planning through `/plan`, the browser or the notebook.
 
 ## Deployment Manifests
 

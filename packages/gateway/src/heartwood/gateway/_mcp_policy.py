@@ -62,7 +62,10 @@ type McpAuthenticationStatus = Literal["missing", "valid", "expired", "unknown-e
 
 
 class McpServerError(ValueError):
-    """A refused research service operation, reported with its stable diagnostic code."""
+    """A refused research service operation or unavailable agent planning tools.
+
+    Either is reported with its stable diagnostic code.
+    """
 
     def __init__(self, check_id: str, message: str | None = None) -> None:
         """Without a message, the refusal shows the diagnostic's recovery step."""
