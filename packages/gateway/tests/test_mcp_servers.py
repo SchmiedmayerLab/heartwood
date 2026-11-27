@@ -1012,39 +1012,57 @@ def test_a_tool_that_declares_an_sdk_field_receives_it(tmp_path: Path) -> None:
             assert service.catalog.calls == ["label:Cohort A", "Cohort A"]
 
 
-def test_an_undeclared_argument_beside_the_sdk_fields_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("arguments", "reason"),
+    [
+        (
+            {"term": "synthetic", "summary": "Search", "security_risk": "LOW", "limit": 5},
+            "The call has arguments the reviewed tool does not define",
+        ),
+        (
+            {"term": "synthetic", "project_id": "other-project"},
+            "The call names a field the gateway supplies",
+        ),
+        ({}, "The call is missing arguments the reviewed tool requires"),
+    ],
+)
+def test_a_refused_call_reaches_the_agent_and_contacts_no_service(
+    tmp_path: Path, arguments: dict[str, JsonValue], reason: str
+) -> None:
     with served(tmp_path) as service:
         service.enable()
         with outside_session(tmp_path, service) as (session, worker, adapter):
             (tool,) = adapter.tool_names
-            arguments: dict[str, JsonValue] = {
-                "term": "synthetic",
-                "summary": "Search",
-                "security_risk": "LOW",
-                "limit": 5,
-            }
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, arguments)
             worker.call(tool, arguments)
             advance_outside_calls(session, adapter)
-            assert _records(session) == []
-            assert _tool_arguments(arguments, {"term"}) == {"term": "synthetic", "limit": 5}
+            (record,) = _records(session)
+            # The researcher sees the refusal and its reason; it carries none of the arguments.
+            assert record.proposal.request.summary == (
+                f"Tell the agent its find_records call was refused: {reason}"
+            )
+            assert json.loads(record.proposal.request.request_json) == {"refusal": reason}
+            _decide(session, record, CommandKind.APPROVE)
+            (observed,) = _records(session)
+            assert observed.observation is not None
+            assert observed.observation.operation.status == "failed"
+            assert observed.observation.operation.limitations == (reason,)
+            advance_outside_calls(session, adapter, clock=lambda: 1e9)
+            (release,) = external_result_records(session.replay_events()).values()
+            assert json.loads(release.proposal.content_json)["limitations"] == [reason]
+            assert service.catalog.calls == []
+            assert service.catalog.operations == {}
 
 
-def test_tools_outside_the_session_binding_and_gateway_fields_are_refused(tmp_path: Path) -> None:
+def test_tools_outside_the_session_binding_are_refused(tmp_path: Path) -> None:
     with served(tmp_path) as service:
         service.enable()
         with outside_session(tmp_path, service) as (session, worker, adapter):
-            (tool,) = adapter.tool_names
             with pytest.raises(ExternalActionError):
                 adapter.prepare("catalog__delete_records", {"term": "synthetic"})
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, {"term": "synthetic", "project_id": "other-project"})
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, {})
             worker.call("catalog__delete_records", {"term": "synthetic"})
             advance_outside_calls(session, adapter)
             assert _records(session) == []
+            assert _tool_arguments({"summary": "s", "limit": 5}, {"term"}) == {"limit": 5}
 
 
 def test_a_tool_changed_after_review_is_not_called(tmp_path: Path) -> None:

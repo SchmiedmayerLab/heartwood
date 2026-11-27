@@ -702,7 +702,17 @@ def test_cancellation_of_an_operation_this_session_did_not_send_is_refused(
             "text": "task-0001",
         }[target]
 
-        assert service.attempt("cancel_task", {"target_operation_id": named}) is None
+        attempted = service.attempt("cancel_task", {"target_operation_id": named})
+        if target == "text":
+            # A target that is no operation identifier is refused to the agent, after review.
+            assert attempted is not None
+            assert attempted.proposal.request.target_operation_id is None
+            assert json.loads(attempted.proposal.request.request_json) == {
+                "refusal": "A cancellation must name an operation identifier"
+            }
+            service.decide(attempted)
+        else:
+            assert attempted is None
         assert service.jobs.task_count == 0
 
 
