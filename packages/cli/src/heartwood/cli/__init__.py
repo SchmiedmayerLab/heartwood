@@ -1156,6 +1156,9 @@ def _handle_serve(
                     service_tokens=access.service_token
                     if isinstance(access, IdentityAccess)
                     else None,
+                    sign_in_revision=access.sign_in_revision
+                    if isinstance(access, IdentityAccess)
+                    else None,
                 )
                 if deployment is not None
                 else SessionGateway(project=project)

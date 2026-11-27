@@ -266,7 +266,11 @@ def _session_status(events: tuple[SessionEvent, ...]) -> str:
             tool_call_id = event.payload.get("tool_call_id")
             if isinstance(tool_call_id, str):
                 pending.discard(tool_call_id)
-        elif event.kind == EventKind.ERROR_RECORDED:
+        elif (
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("affects_lifecycle") is not False
+        ):
+            # A refused review or a call waiting for review leaves the session as it was.
             status = "error"
         elif event.kind in {
             EventKind.AGENT_MESSAGE_EMITTED,

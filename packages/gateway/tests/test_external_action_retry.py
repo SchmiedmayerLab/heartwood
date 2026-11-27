@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 import pytest
@@ -22,11 +22,13 @@ from heartwood.core_adapter.checkpoint_evidence import (
     CheckpointEvidenceUnavailableError,
     SessionCheckpointEvidence,
 )
+from heartwood.core_adapter.external_actions import external_action_records
 from heartwood.gateway import (
     SessionGateway,
     approval_retry_unavailable_reason,
     retained_approval,
 )
+from heartwood.gateway._mcp_servers import McpOutsideAdapter, _propose_calls
 from heartwood.session import CommandKind, EventKind, SessionCommand
 from packages.gateway.tests.outside_retry_fixtures import (
     NOW,
@@ -244,4 +246,29 @@ def test_an_expired_retained_approval_is_reported_and_never_sent(review: Outside
         "The approval is no longer waiting to be sent: Review expired before dispatch."
     )
     assert review.gateway.handle(approved).replayed
+    assert review.outside.submissions == 0
+
+
+class _ProposingService:
+    """The outside service as the gateway's proposal step sees it."""
+
+    def __init__(self, review: OutsideReview) -> None:
+        self.tool_names = review.outside.tool_names
+
+    def service_id(self, tool_name: str) -> str:
+        del tool_name
+        return "synthetic-analysis"
+
+
+def test_an_expired_retained_approval_is_never_proposed_again(review: OutsideReview) -> None:
+    _interrupted_approval(review)
+    review.expire()
+    review.gateway.session_projection(session_id=SESSION)
+    assert review.phase() == "expired"
+
+    _propose_calls(review.service, cast(McpOutsideAdapter, _ProposingService(review)))
+
+    assert [
+        record.phase for record in external_action_records(review.service.replay_events()).values()
+    ] == ["expired"]
     assert review.outside.submissions == 0

@@ -259,6 +259,8 @@ class IdentityAccess:
         self._logins: OrderedDict[str, _Login] = OrderedDict()
         self._refresh_lock = Lock()
         self._bearer: _Bearer | None = None
+        # Counts each change from no live sign-in or bearer token to one.
+        self._sign_in_revision = 0
         self._exchange_lock = Lock()
         self._exchanged: dict[tuple[str, str], _Exchanged] = {}
         self._provider_lock = RLock()
@@ -324,8 +326,12 @@ class IdentityAccess:
         # The token stays in memory until it expires, as the subject token of exchanges.
         expires_at = self._clock() + float(claims["exp"]) - time.time()
         with self._lock:
+            self._purge()
+            signed_in = self._signed_in_locked()
             if self._bearer is None or self._bearer.expires_at < expires_at:
                 self._bearer = _Bearer(token.strip(), expires_at)
+            if not signed_in:
+                self._sign_in_revision += 1
         return self._actor
 
     def display_name(self, headers: Mapping[str, tuple[str, ...]]) -> str | None:
@@ -385,6 +391,18 @@ class IdentityAccess:
         if path == "/" and _cookie_value(headers, LOGIN_COOKIE) != "1":
             return AccessResponse(302, location=f"{self._base_url}{LOGIN_PATH}")
         return None
+
+    def sign_in_revision(self) -> int:
+        """Return a number that changes when a sign-in or token arrives while none was live.
+
+        A client that presents a new token with every request while a sign-in or token is
+        live does not change it.
+        """
+        with self._lock:
+            return self._sign_in_revision
+
+    def _signed_in_locked(self) -> bool:
+        return bool(self._logins) or self._bearer is not None
 
     def service_token(self, scope: str, audience: str) -> str | None:
         """Return a token for one platform service, exchanged for the researcher's token.
@@ -577,9 +595,12 @@ class IdentityAccess:
         login.launch_token = launch_token
         with self._lock:
             login.launch_expires_at = self._purge() + _LAUNCH_LIFETIME_SECONDS
+            signed_in = self._signed_in_locked()
             while len(self._logins) >= _MAXIMUM_LOGINS:
                 self._logins.popitem(last=False)
             self._logins[capability] = login
+            if not signed_in:
+                self._sign_in_revision += 1
         # The marker cookie authorizes nothing. It only lets the index document through
         # once, so the page can exchange the launch token; every API request needs the
         # capability. The sign-in cookie has served its purpose and is removed.

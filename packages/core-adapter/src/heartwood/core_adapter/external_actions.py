@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal, Protocol, Self, cast
@@ -32,10 +33,30 @@ from heartwood.session import EventKind, SessionEvent
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_INPUT_BYTES = 16 * 1024 * 1024
 _OUTSIDE_PREFIX = "outside-operation-"
+# Only identity refusals are recorded with their code; the researcher resolves them.
+_CODE = re.compile(r"HW-INGRESS-\d{3}")
+_MAX_DETAIL_CHARACTERS = 512
 
 
 class ExternalActionError(ValueError):
-    """An outside operation cannot be admitted or its outcome cannot be established."""
+    """An outside operation cannot be admitted or its outcome cannot be established.
+
+    A trusted adapter sets ``code`` to an identity refusal code (``HW-INGRESS-*``) when
+    the researcher resolves the refusal by signing in; the session then records that code
+    with ``detail``. Other codes are refused, so an adapter cannot record a code that
+    stops the session, such as an unknown agent outcome.
+    """
+
+    def __init__(self, detail: str, *, code: str | None = None) -> None:
+        """Keep the detail apart from its optional identity refusal code."""
+        if code is not None:
+            if _CODE.fullmatch(code) is None:
+                raise ValueError("outside operation diagnostic code is not an identity refusal")
+            if not detail.isprintable() or not 0 < len(detail) <= _MAX_DETAIL_CHARACTERS:
+                raise ValueError("outside operation diagnostic detail is not one bounded line")
+        self.detail = detail
+        self.code = code
+        super().__init__(detail if code is None else f"{code}: {detail}")
 
 
 class _Record(BaseModel):

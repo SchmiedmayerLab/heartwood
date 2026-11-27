@@ -149,6 +149,7 @@ class McpServerManager:
         worker_available: bool,
         project_id: str | None = None,
         service_tokens: ServiceTokens | None = None,
+        sign_in_revision: Callable[[], int] | None = None,
     ) -> None:
         self._config_store = config_store
         # The project the gateway names to services: the platform project of the launch
@@ -156,6 +157,7 @@ class McpServerManager:
         self.project_id = project_id
         self._credentials = credential_store
         self._service_tokens = service_tokens
+        self._sign_in_revision = sign_in_revision
         self._destinations = tuple(destinations)
         self._worker_available = worker_available
         # Definitions from the latest test in this process, by server and tool name.
@@ -201,6 +203,10 @@ class McpServerManager:
 
         self._config_store.update(apply)
 
+    def sign_in_revision(self) -> int:
+        """Return a number that changes with each new researcher sign-in, if identity is used."""
+        return 0 if self._sign_in_revision is None else self._sign_in_revision()
+
     def token(self, destination: McpDestination) -> str | None:
         """Resolve a destination's bearer token in the gateway; never in project files.
 
@@ -215,10 +221,7 @@ class McpServerManager:
         try:
             return self._service_tokens(exchange.scope, exchange.audience)
         except AccessUnavailableError:
-            raise McpServerError(
-                "gateway-identity-provider",
-                "the identity provider is unavailable, so the research service has no token",
-            ) from None
+            raise McpServerError("gateway-identity-provider") from None
         except TokenExchangeRefusedError:
             raise McpServerError(
                 "gateway-identity",
@@ -562,19 +565,9 @@ class McpServerManager:
         try:
             token = self.token(bound.destination)
         except McpServerError as error:
-            # Identity refusals keep their stable code, so the researcher sees HW-INGRESS-004.
-            raise ExternalActionError(
-                str(error) if error.code.startswith("HW-INGRESS-") else error.detail
-            ) from None
+            raise _outside_error(error) from None
         if bound.destination.token_exchange is not None and token is None:
-            raise ExternalActionError(
-                str(
-                    McpServerError(
-                        "gateway-identity",
-                        "the research service waits until the researcher signs in at the gateway",
-                    )
-                )
-            )
+            raise _outside_error(McpServerError("gateway-identity"))
         if token_authentication(token).status == "expired":
             raise ExternalActionError("the research service credential is expired")
 
@@ -599,10 +592,7 @@ class McpServerManager:
             self._refuse_entered(destination, token)
             token = self.token(destination)
             if token is None:
-                raise McpServerError(
-                    "gateway-identity",
-                    "the research service waits until the researcher signs in at the gateway",
-                )
+                raise McpServerError("gateway-identity")
         token = self.token(destination) if token is None else token
         if token_authentication(token).status == "expired":
             raise McpServerError("mcp-credential", "the research service token is expired")
@@ -641,6 +631,16 @@ class McpServerManager:
             yield client
         finally:
             client.sync_close()
+
+
+def _outside_error(error: McpServerError) -> ExternalActionError:
+    """Refuse an outside operation; identity refusals keep their stable ingress code.
+
+    The researcher resolves those by signing in at the gateway, so every interface shows
+    the code and recovery step that the gateway's own HTTP refusal carries.
+    """
+    code = error.code if error.code.startswith("HW-INGRESS-") else None
+    return ExternalActionError(error.detail, code=code)
 
 
 def _entered(token: str | None) -> str | None:
@@ -710,6 +710,7 @@ class McpOutsideAdapter:
         bound: Sequence[McpBoundTool],
         *,
         planning: PlatformPlanning | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._manager = manager
         self._bound = {item.worker_name: item for item in bound}
@@ -717,7 +718,11 @@ class McpOutsideAdapter:
         self._planning_tools = (
             {} if planning is None else {item.name: item for item in planning.client_tools}
         )
+        self.clock = clock
         self.last_reconciled = 0.0
+        # The last identity refusal per service while describing a submission, when it
+        # happened, and the sign-in it happened under.
+        self._identity_refusals: dict[str, tuple[float, int, McpServerError]] = {}
         # The last session event whose platform operation records were linked to planning.
         self.linked_sequence = 0
 
@@ -859,13 +864,37 @@ class McpOutsideAdapter:
         )
         if project is None:
             return None
+        service = bound.destination.service_id
+        held = self._identity_refusals.get(service)
+        revision = self._manager.sign_in_revision()
+        # Every read proposes pending calls; within an interval after an identity refusal,
+        # and while the sign-in is unchanged, the refusal is repeated without asking the
+        # identity provider again. A new sign-in ends the wait at once.
+        if (
+            held is not None
+            and held[1] == revision
+            and self.clock() - held[0] < _RECONCILE_INTERVAL_SECONDS
+        ):
+            raise _outside_error(held[2])
         try:
-            with self._manager.connect(bound.server, bound.destination) as client:
+            with self._connect(bound) as client:
                 return request_proposal(
                     client, bound.destination, bound.tool.name, project, arguments
                 )
-        except McpServerError:
+        except McpServerError as error:
+            # An identity refusal opens no review, so no review lacks a proposal that the
+            # next sign-in could supply; a later read proposes the call again.
+            if error.code.startswith("HW-INGRESS-"):
+                self._identity_refusals[service] = (self.clock(), revision, error)
+                raise _outside_error(error) from None
             return None
+
+    @contextmanager
+    def _connect(self, bound: McpBoundTool) -> Iterator[MCPClient]:
+        """Connect to a bound tool's server; a connection ends an earlier identity refusal."""
+        with self._manager.connect(bound.server, bound.destination) as client:
+            self._identity_refusals.pop(bound.destination.service_id, None)
+            yield client
 
     def _estimate(self, proposal: PlatformOperationProposal | None) -> ExternalOperationEstimate:
         if self._planning is None:
@@ -910,10 +939,10 @@ class McpOutsideAdapter:
         if review is not None and review.kind == "submit" and review.proposal is None:
             raise ExternalActionError("the platform returned no proposal for this operation")
         try:
-            with self._manager.connect(bound.server, bound.destination) as client:
+            with self._connect(bound) as client:
                 self._verify_definition(client, bound)
         except McpServerError as error:
-            raise ExternalActionError(error.detail) from None
+            raise _outside_error(error) from None
 
     def read_input(self, reference: ExternalInputReference) -> bytes:  # noqa: ARG002
         """Research service calls carry no file inputs."""
@@ -944,7 +973,7 @@ class McpOutsideAdapter:
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
         target = proposal.request.target_operation_id
-        with self._manager.connect(bound.server, bound.destination) as client:
+        with self._connect(bound) as client:
             self._verify_definition(client, bound)
             operation = self._call(
                 client,
@@ -976,7 +1005,7 @@ class McpOutsideAdapter:
                 ),
             )
         bound = self._tool(proposal.request.tool_name)
-        with self._manager.connect(bound.server, bound.destination) as client:
+        with self._connect(bound) as client:
             operation = self._call(
                 client,
                 bound,
@@ -1062,7 +1091,7 @@ def advance_outside_calls(
     service: SessionService,
     adapter: McpOutsideAdapter,
     *,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Callable[[], float] | None = None,
 ) -> None:
     """Open outside review for new worker calls and result review for finished ones.
 
@@ -1072,7 +1101,8 @@ def advance_outside_calls(
     runs at most once per interval. A refusal leaves the session as it was; the next
     read tries again. With planning, the operation records are then linked to it.
     """
-    _advance(service, adapter, clock)
+    # The adapter's clock also times its identity refusal hold.
+    _advance(service, adapter, adapter.clock if clock is None else clock)
     if adapter.planning is not None:
         with suppress(ValueError):
             adapter.linked_sequence = link_operations(
@@ -1154,9 +1184,14 @@ def _propose_calls(service: SessionService, adapter: McpOutsideAdapter) -> None:
         ):
             continue
         existing = reviewed.get(event.event_id)
-        if (existing is not None and existing.phase != "proposed") or adapter.service_id(
-            str(event.payload.get("tool_name"))
-        ) in blocked:
+        # A review that expired before the platform could describe the call again has no
+        # replacement yet; an expired authorization is never proposed again.
+        replaceable = (
+            existing is None
+            or existing.phase == "proposed"
+            or (existing.phase == "expired" and existing.decision is None)
+        )
+        if not replaceable or adapter.service_id(str(event.payload.get("tool_name"))) in blocked:
             continue
         # An expired review is closed and replaced; an open one is left alone.
         with suppress(ValueError):

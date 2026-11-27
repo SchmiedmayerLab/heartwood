@@ -119,6 +119,7 @@ class Platform:
         self.after_submit: Callable[[], None] = lambda: None
         self.check_hook: Callable[[], None] = lambda: None
         self.status: Literal["running", "completed", "unknown"] = "completed"
+        self.prepare_refusal: ExternalActionError | None = None
 
     def prepare_result(self, record: ExternalActionRecord) -> str:
         assert record.observation is not None
@@ -143,6 +144,8 @@ class Platform:
 
     def prepare(self, tool_name: str, arguments: dict[str, JsonValue]) -> ExternalActionRequest:
         assert arguments == {"analysis": "synthetic"}
+        if self.prepare_refusal is not None:
+            raise self.prepare_refusal
         return ExternalActionRequest(
             service_id="synthetic-analysis",
             tool_name=tool_name,
@@ -406,6 +409,71 @@ def test_changed_authority_or_input_prevents_dispatch(setup: Setup, change: str)
     assert latest(service).phase == "proposed"
     assert platform.submissions == []
     assert "synthetic credential" not in str(service.replay_events())
+
+
+def test_a_coded_refusal_is_recorded_with_its_code_and_keeps_the_review_open(
+    setup: Setup,
+) -> None:
+    service, worker, platform = setup
+    record = propose(service, worker)
+
+    def refuse() -> None:
+        raise ExternalActionError("Sign in again.", code="HW-INGRESS-004")
+
+    platform.check_hook = refuse
+    refused = service.handle(command(service, record)).events[-1]
+
+    assert refused.kind == EventKind.ERROR_RECORDED
+    assert (refused.payload["code"], refused.payload["reason"]) == (
+        "HW-INGRESS-004",
+        "Sign in again.",
+    )
+    assert refused.payload["affects_lifecycle"] is False
+    assert latest(service).phase == "proposed"
+    assert platform.submissions == []
+
+    platform.check_hook = lambda: None
+    service.handle(command(service, record))
+    assert latest(service).terminal
+    assert len(platform.submissions) == 1
+
+
+def test_an_uncoded_refusal_records_no_adapter_text(setup: Setup) -> None:
+    service, worker, platform = setup
+    record = propose(service, worker)
+
+    def refuse() -> None:
+        raise ExternalActionError("synthetic adapter text")
+
+    platform.check_hook = refuse
+    refused = service.handle(command(service, record)).events[-1]
+
+    assert refused.kind == EventKind.ERROR_RECORDED
+    assert "code" not in refused.payload
+    assert refused.payload["reason"] == "outside authorization or input validation failed"
+    assert "synthetic adapter text" not in str(service.replay_events())
+    assert latest(service).phase == "proposed"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        *(item.value for item in BackendErrorCode),
+        "HW-MCP-005",
+        "HW-PLAN-006",
+        "service text",
+    ],
+)
+def test_an_outside_refusal_carries_only_an_identity_refusal_code(code: str) -> None:
+    # A session-fatal code such as HW-AGENT-007 must never be recorded by an adapter.
+    with pytest.raises(ValueError, match="not an identity refusal"):
+        ExternalActionError("detail", code=code)
+
+
+@pytest.mark.parametrize("detail", ["", "two\nlines", "x" * 513])
+def test_a_coded_refusal_detail_is_one_bounded_line(detail: str) -> None:
+    with pytest.raises(ValueError, match="one bounded line"):
+        ExternalActionError(detail, code="HW-INGRESS-004")
 
 
 def test_rechecks_fence_after_slow_policy_callback(setup: Setup) -> None:
@@ -1318,6 +1386,50 @@ def test_expired_review_is_closed_and_the_same_proposal_reviewed_afresh(setup: S
     assert decision is not None
     assert decision.command_id == approved.command_id
     assert decision.proposal_sha256 == fresh.proposal.sha256
+
+
+def test_a_review_refused_by_its_adapter_records_the_expiry_and_its_reason_once(
+    setup: Setup,
+) -> None:
+    service, worker, platform = setup
+    expired = propose(service, worker)
+    source = expired.proposal.source_event_id
+    expire(service)
+    emitted: list[SessionEvent] = []
+    service._event_sink = emitted.extend
+    platform.prepare_refusal = ExternalActionError("Sign in again.", code="HW-INGRESS-004")
+
+    for _ in range(3):
+        with pytest.raises(ExternalActionError, match="HW-INGRESS-004"):
+            service.propose_external_action(source)
+    platform.prepare_refusal = ExternalActionError("Retry later.", code="HW-INGRESS-005")
+    with pytest.raises(ExternalActionError, match="HW-INGRESS-005"):
+        service.propose_external_action(source)
+
+    # Subscribers receive the expiry and each change of reason, which answers no command.
+    assert [event.kind for event in emitted] == [
+        EventKind.EXTERNAL_ACTION_RECORDED,
+        EventKind.ERROR_RECORDED,
+        EventKind.ERROR_RECORDED,
+    ]
+    assert [
+        (
+            event.payload["code"],
+            event.payload["pending_call"],
+            event.payload["affects_lifecycle"],
+        )
+        for event in emitted[1:]
+    ] == [("HW-INGRESS-004", source, False), ("HW-INGRESS-005", source, False)]
+    assert [item.phase for item in external_action_records(service.replay_events()).values()] == [
+        "expired"
+    ]
+
+    platform.prepare_refusal = None
+    fresh = ExternalActionRecord.model_validate_json(
+        json.dumps(service.propose_external_action(source).payload["record"])
+    )
+    service.handle(command(service, fresh))
+    assert platform.submissions == [(b"synthetic input",)]
 
 
 def test_expired_result_review_is_closed_and_the_result_reviewed_afresh(setup: Setup) -> None:

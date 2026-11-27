@@ -644,8 +644,8 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 |---|---|---|
 | Capability not offered | No advertised support | The choice is hidden in every interface; a stored or requested choice shows [HW-SETUP-004](../reference/troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
-| Missing identity, or the identity of another subject or issuer, with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
-| Identity provider unreachable or unusable | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
+| Missing identity, or the identity of another subject or issuer, with `identity-proxy` ingress; a platform service call without a live sign-in, or for which the provider issues no token | Not applicable, or a refused token exchange | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
+| Identity provider unreachable or unusable, also for a platform service call | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Sandbox gateway lacks a required capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
 | Expired or rejected model credential | An authentication error | [HW-AGENT-008](../reference/troubleshooting.md#agent-runtime) |
@@ -669,7 +669,8 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
 Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
 Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
-Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
+Besides HTTP requests, a missing sign-in and an unavailable identity provider refuse the gateway's calls to a platform service that takes an exchanged token, and the terminal, browser and notebook show the same HW-INGRESS-004 or HW-INGRESS-005 diagnostic for it.
+Only the browser shows HW-INGRESS-002 and HW-INGRESS-003, because they refuse HTTP requests, which the terminal and notebook do not send.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
 Planning outcomes appear in the planning projection, and the terminal, browser and notebook show their diagnostics.
 Platform job operation states appear with each operation in the session projection; a denied operation there shows HW-PLAN-006 as well.
