@@ -30,7 +30,8 @@ If verification fails, keep the files for inspection and start from a clean chec
 Installing Heartwood packages from a package registry without these wheels is not supported; the native release archive and container images build them through the same bootstrap.
 
 Resolution ignores releases younger than seven days through uv's `exclude-newer`, npm's `min-release-age`, and the Dependabot cooldown; security updates are not delayed.
-Base images are pinned by digest, and third-party GitHub Actions use exact versions from immutable releases.
+Base images are pinned by digest.
+Every GitHub Action and reusable workflow from another repository that this repository references is pinned by its full commit SHA, with the version as a trailing comment, and Dependabot updates both; a compliance test refuses any other reference.
 
 ## Reuse Before Variants
 
@@ -123,6 +124,7 @@ The candidate does not move release or `edge` tags.
 
 Pull-request and main validation run on standard GitHub-hosted runners (`ubuntu-24.04`, `ubuntu-24.04-arm` for ARM images, and `ubuntu-latest` for some checks), with two exceptions.
 Capable-model acceptance runs on the organization's `heartwood-ubuntu-large` hosted runner, because llama.cpp prompt processing on a standard runner misses the qualification deadline; the job requires at least 30 GiB of memory and matches llama.cpp threads to the runner's cores.
+The end-to-end stage of the Kubernetes qualification also runs on it, because a session worker and a batch task together request more CPU than a four-CPU kind node has.
 That runner group is limited to this repository and fork pull requests need approval before their workflows run; keep its label out of every other workflow.
 GPU coding-agent qualification is a manually started workflow on a self-hosted GPU runner.
 GPU image builds start with the `reclaim-runner-disk` action, which removes unused preinstalled toolchains.

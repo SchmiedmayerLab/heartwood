@@ -78,6 +78,9 @@ hub:
   worker:
     # The staging stand-in above in place of the worker image.
     image: registry.k8s.io/e2e-test-images/agnhost:2.53@sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+  # The single-user pods of the three servers of a researcher story request less.
+  resources:
+    cpuGuarantee: 0.05
   # The program of the stand-in worker image. An installation with the worker image
   # passes its interpreter, which deploy/qualify-kubernetes-worker.py images reports as
   # worker_interpreter.

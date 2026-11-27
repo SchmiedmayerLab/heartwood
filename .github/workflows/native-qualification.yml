@@ -37,13 +37,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout the qualified commit
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           submodules: true
       - name: Download the retained evidence
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-native-qualification-${{ github.sha }}
           path: test-results/native-qualification
@@ -52,6 +52,98 @@ jobs:
           python3 deploy/qualification_evidence.py
           test-results/native-qualification --commit "${GITHUB_SHA}"
       - name: Attest the evidence checksums
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: test-results/native-qualification/SHA256SUMS
+  # The images of a commit are published only after both qualifications passed and the
+  # native evidence is attested. The job rebuilds them from the run's verified wheels and
+  # gateway build, which needs no registry credential, so the login follows the build.
+  # It holds no signing permission.
+  publish-images:
+    name: Publish Platform Images
+    needs: [native-qualification, kubernetes-qualification, evidence-attestation]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # A manual run of the same commit waits, so two runs never push the same tags at once.
+    concurrency:
+      group: publish-images-${{ github.sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      subjects: ${{ steps.record.outputs.subjects }}
+    steps:
+      - name: Checkout the qualified commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: true
+      - name: Download candidate wheels
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: worker-dependency-candidate-${{ github.sha }}
+          path: test-results/worker-candidate
+      - name: Download the pinned gateway build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: worker-gateway-candidate-${{ github.sha }}
+          path: test-results/gateway-candidate
+      - name: Build the images of the commit
+        run: >-
+          python3 reference-platform/tools/publish_images.py build --commit "${GITHUB_SHA}"
+          --wheels test-results/worker-candidate --gateway-artifacts test-results/gateway-candidate
+          --output test-results/built-images.json
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the images under the commit tag
+        run: >-
+          python3 reference-platform/tools/publish_images.py push test-results/built-images.json
+          --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" --output test-results/published-images.json
+      - name: Record the published digests
+        id: record
+        run: |
+          record=test-results/published-images.json
+          digest="sha256:$(sha256sum "${record}" | cut -d ' ' -f 1)"
+          echo "subjects=$(jq --compact-output --arg digest "${digest}" \
+            '.images | map_values({name: .repository, digest})
+            | .record = {name: "published-images.json", digest: $digest}' "${record}")" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Published images"
+            echo
+            jq --raw-output '.images[] | "- `\(.repository)@\(.digest)`"' "${record}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Retain the record of published images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: published-images-${{ github.sha }}
+          path: test-results/published-images.json
+          if-no-files-found: error
+          retention-days: 90
+  # Attests each published digest and the record, which also names the worker's
+  # interpreter. The job runs no repository code, so the signing identity never reaches a
+  # build step.
+  image-attestation:
+    name: Attest Published Subject ${{ matrix.subject }}
+    needs: publish-images
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        subject: [worker, runtime, hosted-gateway, sandbox-gateway, platform-services, funnel, record]
+    steps:
+      - name: Attest the build provenance of the subject
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ fromJSON(needs.publish-images.outputs.subjects)[matrix.subject].name }}
+          subject-digest: ${{ fromJSON(needs.publish-images.outputs.subjects)[matrix.subject].digest }}

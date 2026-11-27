@@ -52,6 +52,10 @@ The Kubernetes cluster stage runs on pull requests that change its inputs and on
 It runs after native qualification, whose candidate wheels and gateway build it uses.
 The stage fails when a blocked connection does not time out, when the reachable connection fails, or when a blocked pod cannot connect after its policies are deleted.
 On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
+When both native qualification and the Kubernetes cluster stage pass and the native evidence is attested, its `publish-images` job builds the [published images](../operate/platform-requirements.md#published-images) again from the run's candidate wheels and gateway build, logs in to the registry, and pushes them under `sha-<commit>` tags, refusing a tag that exists.
+That job holds `packages: write` and no signing permission; a separate job, which checks out and runs no repository code, attests each pushed digest and the record of the digests with `attestations: write` and `id-token: write`.
+A commit whose images were published only in part stays unpublished, because the job does not replace the tags that exist; the next commit publishes its own images.
+A manual run of a commit whose images were published fails for the same reason.
 
 Pull-request jobs that build and run candidate code hold no signing or package-write permission; the Python job holds an identity token only to upload coverage to Codecov.
 Multi-platform manifests, moving tags, and evidence attestation run only on the main branch.

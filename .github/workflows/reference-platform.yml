@@ -20,14 +20,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Keep cloud-specific and platform code out of application packages
         run: python3 reference-platform/tools/check_cloud_boundary.py
       - name: Install OpenTofu
-        uses: opentofu/setup-opentofu@v2.0.2
+        uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
         with:
           tofu_version: 1.13.9
           tofu_wrapper: false
@@ -52,7 +52,7 @@ jobs:
         working-directory: reference-platform/services
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
@@ -66,7 +66,7 @@ jobs:
             --strip-components 1 linux-amd64/helm
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.13.7"
           enable-cache: true
@@ -90,7 +90,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true

@@ -15,12 +15,21 @@ its API key. Its answers depend only on the request: when the request offers the
 answers with a fixed text. A user message that contains ``synthetic:interrupt`` makes it
 close the connection in the middle of its answer. Every answer reports the same usage,
 so LiteLLM records the same cost for every request.
+
+A user message that contains ``synthetic:script`` followed by a JSON array of
+``[tool, arguments]`` pairs replaces the fixed calls: the n-th answer with a tool call
+after the last such message makes the n-th call of its array. A tool is named exactly, or by the
+name of an MCP tool that the gateway offers as ``<server>__<name>_<digest>``, with
+the hyphens of the server identifier written as underscores. When the
+array is used up, or names a tool that the request does not offer, the model answers
+with the fixed text.
 """
 
 from __future__ import annotations
 
 import hmac
 import json
+import re
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -38,6 +47,7 @@ COMMAND = "printf synthetic-route > /workspace/synthetic-route.txt"
 FINISH = "The synthetic model route completed its task."
 TEXT = "This is the synthetic model."
 INTERRUPT = "synthetic:interrupt"
+SCRIPT = "synthetic:script"
 USAGE = {"prompt_tokens": 1000, "completion_tokens": 500, "total_tokens": 1500}
 _MAX_BODY = 4 * 1024 * 1024
 
@@ -69,6 +79,74 @@ def _step(messages: list[Any]) -> int:
     return count
 
 
+def _text(content: object) -> str:
+    """Return the text of a message's content, a string or a list of parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
+def _script(messages: list[Any]) -> tuple[list[Any], int] | None:
+    """Return the script of the last user message that holds one, and its next step.
+
+    The step counts the answers with a tool call after that message.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        text = _text(message.get("content"))
+        _, found, rest = text.partition(SCRIPT)
+        if not found:
+            continue
+        try:
+            script, _ = json.JSONDecoder().raw_decode(rest.lstrip())
+        except ValueError:
+            return None
+        if not isinstance(script, list):
+            return None
+        step = sum(
+            1
+            for later in messages[index + 1 :]
+            if isinstance(later, dict)
+            and later.get("role") == "assistant"
+            and later.get("tool_calls")
+        )
+        return script, step
+    return None
+
+
+def _offered(name: str, tools: set[str]) -> str | None:
+    """Return the offered tool of a script step: its exact name or the one MCP tool of it."""
+    if name in tools:
+        return name
+    pattern = re.compile(rf"[a-z0-9_]+__{re.escape(name)}_[0-9a-f]{{8}}")
+    found = [tool for tool in tools if pattern.fullmatch(tool)]
+    return found[0] if len(found) == 1 else None
+
+
+def _call(messages: list[Any], name: str, arguments: object) -> dict[str, Any]:
+    # The identifier counts every earlier tool call of the conversation, so no two calls of
+    # one conversation share it.
+    earlier = sum(
+        len(message.get("tool_calls") or [])
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "assistant"
+    )
+    call = {
+        "id": f"synthetic-{earlier}",
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+    return {"role": "assistant", "content": "", "tool_calls": [call]}
+
+
 def _interrupted(messages: list[Any]) -> bool:
     return any(
         isinstance(message, dict)
@@ -84,21 +162,25 @@ def answer(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(messages, list):
         messages = []
     tools = {
-        tool.get("function", {}).get("name")
+        name
         for tool in body.get("tools") or []
-        if isinstance(tool, dict)
+        if isinstance(tool, dict) and isinstance(name := tool.get("function", {}).get("name"), str)
     }
+    scripted = _script(messages)
+    if scripted is not None:
+        script, step = scripted
+        entry = script[step] if step < len(script) else None
+        if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str):
+            offered = _offered(entry[0], tools)
+            if offered is not None:
+                return _call(messages, offered, entry[1])
+        return {"role": "assistant", "content": TEXT}
     if {"terminal", "finish"} <= tools:
         step = _step(messages)
         name, arguments = (
             ("terminal", {"command": COMMAND}) if step == 0 else ("finish", {"message": FINISH})
         )
-        call = {
-            "id": f"synthetic-{step}",
-            "type": "function",
-            "function": {"name": name, "arguments": json.dumps(arguments)},
-        }
-        return {"role": "assistant", "content": "", "tool_calls": [call]}
+        return _call(messages, name, arguments)
     return {"role": "assistant", "content": TEXT}
 
 

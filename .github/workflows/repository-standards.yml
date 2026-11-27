@@ -21,4 +21,4 @@ permissions:
 jobs:
   standards:
     name: Standards
-    uses: SchmiedmayerLab/.github/.github/workflows/repository-standards.yml@v0.5
+    uses: SchmiedmayerLab/.github/.github/workflows/repository-standards.yml@552992682d8d39fae86d2fdeabddc47520573512 # v0.5

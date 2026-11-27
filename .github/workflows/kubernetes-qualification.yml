@@ -23,7 +23,7 @@ jobs:
       required: ${{ steps.inputs.outputs.required }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -60,12 +60,12 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
       - name: Download candidate wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-dependency-candidate-${{ github.sha }}
           path: test-results/worker-candidate
@@ -87,7 +87,7 @@ jobs:
             heartwood-hosted-gateway:qualification heartwood-platform-services:candidate \
             heartwood-funnel:candidate
       - name: Retain the images for the cluster jobs
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kubernetes-qualification-images-${{ github.sha }}
           path: ${{ runner.temp }}/cluster-images/images.tar
@@ -98,29 +98,40 @@ jobs:
 
   # Each stage runs on its own kind cluster with the same images and chart, so the
   # stages run in parallel. A cluster test module that is not named here runs in the
-  # platform stage.
+  # platform stage. The end-to-end story runs a session worker and a batch task at once,
+  # whose CPU requests exceed a four-CPU node, so it runs on the larger runner. Its
+  # servers wait idle between its tests, so the stage does not cull them.
   cluster:
     name: Kubernetes qualification of the ${{ matrix.stage }} stage
     needs: [scope, images]
     if: needs.scope.outputs.required == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - stage: platform
+            runner: ubuntu-24.04
             tests: >-
               ../tests/cluster
               --ignore=../tests/cluster/test_hub_spawning.py
               --ignore=../tests/cluster/test_hosted_recovery.py
               --ignore=../tests/cluster/test_hosted_worker.py
+              --ignore=../tests/cluster/test_end_to_end.py
           - stage: hosted
+            runner: ubuntu-24.04
             tests: >-
               ../tests/cluster/test_hub_spawning.py
               ../tests/cluster/test_hosted_recovery.py
               ../tests/cluster/test_hosted_worker.py
+          - stage: end-to-end
+            runner: heartwood-ubuntu-large
+            chart: --set jupyterhub.cull.timeout=3600
+            tests: >-
+              ../tests/cluster/test_end_to_end.py
           - stage: worker
+            runner: ubuntu-24.04
             tests: ""
     env:
       KIND_VERSION: v0.33.0
@@ -131,7 +142,7 @@ jobs:
       HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
           submodules: true
@@ -154,17 +165,17 @@ jobs:
       # Only the chart tests run uv.
       - name: Install uv
         if: matrix.stage != 'worker'
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.13.7"
           enable-cache: true
       - name: Download the pinned gateway build
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-gateway-candidate-${{ github.sha }}
           path: test-results/gateway-candidate
       - name: Download the images
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: kubernetes-qualification-images-${{ github.sha }}
           path: ${{ runner.temp }}/cluster-images
@@ -219,7 +230,7 @@ jobs:
       # The worker's interpreter is the program that may send the model route's key.
       - name: Install the platform chart
         run: >-
-          bash reference-platform/cluster/install-chart.sh heartwood
+          bash reference-platform/cluster/install-chart.sh heartwood ${{ matrix.chart }}
           --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
           --set "images.openshellGateway=${GATEWAY_IMAGE}"
           --set "images.openshellRepository=${OPENSHELL_REPOSITORY}"
@@ -262,7 +273,7 @@ jobs:
         run: kind export logs test-results/kubernetes-qualification/kind-logs --name heartwood
       - name: Retain the cluster evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: kubernetes-qualification-${{ matrix.stage }}-${{ github.sha }}
           path: |

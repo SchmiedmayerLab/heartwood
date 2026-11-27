@@ -245,15 +245,17 @@ def test_each_cluster_test_module_runs_in_exactly_one_stage() -> None:
     prefix = "../tests/cluster/"
     platform = stages["platform"]
     ignored = {item.removeprefix("--ignore=" + prefix) for item in platform[1:]}
-    hosted = {item.removeprefix(prefix) for item in stages["hosted"]}
+    named = [
+        item.removeprefix(prefix) for stage in ("hosted", "end-to-end") for item in stages[stage]
+    ]
 
-    assert set(stages) == {"platform", "hosted", "worker"}
+    assert set(stages) == {"platform", "hosted", "end-to-end", "worker"}
     # The platform stage runs every module that another stage does not.
     assert platform[0] == "../tests/cluster"
     assert all(item.startswith("--ignore=" + prefix) for item in platform[1:])
-    assert ignored == hosted
-    assert hosted <= modules
-    assert len(hosted) == len(stages["hosted"])
+    assert ignored == set(named)
+    assert set(named) <= modules
+    assert len(named) == len(set(named))
     assert stages["worker"] == []
     # The chart tests run the stage's modules, and only the worker stage qualifies workers.
     steps = {

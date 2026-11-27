@@ -879,7 +879,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "workflow_call:" in workflow
     assert "uses: ./.github/workflows/native-release.yml" in main_workflow
     assert "name: Release Candidate Ready" in main_workflow
-    assert "actions/attest@v4" in release_workflow
+    assert "actions/attest@" in release_workflow
     assert "gh release create" in release_workflow
     assert "--draft" in release_workflow
     assert "--draft=false" in release_workflow
@@ -894,7 +894,7 @@ def test_native_release_assets_are_verified_before_installation() -> None:
     assert "verify_release_candidate.py" in release_workflow
     assert "promote-release-images.sh verify" in release_workflow
     assert "promote-release-images.sh promote" in release_workflow
-    assert "actions/setup-node@v7" in release_workflow
+    assert "actions/setup-node@" in release_workflow
     assert 'node-version: "24"' in release_workflow
     assert "package_gpu_runtime.py --output-dir dist" in release_workflow
     assert "dist/*.whl" in release_workflow
@@ -1545,8 +1545,8 @@ def test_publish_workflow_uses_digest_merge_and_clean_public_tags() -> None:
     assert publish.count("images/scripts/read_buildx_digest.py") == 2
     assert ".containerimage.descriptor.digest" not in publish
     assert ".terra-runtime" not in publish
-    assert "actions/upload-artifact@v7" in publish
-    assert "actions/download-artifact@v8" in publish
+    assert "actions/upload-artifact@" in publish
+    assert "actions/download-artifact@" in publish
     assert '"${IMAGE_NAME}:${IMAGE_CHANNEL}"' in publish
     assert '"${IMAGE_NAME}:sha-${GIT_SHA}"' in publish
     assert 'docker pull --platform "${DOCKER_PLATFORM}" "${CANDIDATE_REFERENCE}"' in publish

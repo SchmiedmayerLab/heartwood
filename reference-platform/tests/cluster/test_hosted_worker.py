@@ -22,14 +22,11 @@ import ast
 import json
 import re
 import time
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from collections.abc import Iterator
 from typing import Any
-from uuid import uuid4
 
 import pytest
-from hub import Browser, gateway_pods, wait_for_gateway
+from hub import Browser, Server, error_codes, events_of, gateway_pods, pending_group
 from identity import (
     CONTROL,
     FIRST,
@@ -49,152 +46,6 @@ _MODEL = "synthetic-coder"
 _COMMAND = "printf synthetic-route > /workspace/synthetic-route.txt"
 
 
-@dataclass
-class Server:
-    """One named server of the first researcher, opened through the Hub's proxy."""
-
-    browser: Browser
-    project: str
-    session: str = ""
-    capability: str = ""
-    conversation: str = ""
-
-    @property
-    def base(self) -> str:
-        return f"/user/{researcher(FIRST)}/{self.project}"
-
-    def start(self) -> None:
-        status, body = self.browser.spawn(researcher(FIRST), self.project)
-        assert status == 302, body[:300]
-        wait_for_gateway(self.browser, self.base)
-        (pod,) = [
-            pod
-            for pod in gateway_pods(self.browser.cluster)
-            if pod["metadata"]["labels"].get("hub.jupyter.org/servername") == self.project
-        ]
-        self.session = pod["metadata"]["labels"]["heartwood.platform/session"]
-        self.capability = self.browser.launch(self.base)
-
-    def stop(self) -> None:
-        self.browser.hub_api("DELETE", f"/users/{researcher(FIRST)}/servers/{self.project}")
-        deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
-            status, user = self.browser.hub_api("GET", f"/users/{researcher(FIRST)}")
-            stopped = status == 200 and self.project not in user.get("servers", {})
-            if stopped and not gateway_pods(self.browser.cluster, self.session):
-                return
-            time.sleep(3)
-        raise AssertionError("the Hub did not stop the server")
-
-    def remove(self) -> None:
-        """Delete the named server, which deletes its session, and wait until it is gone.
-
-        The Hub stops the server and deletes the session after it answers, so the next
-        start of a server of the same name would otherwise race the deletion. The Hub
-        deletes the server's claim last.
-        """
-        self.browser.hub_api(
-            "DELETE", f"/users/{researcher(FIRST)}/servers/{self.project}", {"remove": True}
-        )
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            status, user = self.browser.hub_api("GET", f"/users/{researcher(FIRST)}")
-            gone = status == 200 and self.project not in user.get("servers", {})
-            if gone and not (self.session and self._session_objects()):
-                return
-            time.sleep(3)
-        raise AssertionError("the Hub did not delete the server")
-
-    def _session_objects(self) -> list[str]:
-        """The gateway pods, Secret and claim of the server's session that still exist."""
-        result = self.browser.cluster.kubectl(
-            "get",
-            f"--namespace={SESSIONS}",
-            "pods",
-            f"--selector=heartwood.platform/session={self.session}",
-            "--output=name",
-        )
-        assert result.returncode == 0, result.stderr
-        named = self.browser.cluster.kubectl(
-            "get",
-            f"--namespace={SESSIONS}",
-            f"secret/hw-gw-{self.session}",
-            f"persistentvolumeclaim/hw-home-{self.session}",
-            "--output=name",
-            "--ignore-not-found",
-        )
-        assert named.returncode == 0, named.stderr
-        return [*result.stdout.split(), *named.stdout.split()]
-
-    def api(
-        self, method: str, path: str, body: dict[str, Any] | None = None, max_time: int = 60
-    ) -> tuple[int, Any]:
-        return self.browser.api(self.base, method, path, self.capability, body, max_time)
-
-    def connect(self) -> dict[str, Any]:
-        status, catalog = self.api(
-            "POST", "/settings/models/catalog", {"connection_id": _ROUTE, "refresh": True}
-        )
-        assert status == 200, catalog
-        status, settings = self.api(
-            "POST", "/settings/models/connect", {"connection_id": _ROUTE, "model_id": _MODEL}
-        )
-        assert status == 200, settings
-        status, created = self.api("POST", "/sessions", {"title": "Model route"})
-        assert status == 201, created
-        self.conversation = created["session_id"]
-        assert isinstance(catalog, dict)
-        return catalog
-
-    def command(self, kind: str, payload: dict[str, Any]) -> None:
-        body = {
-            "schema_version": "heartwood.session-command.v1",
-            "command_id": f"{self.conversation}-{kind}-{uuid4().hex}",
-            "session_id": self.conversation,
-            "kind": kind,
-            "created_at": datetime.now(UTC).isoformat(),
-            "payload": payload,
-        }
-        # A command can start the session's worker before it answers.
-        status, answer = self.api(
-            "POST", f"/sessions/{self.conversation}/commands", body, max_time=600
-        )
-        assert status == 200, answer
-
-    def events(self) -> list[dict[str, Any]]:
-        status, answer = self.api("GET", f"/sessions/{self.conversation}/events")
-        assert status == 200, answer
-        events: list[dict[str, Any]] = answer["events"]
-        return events
-
-    def wait(self, found: Callable[[list[dict[str, Any]]], Any], timeout: float = 420) -> Any:  # noqa: ANN401
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            events = self.events()
-            result = found(events)
-            if result:
-                return result
-            time.sleep(3)
-        raise AssertionError(json.dumps(self.events()[-8:], indent=1)[-4000:])
-
-
-def _of(events: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
-    return [event for event in events if event["kind"] == kind]
-
-
-def _pending(events: list[dict[str, Any]]) -> str | None:
-    resolved = {event["payload"].get("group_id") for event in _of(events, "confirmation.resolved")}
-    for event in _of(events, "confirmation.requested"):
-        group = event["payload"].get("request", {}).get("group_id")
-        if group and group not in resolved:
-            return str(group)
-    return None
-
-
-def _errors(events: list[dict[str, Any]]) -> list[str]:
-    return [str(event["payload"].get("code")) for event in _of(events, "error.recorded")]
-
-
 @pytest.fixture(scope="module")
 def browser(cluster: Cluster, probe_image: str) -> Iterator[Browser]:
     with probe(cluster, "hw-worker-browser", probe_image) as pod:
@@ -205,7 +56,7 @@ def browser(cluster: Cluster, probe_image: str) -> Iterator[Browser]:
 
 @pytest.fixture(scope="module")
 def small(browser: Browser) -> Iterator[Server]:
-    server = Server(browser, "small")
+    server = Server(browser, FIRST, "small")
     server.start()
     try:
         yield server
@@ -214,7 +65,7 @@ def small(browser: Browser) -> Iterator[Server]:
 
 
 def test_the_gateway_discovers_the_route_models_with_its_discovery_key(small: Server) -> None:
-    catalog = small.connect()
+    catalog = small.connect(_ROUTE, _MODEL)
 
     models = {item["model_id"]: item for item in catalog["models"]}
     assert _MODEL in models
@@ -231,10 +82,10 @@ def test_an_approved_tool_call_runs_in_the_worker_through_the_model_route(
 ) -> None:
     small.command("chat", {"prompt": "Record the synthetic value."})
 
-    group = small.wait(_pending)
+    group = small.wait(pending_group)
     requested = [
         event
-        for event in _of(small.events(), "confirmation.requested")
+        for event in events_of(small.events(), "confirmation.requested")
         if event["payload"]["request"]["group_id"] == group
     ]
     assert _COMMAND in json.dumps(requested)
@@ -251,25 +102,25 @@ def test_an_approved_tool_call_runs_in_the_worker_through_the_model_route(
 
     # The execution names the approved call; it records no command or output.
     calls = set(re.findall(r'"tool_call_id": "([^"]+)"', json.dumps(requested)))
-    (execution,) = small.wait(lambda events: _of(events, "tool.execution.recorded"))
+    (execution,) = small.wait(lambda events: events_of(events, "tool.execution.recorded"))
     assert execution["payload"]["tool_call_id"] in calls
     assert (execution["payload"]["tool_name"], execution["payload"]["exit_code"]) == ("terminal", 0)
     finished = small.wait(
         lambda events: [
             event
-            for event in _of(events, "agent_message.emitted")
+            for event in events_of(events, "agent_message.emitted")
             if "synthetic model route completed" in json.dumps(event["payload"])
         ]
     )
     assert finished
-    assert not _errors(small.events())
+    assert not error_codes(small.events())
 
 
 def test_budget_exhaustion_is_answered_with_the_diagnostic(small: Server) -> None:
     before = len(small.events())
     small.command("chat", {"prompt": "Record the synthetic value again."})
 
-    codes = small.wait(lambda events: _errors(events[before:]))
+    codes = small.wait(lambda events: error_codes(events[before:]))
 
     # LiteLLM answers an exhausted key budget with HTTP 422 `budget_exceeded`, which its
     # client raises as `BadRequestError`. The OpenHands SDK of the runtime lock maps that
@@ -345,7 +196,7 @@ def test_the_second_researcher_cannot_start_a_server_of_project_small(
 
 @pytest.fixture(scope="module")
 def demo(browser: Browser) -> Iterator[Server]:
-    server = Server(browser, "demo")
+    server = Server(browser, FIRST, "demo")
     server.start()
     try:
         yield server
@@ -356,15 +207,15 @@ def demo(browser: Browser) -> Iterator[Server]:
 def _turn(server: Server, prompt: str) -> None:
     before = len(server.events())
     server.command("chat", {"prompt": prompt})
-    group = server.wait(lambda events: _pending(events[before:]))
+    group = server.wait(lambda events: pending_group(events[before:]))
     server.command("approve", {"target_type": "action-set", "target_id": group})
-    server.wait(lambda events: _of(events[before:], "tool.execution.recorded"))
+    server.wait(lambda events: events_of(events[before:], "tool.execution.recorded"))
 
 
 def test_a_rotated_key_fails_the_attached_worker_and_reaches_the_next_one(
     demo: Server, cluster: Cluster
 ) -> None:
-    demo.connect()
+    demo.connect(_ROUTE, _MODEL)
     _turn(demo, "Record the synthetic value.")
     account = f"hw-gw-{demo.session}"
     discovery = secret(cluster, SESSIONS, account, "model-discovery-key")
@@ -389,11 +240,11 @@ def test_a_rotated_key_fails_the_attached_worker_and_reaches_the_next_one(
 
     before = len(demo.events())
     demo.command("chat", {"prompt": "Record the synthetic value after the rotation."})
-    codes = demo.wait(lambda events: _errors(events[before:]))
+    codes = demo.wait(lambda events: error_codes(events[before:]))
     assert codes, codes
-    assert not _of(demo.events()[before:], "tool.execution.recorded")
+    assert not events_of(demo.events()[before:], "tool.execution.recorded")
 
     demo.stop()
     demo.start()
-    demo.connect()
+    demo.connect(_ROUTE, _MODEL)
     _turn(demo, "Record the synthetic value with the rotated key.")
