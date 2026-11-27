@@ -13,7 +13,7 @@ jsonschema>=4.26.0
 keyring==25.7.0
 litellm==1.108.3
 openai==2.53.0
-openhands-agent-server==1.62.0+heartwood.3
+openhands-agent-server==1.62.0+heartwood.5
 openhands-sdk==1.62.0+heartwood.5
 openhands-tools==1.62.0+heartwood.5
 openshell==0.1.9+heartwood.2

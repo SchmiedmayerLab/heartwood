@@ -52,7 +52,7 @@
         },
         {
           "path": "openhands-agent-server",
-          "version": "1.62.0+heartwood.3",
+          "version": "1.62.0+heartwood.5",
           "original_version": "1.62.0",
           "name": "openhands-agent-server"
         }
@@ -92,7 +92,7 @@
     }
   },
   "wheels_sha256": {
-    "openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl": "6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792",
+    "openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl": "5123550b8c603a5c39506461e2877934386fdb5844f8d021439561fd7bac6dcc",
     "openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl": "d85f96f17db38b2012e687b96b86b91653b363d7ce4801cf6109a504ad0d7136",
     "openhands_tools-1.62.0+heartwood.5-py3-none-any.whl": "f90aaadd89c124cfc93b894d87d1e19bcecc05402d6f5d348d729b4572989afe",
     "openshell-0.1.9+heartwood.2-py3-none-any.whl": "4f628d5f8cc9b451ad1be2de16ff453c3f82dc88ef053b22454ba9c95b18a87f"

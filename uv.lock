@@ -50,7 +50,7 @@ docs = [
     { name = "mike", git = "https://github.com/squidfunk/mike.git?rev=0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3" },
     { name = "zensical", specifier = "==0.0.52" },
 ]
-worker = [{ name = "openhands-agent-server", path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }]
+worker = [{ name = "openhands-agent-server", path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -3746,8 +3746,8 @@ wheels = [
 
 [[package]]
 name = "openhands-agent-server"
-version = "1.62.0+heartwood.3"
-source = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }
+version = "1.62.0+heartwood.5"
+source = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
@@ -3764,7 +3764,7 @@ dependencies = [
     { name = "wsproto" },
 ]
 wheels = [
-    { filename = "openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792" },
+    { filename = "openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl", hash = "sha256:5123550b8c603a5c39506461e2877934386fdb5844f8d021439561fd7bac6dcc" },
 ]
 
 [package.metadata]
