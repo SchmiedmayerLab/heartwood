@@ -550,7 +550,8 @@ A reported balance or estimate never guarantees that the platform admits work, a
 Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
 Cost figures reported by a worker are not planning records.
 
-A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one:
+A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one.
+The planning projection reports them in `agent_tools`; without an isolated worker, its `unavailable_code` is `HW-MCP-004`, as for research services.
 
 | Tool | Behavior |
 |---|---|
