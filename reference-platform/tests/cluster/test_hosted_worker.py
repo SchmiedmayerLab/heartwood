@@ -369,12 +369,42 @@ def _owned_server(server: _CaseServer) -> Iterator[Server]:
             time.sleep(3)
 
 
+def _stop_other_servers(server: _CaseServer) -> None:
+    """Stop the researcher's other servers before a case server starts.
+
+    An idle server's session holds node resources, so the case server's sandboxes
+    wait for its cull. That start outlasts the stage's cull timeout, which counts
+    from the spawn request, and the culler then stops the case server.
+    """
+    browser = server.browser
+    status, user = browser.hub_api("GET", f"/users/{server.user}")
+    assert status == 200, status
+    names = set(user.get("servers", {})) - {server.project}
+    for name in names:
+        browser.hub_api("DELETE", f"/users/{server.user}/servers/{name}")
+    deadline = time.monotonic() + 180
+    while names:
+        status, user = browser.hub_api("GET", f"/users/{server.user}")
+        pods = [
+            pod
+            for pod in gateway_pods(browser.cluster)
+            if pod["metadata"]["labels"].get("hub.jupyter.org/username") == server.user
+            and pod["metadata"]["labels"].get("hub.jupyter.org/servername") in names
+        ]
+        if status == 200 and not names & set(user.get("servers", {})) and not pods:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError("The Hub did not stop the researcher's other servers")
+        time.sleep(3)
+
+
 @pytest.fixture
 def other(browser: Browser) -> Iterator[Server]:
     if not browser.cluster.context.startswith("kind-"):
         raise AssertionError("Hosted failure cases require the synthetic kind deployment")
     server = _CaseServer(browser, FIRST, "other")
     server.owner = uuid4().hex
+    _stop_other_servers(server)
     with _owned_server(server):
         yield server
 
