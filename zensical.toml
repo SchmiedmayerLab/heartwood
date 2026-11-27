@@ -62,6 +62,7 @@ nav = [
         { "Sessions and Audit" = "architecture/sessions-audit.md" },
         { "Experiment Records" = "architecture/experiments.md" },
         { "Testing and Evidence" = "architecture/testing.md" },
+        { "Reference Platform" = "architecture/reference-platform.md" },
     ] },
     { "Reference" = [
         { "Gateway API" = "reference/gateway-api.md" },
