@@ -22,13 +22,14 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
 from heartwood.core_adapter.external_actions import (
+    REFUSAL_DESTINATION,
     ExternalActionDecision,
     ExternalActionError,
     ExternalActionObservation,
@@ -73,7 +74,11 @@ from heartwood.gateway._platform_operations import (
     operations_report,
     request_proposal,
 )
-from heartwood.gateway._platform_planning import PlanningStateError
+from heartwood.gateway._platform_planning import (
+    AGENT_RESULT_BYTES,
+    PLANNING_SERVICE_ID,
+    PlanningStateError,
+)
 from heartwood.schemas import JsonValue, PlatformOperationObservation, PlatformOperationProposal
 from heartwood.session import EventKind
 
@@ -145,6 +150,7 @@ class McpServerManager:
         worker_available: bool,
         project_id: str | None = None,
         service_tokens: ServiceTokens | None = None,
+        sign_in_revision: Callable[[], int] | None = None,
     ) -> None:
         self._config_store = config_store
         # The project the gateway names to services: the platform project of the launch
@@ -152,6 +158,7 @@ class McpServerManager:
         self.project_id = project_id
         self._credentials = credential_store
         self._service_tokens = service_tokens
+        self._sign_in_revision = sign_in_revision
         self._destinations = tuple(destinations)
         self._worker_available = worker_available
         # Definitions from the latest test in this process, by server and tool name.
@@ -197,6 +204,10 @@ class McpServerManager:
 
         self._config_store.update(apply)
 
+    def sign_in_revision(self) -> int:
+        """Return a number that changes with each new researcher sign-in, if identity is used."""
+        return 0 if self._sign_in_revision is None else self._sign_in_revision()
+
     def token(self, destination: McpDestination) -> str | None:
         """Resolve a destination's bearer token in the gateway; never in project files.
 
@@ -211,10 +222,7 @@ class McpServerManager:
         try:
             return self._service_tokens(exchange.scope, exchange.audience)
         except AccessUnavailableError:
-            raise McpServerError(
-                "gateway-identity-provider",
-                "the identity provider is unavailable, so the research service has no token",
-            ) from None
+            raise McpServerError("gateway-identity-provider") from None
         except TokenExchangeRefusedError:
             raise McpServerError(
                 "gateway-identity",
@@ -558,19 +566,9 @@ class McpServerManager:
         try:
             token = self.token(bound.destination)
         except McpServerError as error:
-            # Identity refusals keep their stable code, so the researcher sees HW-INGRESS-004.
-            raise ExternalActionError(
-                str(error) if error.code.startswith("HW-INGRESS-") else error.detail
-            ) from None
+            raise _outside_error(error) from None
         if bound.destination.token_exchange is not None and token is None:
-            raise ExternalActionError(
-                str(
-                    McpServerError(
-                        "gateway-identity",
-                        "the research service waits until the researcher signs in at the gateway",
-                    )
-                )
-            )
+            raise _outside_error(McpServerError("gateway-identity"))
         if token_authentication(token).status == "expired":
             raise ExternalActionError("the research service credential is expired")
 
@@ -595,10 +593,7 @@ class McpServerManager:
             self._refuse_entered(destination, token)
             token = self.token(destination)
             if token is None:
-                raise McpServerError(
-                    "gateway-identity",
-                    "the research service waits until the researcher signs in at the gateway",
-                )
+                raise McpServerError("gateway-identity")
         token = self.token(destination) if token is None else token
         if token_authentication(token).status == "expired":
             raise McpServerError("mcp-credential", "the research service token is expired")
@@ -637,6 +632,16 @@ class McpServerManager:
             yield client
         finally:
             client.sync_close()
+
+
+def _outside_error(error: McpServerError) -> ExternalActionError:
+    """Refuse an outside operation; identity refusals keep their stable ingress code.
+
+    The researcher resolves those by signing in at the gateway, so every interface shows
+    the code and recovery step that the gateway's own HTTP refusal carries.
+    """
+    code = error.code if error.code.startswith("HW-INGRESS-") else None
+    return ExternalActionError(error.detail, code=code)
 
 
 def _entered(token: str | None) -> str | None:
@@ -694,6 +699,10 @@ class McpOutsideAdapter:
     its project context. A destination with an operation profile also describes each
     submission before review, and a cancellation names an earlier operation of the
     session, which the gateway sends from its own record.
+
+    With planning, the session also offers the gateway's planning tools. Their calls
+    pass the same review and result release, and run in the gateway's planning state,
+    so every interface shows what the agent recorded.
     """
 
     def __init__(
@@ -702,11 +711,19 @@ class McpOutsideAdapter:
         bound: Sequence[McpBoundTool],
         *,
         planning: PlatformPlanning | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._manager = manager
         self._bound = {item.worker_name: item for item in bound}
         self._planning = planning
+        self._planning_tools = (
+            {} if planning is None else {item.name: item for item in planning.client_tools}
+        )
+        self.clock = clock
         self.last_reconciled = 0.0
+        # The last identity refusal per service while describing a submission, when it
+        # happened, and the sign-in it happened under.
+        self._identity_refusals: dict[str, tuple[float, int, McpServerError]] = {}
         # The last session event whose platform operation records were linked to planning.
         self.linked_sequence = 0
 
@@ -718,24 +735,44 @@ class McpOutsideAdapter:
     @property
     def client_tools(self) -> tuple[ClientToolSpec, ...]:
         """Return the fixed client tools the session's worker receives."""
-        return tuple(item.client_spec() for item in self._bound.values())
+        return (
+            *(item.client_spec() for item in self._bound.values()),
+            *self._planning_tools.values(),
+        )
 
     @property
     def tool_names(self) -> frozenset[str]:
-        """Client-tool names bound to research services for this session."""
-        return frozenset(self._bound)
+        """Client-tool names bound to research services and planning for this session."""
+        return frozenset(self._bound) | frozenset(self._planning_tools)
 
     @property
     def policy_sha256(self) -> str:
         """Change whenever a bound tool is disabled, changed, disconnected or disallowed."""
-        identities = [self._manager.live_identity(item) for _, item in sorted(self._bound.items())]
+        identities: list[object] = [
+            self._manager.live_identity(item) for _, item in sorted(self._bound.items())
+        ]
+        if self._planning is not None:
+            identities.append(
+                {
+                    "planning": self._planning.launch.model_dump(mode="json"),
+                    "tools": [
+                        item.model_dump(mode="json") for item in self._planning_tools.values()
+                    ],
+                }
+            )
         return hashlib.sha256(
             json.dumps(identities, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
     def service_id(self, tool_name: str) -> str:
         """Return the service a bound client tool calls."""
+        if tool_name in self._planning_tools:
+            return PLANNING_SERVICE_ID
         return self._tool(tool_name).destination.service_id
+
+    def _planner(self, tool_name: str) -> PlatformPlanning | None:
+        """Return the planning state when the tool is a planning tool."""
+        return self._planning if tool_name in self._planning_tools else None
 
     def _tool(self, tool_name: str) -> McpBoundTool:
         bound = self._bound.get(tool_name)
@@ -759,17 +796,50 @@ class McpOutsideAdapter:
         """Bind the worker's exact arguments to the server.
 
         A submission to an operation service also asks the service to describe it, which
-        has no effect at the service, and records the estimate it refers to.
+        has no effect at the service, and records the estimate it refers to. The fields
+        OpenHands adds to every call are left out unless the tool declares them. A planning
+        call is checked against the launch context and contacts nothing; a refused one
+        opens a review of its refusal.
         """
+        planning = self._planner(tool_name)
+        if planning is not None:
+            spec = self._planning_tools[tool_name]
+            summary, request_json = planning.agent_request(
+                tool_name, _tool_arguments(arguments, set(spec.parameters["properties"]))
+            )
+            return ExternalActionRequest(
+                service_id=PLANNING_SERVICE_ID,
+                tool_name=tool_name,
+                destination="heartwood-gateway",
+                summary=summary,
+                request_json=request_json,
+                project_context_id=planning.launch.project_context_id,
+            )
         bound = self._tool(tool_name)
         schema = worker_parameters(bound.tool.parsed)
         properties = set(schema["properties"])
-        if (
-            GATEWAY_FIELDS & set(arguments)
-            or not set(arguments) <= properties
-            or not set(schema["required"]) <= set(arguments)
-        ):
-            raise ExternalActionError("arguments do not match the reviewed tool definition")
+        arguments = _tool_arguments(arguments, properties)
+        reason = (
+            "The call names a field the gateway supplies"
+            if GATEWAY_FIELDS & set(arguments)
+            else "The call has arguments the reviewed tool does not define"
+            if not set(arguments) <= properties
+            else "The call is missing arguments the reviewed tool requires"
+            if not set(schema["required"]) <= set(arguments)
+            else None
+        )
+        if reason is None and bound.destination.cancels(bound.tool.name):
+            try:
+                _target(arguments.get(TARGET_FIELD))
+            except ExternalActionError:
+                reason = "A cancellation must name an operation identifier"
+        if reason is None:
+            try:
+                canonical_request(json.dumps(arguments))
+            except ExternalActionError:
+                reason = "The call is invalid or exceeds the request size limit"
+        if reason is not None:
+            return self._refusal(bound, tool_name, reason)
         parsed = urlsplit(bound.server.url)
         destination = (parsed.hostname or bound.server.server_id) + (
             f":{parsed.port}" if parsed.port is not None else ""
@@ -800,6 +870,37 @@ class McpOutsideAdapter:
             operation=review,
         )
 
+    def _refusal(self, bound: McpBoundTool, tool_name: str, reason: str) -> ExternalActionRequest:
+        """Describe a refused call; once released, the agent receives the reason.
+
+        The request names the gateway as its destination, which no worker can choose, so
+        dispatch only reports the refusal and never contacts the service.
+        """
+        return ExternalActionRequest(
+            service_id=bound.destination.service_id,
+            tool_name=tool_name,
+            destination=REFUSAL_DESTINATION,
+            summary=f"Tell the agent its {bound.tool.name} call was refused: {reason}"[:512],
+            request_json=canonical_request(json.dumps({"refusal": reason})),
+            project_context_id=self._context(),
+        )
+
+    def _refused(self, proposal: ExternalActionProposal, reason: str) -> ExternalActionObservation:
+        request = proposal.request
+        return ExternalActionObservation(
+            proposal_sha256=proposal.sha256,
+            operation=PlatformOperationObservation(
+                project_context_id=request.project_context_id or str(proposal.worker.project_id),
+                operation_id=str(proposal.operation_id),
+                service_id=request.service_id,
+                backend_operation_ref="refused",
+                observed_at=datetime.now(UTC),
+                status="failed",
+                platform_record_ref=f"refusal:{proposal.operation_id}",
+                limitations=(reason,),
+            ),
+        )
+
     def _proposal(
         self, bound: McpBoundTool, arguments: dict[str, JsonValue]
     ) -> PlatformOperationProposal | None:
@@ -810,13 +911,37 @@ class McpOutsideAdapter:
         )
         if project is None:
             return None
+        service = bound.destination.service_id
+        held = self._identity_refusals.get(service)
+        revision = self._manager.sign_in_revision()
+        # Every read proposes pending calls; within an interval after an identity refusal,
+        # and while the sign-in is unchanged, the refusal is repeated without asking the
+        # identity provider again. A new sign-in ends the wait at once.
+        if (
+            held is not None
+            and held[1] == revision
+            and self.clock() - held[0] < _RECONCILE_INTERVAL_SECONDS
+        ):
+            raise _outside_error(held[2])
         try:
-            with self._manager.connect(bound.server, bound.destination) as client:
+            with self._connect(bound) as client:
                 return request_proposal(
                     client, bound.destination, bound.tool.name, project, arguments
                 )
-        except McpServerError:
+        except McpServerError as error:
+            # An identity refusal opens no review, so no review lacks a proposal that the
+            # next sign-in could supply; a later read proposes the call again.
+            if error.code.startswith("HW-INGRESS-"):
+                self._identity_refusals[service] = (self.clock(), revision, error)
+                raise _outside_error(error) from None
             return None
+
+    @contextmanager
+    def _connect(self, bound: McpBoundTool) -> Iterator[MCPClient]:
+        """Connect to a bound tool's server; a connection ends an earlier identity refusal."""
+        with self._manager.connect(bound.server, bound.destination) as client:
+            self._identity_refusals.pop(bound.destination.service_id, None)
+            yield client
 
     def _estimate(self, proposal: PlatformOperationProposal | None) -> ExternalOperationEstimate:
         if self._planning is None:
@@ -843,7 +968,20 @@ class McpOutsideAdapter:
         A submission whose platform proposal is missing, or whose launch context changed,
         is refused too. Listing tools has no effect on the service; a refusal here keeps
         the review open and records no dispatch, so nothing is left with an unknown outcome.
+        A planning call must name this session's launch context.
         """
+        if self._planner(proposal.request.tool_name) is not None:
+            if not proposal.created_at <= now < proposal.expires_at:
+                raise ExternalActionError("outside proposal is expired")
+            if proposal.request.project_context_id is None:
+                raise ExternalActionError("a planning call names its launch context")
+            self._project(proposal)
+            return
+        if _refusal_reason(proposal.request) is not None:
+            if not proposal.created_at <= now < proposal.expires_at:
+                raise ExternalActionError("outside proposal is expired")
+            self._project(proposal)
+            return
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         if not proposal.created_at <= now < proposal.expires_at:
@@ -853,10 +991,10 @@ class McpOutsideAdapter:
         if review is not None and review.kind == "submit" and review.proposal is None:
             raise ExternalActionError("the platform returned no proposal for this operation")
         try:
-            with self._manager.connect(bound.server, bound.destination) as client:
+            with self._connect(bound) as client:
                 self._verify_definition(client, bound)
         except McpServerError as error:
-            raise ExternalActionError(error.detail) from None
+            raise _outside_error(error) from None
 
     def read_input(self, reference: ExternalInputReference) -> bytes:  # noqa: ARG002
         """Research service calls carry no file inputs."""
@@ -868,12 +1006,28 @@ class McpOutsideAdapter:
         decision: ExternalActionDecision,  # noqa: ARG002
         inputs: tuple[bytes, ...],  # noqa: ARG002
     ) -> ExternalActionObservation:
-        """Verify the reviewed definition, then send the call once."""
+        """Verify the reviewed definition, then send the call once.
+
+        A planning call runs once in the gateway's planning state.
+        """
+        planning = self._planner(proposal.request.tool_name)
+        if planning is not None:
+            self._project(proposal)
+            return ExternalActionObservation(
+                proposal_sha256=proposal.sha256,
+                operation=planning.agent_call(
+                    proposal.request.tool_name,
+                    proposal.request.request_json,
+                    operation_id=str(proposal.operation_id),
+                ),
+            )
+        if (reason := _refusal_reason(proposal.request)) is not None:
+            return self._refused(proposal, reason)
         bound = self._tool(proposal.request.tool_name)
         self._manager.require_current(bound)
         arguments = json.loads(proposal.request.request_json)
         target = proposal.request.target_operation_id
-        with self._manager.connect(bound.server, bound.destination) as client:
+        with self._connect(bound) as client:
             self._verify_definition(client, bound)
             operation = self._call(
                 client,
@@ -889,9 +1043,25 @@ class McpOutsideAdapter:
         return ExternalActionObservation(proposal_sha256=proposal.sha256, operation=operation)
 
     def observe(self, proposal: ExternalActionProposal) -> ExternalActionObservation:
-        """Ask the service's read-only status tool about the existing operation identifier."""
+        """Ask the service's read-only status tool about the existing operation identifier.
+
+        A planning call whose outcome was not recorded is not repeated; a prediction is
+        looked up in the journal, and the current planning overview is reported.
+        """
+        planning = self._planner(proposal.request.tool_name)
+        if planning is not None:
+            return ExternalActionObservation(
+                proposal_sha256=proposal.sha256,
+                operation=planning.agent_outcome(
+                    proposal.request.tool_name,
+                    proposal.request.request_json,
+                    operation_id=str(proposal.operation_id),
+                ),
+            )
+        if (reason := _refusal_reason(proposal.request)) is not None:
+            return self._refused(proposal, reason)
         bound = self._tool(proposal.request.tool_name)
-        with self._manager.connect(bound.server, bound.destination) as client:
+        with self._connect(bound) as client:
             operation = self._call(
                 client,
                 bound,
@@ -904,7 +1074,16 @@ class McpOutsideAdapter:
         return ExternalActionObservation(proposal_sha256=proposal.sha256, operation=operation)
 
     def prepare_result(self, record: ExternalActionRecord) -> str:
-        """Read the operation's current observation for a reviewed release."""
+        """Read the operation's current observation for a reviewed release.
+
+        A planning call releases what it returned when it ran.
+        """
+        if self._planner(record.proposal.request.tool_name) is not None:
+            if record.observation is None:
+                raise ExternalActionError("the planning call has no result")
+            return canonical_request(record.observation.operation.model_dump_json())
+        if _refusal_reason(record.proposal.request) is not None and record.observation is not None:
+            return canonical_request(record.observation.operation.model_dump_json())
         observed = self.observe(record.proposal)
         return canonical_request(observed.operation.model_dump_json())
 
@@ -917,6 +1096,12 @@ class McpOutsideAdapter:
         now: datetime,  # noqa: ARG002
     ) -> None:
         """Release only within the destination's size limit while the tool still holds."""
+        if self._planner(record.proposal.request.tool_name) is not None:
+            if len(content_json.encode()) > AGENT_RESULT_BYTES:
+                raise ExternalActionError("the planning result exceeds its size limit")
+            return
+        if _refusal_reason(record.proposal.request) is not None:
+            return
         bound = self._tool(record.proposal.request.tool_name)
         if self._manager.live_identity(bound) is None:
             raise ExternalActionError("the research service tool is no longer enabled")
@@ -941,6 +1126,34 @@ class McpOutsideAdapter:
         return PlatformOperationObservation.model_validate_json(json.dumps(content))
 
 
+# Fields OpenHands adds to every client tool's schema and keeps in the call's arguments.
+_SDK_FIELDS = frozenset({"summary", "security_risk"})
+
+
+def _refusal_reason(request: ExternalActionRequest) -> str | None:
+    """Return the reason of a refusal record, or None for a call to a service.
+
+    A request naming the refusal marker must carry exactly the reason, or it is refused.
+    """
+    if request.destination != REFUSAL_DESTINATION:
+        return None
+    content = json.loads(request.request_json)
+    if (
+        not isinstance(content, dict)
+        or set(content) != {"refusal"}
+        or not isinstance(content["refusal"], str)
+    ):
+        raise ExternalActionError("a refusal record carries only its reason")
+    return content["refusal"]
+
+
+def _tool_arguments(arguments: dict[str, JsonValue], declared: set[str]) -> dict[str, JsonValue]:
+    """Return a call's arguments without the SDK's fields, unless the tool declares them."""
+    return {
+        key: value for key, value in arguments.items() if key in declared or key not in _SDK_FIELDS
+    }
+
+
 def _target(value: JsonValue | None) -> UUID:
     """Parse the operation a worker names; the gateway's records decide whether it exists."""
     try:
@@ -955,7 +1168,7 @@ def advance_outside_calls(
     service: SessionService,
     adapter: McpOutsideAdapter,
     *,
-    clock: Callable[[], float] = time.monotonic,
+    clock: Callable[[], float] | None = None,
 ) -> None:
     """Open outside review for new worker calls and result review for finished ones.
 
@@ -965,7 +1178,8 @@ def advance_outside_calls(
     runs at most once per interval. A refusal leaves the session as it was; the next
     read tries again. With planning, the operation records are then linked to it.
     """
-    _advance(service, adapter, clock)
+    # The adapter's clock also times its identity refusal hold.
+    _advance(service, adapter, adapter.clock if clock is None else clock)
     if adapter.planning is not None:
         with suppress(ValueError):
             adapter.linked_sequence = link_operations(
@@ -1047,9 +1261,14 @@ def _propose_calls(service: SessionService, adapter: McpOutsideAdapter) -> None:
         ):
             continue
         existing = reviewed.get(event.event_id)
-        if (existing is not None and existing.phase != "proposed") or adapter.service_id(
-            str(event.payload.get("tool_name"))
-        ) in blocked:
+        # A review that expired before the platform could describe the call again has no
+        # replacement yet; an expired authorization is never proposed again.
+        replaceable = (
+            existing is None
+            or existing.phase == "proposed"
+            or (existing.phase == "expired" and existing.decision is None)
+        )
+        if not replaceable or adapter.service_id(str(event.payload.get("tool_name"))) in blocked:
             continue
         # An expired review is closed and replaced; an open one is left alone.
         with suppress(ValueError):

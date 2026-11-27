@@ -16,7 +16,7 @@ container mount that Secret.
 {{- $image := .Values.images.hostedGateway -}}
 {{- $sources := .Values.hub.trustedProxySources -}}
 {{- $mounts := include "heartwood.hubMounts" . | fromJson -}}
-{{- $fixed := list "heartwood" "gateway" "serve" "--deployment" "/etc/heartwood/deployment/deployment.toml" "--ingress-mode" "identity-proxy" "--host" "0.0.0.0" "--port" "8888" "--public-origin" .Values.hub.publicOrigin "--base-path" -}}
+{{- $fixed := list "heartwood" "gateway" "serve" "--deployment" "/etc/heartwood/deployment/deployment.toml" "--ingress-mode" "identity-proxy" "--host" "0.0.0.0" "--port" "8888" "--tls-certificate" "/etc/heartwood/deployment/gateway-tls.crt" "--tls-key" "/etc/heartwood/deployment/gateway-tls.key" "--public-origin" -}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -58,6 +58,13 @@ spec:
         && object.spec.serviceAccountName == 'hw-gw-' + variables.session
         && object.metadata.labels['heartwood.platform/role'] == 'hosted-gateway')
       message: a gateway pod carries its session label and the role hosted-gateway, and uses the ServiceAccount hw-gw-<session>
+    # The proxy and the Hub reach a gateway by its name under the gateways' Service, which
+    # its serving certificate carries.
+    - expression: >-
+        !variables.pod || (has(object.spec.hostname) && object.spec.hostname == 'hw-gw-' + variables.session
+        && has(object.spec.subdomain) && object.spec.subdomain == {{ include "heartwood.gatewayService" . | toJson }}
+        && !has(object.spec.setHostnameAsFQDN))
+      message: a gateway pod has the host name hw-gw-<session> under the gateways' Service
     # Network policies and Services select pods by label, so a gateway pod carries only the
     # labels of JupyterHub's servers and its own.
     - expression: >-
@@ -87,14 +94,16 @@ spec:
     - expression: >-
         !variables.pod || (!has(object.spec.containers[0].command)
         && has(object.spec.containers[0].args)
-        && size(object.spec.containers[0].args) == {{ add 15 (mul 2 (len $sources)) }}
+        && size(object.spec.containers[0].args) == {{ add 19 (mul 2 (len $sources)) }}
         {{- range $index, $value := $fixed }}
         && object.spec.containers[0].args[{{ $index }}] == {{ $value | toJson }}
         {{- end }}
-        && object.spec.containers[0].args[14].matches('^/user/r[0-9a-f]{32}/[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$')
+        && object.spec.containers[0].args[17] == '--base-path'
+        && object.spec.containers[0].args[16] == 'https://' + object.spec.containers[0].args[18].split('/')[2] + '.' + object.spec.containers[0].args[18].split('/')[3] + '.{{ .Values.hub.projectDomain }}'
+        && object.spec.containers[0].args[18].matches('^/user/r[0-9a-f]{32}/[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$')
         {{- range $index, $source := $sources }}
-        && object.spec.containers[0].args[{{ add 15 (mul 2 $index) }}] == '--trusted-proxy-source'
-        && object.spec.containers[0].args[{{ add 16 (mul 2 $index) }}] == {{ $source | toJson }}
+        && object.spec.containers[0].args[{{ add 19 (mul 2 $index) }}] == '--trusted-proxy-source'
+        && object.spec.containers[0].args[{{ add 20 (mul 2 $index) }}] == {{ $source | toJson }}
         {{- end }})
       message: a gateway pod serves the session's deployment manifest behind the Hub's proxy with fixed arguments
     - expression: >-

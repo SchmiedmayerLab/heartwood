@@ -512,6 +512,20 @@ The gateway requires protected state for it.
 The other built-in launchers install none.
 Without a binding, the planning projection reports that planning is not offered, and every interface hides it.
 
+A prediction can cite a research file with `project://PATH`, a local experiment with `experiment-run:UUID`, a recorded prediction with `prediction:ID@REVISION`, or a platform observation with `observation:SHA256`.
+A file reference records a location inside the research boundary. It does not establish that a measurement exists or verify a file digest.
+Experiment membership comes from the project's experiment journal, which carries no separate platform billing attribution.
+Prediction and observation references resolve within the active platform project context.
+Copy the observation reference from the planning overview to cite one status report for one operation.
+A correction retains the cited observation even when the platform reports a newer status.
+The overview shows the report with the latest observation time.
+When distinct reports share that time, it shows the last one recorded.
+Replaying an identical report preserves that order.
+An element requires review again when its cited evidence changes, including a change under the same evidence ID.
+To correct a duration or retry assumption, record a new revision, cite the earlier revision and observation, and request a new platform estimate.
+A change in price alone does not establish a workload prediction error.
+Evidence reuse requires explicit selection. No automatic learning occurs.
+
 The gateway does the following and nothing more:
 
 - **Discovery:** each refresh lists the service's capabilities and reads budgets only when the service offers them; an estimate is requested only when the last discovery found estimates offered, and a change in the service shows after the next refresh.
@@ -523,7 +537,8 @@ The gateway does the following and nothing more:
 
 The projection holds the latest observation of each budget and, for each revision, the contract overview, each element's review state and each estimate's freshness.
 An element's review state comes from researcher decisions on reviewed proposals that contain it; agreeing to one proposal does not approve elements outside it.
-An element that is unchanged since an approval in an earlier revision is shown as such, and a changed or new element requires review.
+An element with no decision in the current revision inherits approval only from the prediction it explicitly supersedes, when the element and its cited evidence are unchanged.
+Withdrawing a decision returns the element to review.
 Platform authorization is shown separately for each element.
 The comparison lists the complete-plan estimates of every revision with their runtime profiles, and marks an estimate in another denomination as not comparable; amounts are never converted or summed across estimates.
 The outcomes in [Failure States](#failure-states) cover each failed service capability, the plan's latest revision, its latest estimate for each scope and the latest platform authorization of each proposal.
@@ -534,6 +549,34 @@ They are observations and decisions, and Heartwood derives no balance, reservati
 A reported balance or estimate never guarantees that the platform admits work, and a researcher's approval neither raises a limit nor reserves funds.
 Heartwood submits nothing for a plan and retries nothing after a denial; operations follow the [outside operation](#outside-operation-admission) path.
 Cost figures reported by a worker are not planning records.
+
+A session with an isolated worker gives its agent three planning tools when the deployment has a planning binding, and none without one.
+In an embedding that supplies its own outside service, no session's agent receives planning tools.
+The planning projection reports them in `agent_tools`.
+Its `unavailable_code` is `HW-MCP-004` without an isolated worker, as for research services, and `HW-MCP-007` with another outside service.
+
+| Tool | Behavior |
+|---|---|
+| `planning_overview` | Refreshes discovery and budgets like `/plan refresh` and returns the overview described below |
+| `record_plan_prediction` | Records one prediction revision like `/plan record` |
+| `request_plan_estimate` | Requests an estimate for a recorded revision like `/plan estimate`; the platform is asked nothing while estimates are not offered |
+
+The overview gives the status of each capability as `available`, `not-offered`, `unavailable` or `refused`, or `unchecked` before the first discovery.
+It also holds the latest budgets with their observation times, each recorded revision with its estimates, element reviews and observation references, and the planning outcomes.
+Every planning tool returns the overview as it stands after the call.
+
+Each call is an [outside operation](#outside-operation-admission) of the service `heartwood-planning`.
+The researcher reviews it before the gateway runs it, and its result reaches the model only through a separate result release.
+A call the gateway refuses, such as a prediction for another launch context, arguments the tool does not define or a request over 64 KiB, opens a review of the refusal that names the reason.
+A refusal records nothing and contacts no service; once the researcher approves it and releases its result, the agent receives the reason as a failed call.
+A refused record, such as an estimate for an unrecorded revision, is reported as a failed call with the reason.
+The result leaves out reviewed proposals, decisions and the launch context's billing and authority references, and holds at most 48 KiB.
+A larger overview keeps only the latest revision of each plan, and then no revisions, with a limitation that says so; service status, budgets and outcomes remain, and the call fails only when they alone exceed the limit.
+The agent's records are ordinary planning records, so every interface shows them.
+A call whose outcome was not recorded is not run again.
+Its status read reports a prediction call as failed unless the journal holds that exact revision.
+For an estimate call it reports the current overview and whether the journal holds an estimate for that revision, scope and elements, and for an overview call the current overview.
+A `heartwood gateway serve` deployment with `[planning]` and no `[worker]` table keeps planning to the researcher interfaces.
 
 ### Platform Job Operations
 
@@ -604,8 +647,8 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 |---|---|---|
 | Capability not offered | No advertised support | The choice is hidden in every interface; a stored or requested choice shows [HW-SETUP-004](../reference/troubleshooting.md#hw-setup-004-capability-is-not-offered-on-this-platform) |
 | Missing or invalid launch capability | Not applicable | [HW-INGRESS-003](../reference/troubleshooting.md#gateway-ingress) |
-| Missing identity, or the identity of another subject or issuer, with `identity-proxy` ingress | Not applicable | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
-| Identity provider unreachable or unusable | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
+| Missing identity, or the identity of another subject or issuer, with `identity-proxy` ingress; a platform service call without a live sign-in, or for which the provider issues no token | Not applicable, or a refused token exchange | [HW-INGRESS-004](../reference/troubleshooting.md#gateway-ingress) |
+| Identity provider unreachable or unusable, also for a platform service call | An error, an unusable document or no answer | [HW-INGRESS-005](../reference/troubleshooting.md#gateway-ingress) |
 | Request does not match the declared route | Not applicable | [HW-INGRESS-002](../reference/troubleshooting.md#gateway-ingress) |
 | Sandbox gateway lacks a required capability | Its gateway info: version, compute driver and capabilities | [HW-WORKER-001](../reference/troubleshooting.md#managed-workers) |
 | Expired or rejected model credential | An authentication error | [HW-AGENT-008](../reference/troubleshooting.md#agent-runtime) |
@@ -628,9 +671,9 @@ The worker proposes, the researcher decides, and the platform runs and authorize
 [Diagnostics and Troubleshooting](../reference/troubleshooting.md) gives each code's recovery steps.
 `fixtures/synthetic/platform-contract/failure-states.json` lists each coded state with the diagnostic Heartwood shows for it.
 Pull request tests produce the model failures through the [inference fake](#deterministic-service-fakes) and the agent runtime, and check that the terminal, browser and notebook show the state's diagnostic and no other code.
-The exception is an exhausted quota that the provider returns as a rate-limit response, which also shows HW-AGENT-010 after HW-AGENT-009, because the agent runtime records its own rate-limit classification of the same response.
 Model setup in the terminal, browser and notebook reports a failed model list with the diagnostic of the matching failure state: a rejected or expired credential, including an HTTP 403 response, as HW-AGENT-008 and an unreachable service as HW-AGENT-012.
-Gateway access refusals reach only clients of the gateway's HTTP routes: the browser shows the code and message the gateway returns, while the terminal and notebook connect to the gateway in process.
+Besides HTTP requests, a missing sign-in and an unavailable identity provider refuse the gateway's calls to a platform service that takes an exchanged token, and the terminal, browser and notebook show the same HW-INGRESS-004 or HW-INGRESS-005 diagnostic for it.
+Only the browser shows HW-INGRESS-002 and HW-INGRESS-003, because they refuse HTTP requests, which the terminal and notebook do not send.
 The gateway refuses a model connection the platform does not offer with HW-SETUP-004, and the terminal, browser and notebook show the same code and message.
 Planning outcomes appear in the planning projection, and the terminal, browser and notebook show their diagnostics.
 Platform job operation states appear with each operation in the session projection; a denied operation there shows HW-PLAN-006 as well.
@@ -785,6 +828,10 @@ Their tools carry the four required annotations: submission and cancellation are
 The gateway connects to research services as an MCP client, with OpenHands' public `MCPClient` over Streamable HTTP.
 The agent receives no MCP configuration and no credential.
 A session's worker sees each enabled tool as a fixed client tool, and a call to it becomes an [outside operation](#outside-operation-admission).
+The `summary` and `security_risk` fields that OpenHands adds to every client tool call are left out of the reviewed request unless the tool declares them; the same holds for the planning tools.
+A call whose arguments the reviewed definition does not accept, such as an undefined or missing argument, a field the gateway supplies, a cancellation without an operation identifier, or a request over 64 KiB, opens a review of the refusal that names the reason.
+The refusal carries none of the arguments, contacts no service and dispatches nothing; once the researcher approves it and releases its result, the agent receives the reason as a failed call.
+A call refused for the researcher's sign-in is not such a refusal and keeps its HW-INGRESS-004 or HW-INGRESS-005 diagnostic.
 
 ```mermaid
 sequenceDiagram

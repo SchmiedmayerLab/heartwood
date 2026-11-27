@@ -14,6 +14,15 @@ on:
         required: true
         type: string
 
+      managed_drill_artifact:
+        description: Artifact ID of the reviewed GKE and managed drill records in this repository
+        required: true
+        type: string
+      managed_drill_sha256:
+        description: SHA-256 of the reviewed artifact ZIP
+        required: true
+        type: string
+
 concurrency:
   group: create-release
   cancel-in-progress: false
@@ -101,15 +110,15 @@ jobs:
             --required-check 'Analyze (python)' \
             --required-check 'Analyze (javascript-typescript)'
       - name: Verify attested native qualification evidence
+        id: qualification
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The run also holds the Kubernetes cluster stage, whose failure fails the run
-          # without affecting the attested native evidence, so the attestation job decides.
+          # A successful run qualified the published digests and attested the native evidence.
           run_id=""
           for candidate in $(gh run list --repo "${GITHUB_REPOSITORY}" \
             --workflow native-qualification.yml --branch main --commit "${GITHUB_SHA}" \
-            --limit 20 --json databaseId --jq '.[].databaseId'); do
+            --status success --limit 20 --json databaseId --jq '.[].databaseId'); do
             attestation="$(gh run view "${candidate}" --repo "${GITHUB_REPOSITORY}" --json jobs \
               --jq '.jobs[] | select(.name == "Attest Native Qualification Evidence") | .conclusion')"
             if [[ "${attestation}" == success ]]; then
@@ -121,6 +130,7 @@ jobs:
             echo "no attested native qualification exists for ${GITHUB_SHA}" >&2
             exit 1
           fi
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
           evidence=test-results/release-evidence
           mkdir -p "${evidence}/attestation" dist
           gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" \
@@ -143,16 +153,51 @@ jobs:
           tar -czf dist/native-qualification-evidence.tar.gz \
             -C "${evidence}" native-qualification
           cp "${bundles[0]}" dist/native-qualification-evidence.sigstore.jsonl
+          gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" \
+            --name "published-images-${GITHUB_SHA}" --dir "${evidence}/published"
+          published="${evidence}/published/published-images.json"
+          gh attestation verify "${published}" --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/native-qualification.yml" \
+            --source-ref refs/heads/main --source-digest "${GITHUB_SHA}"
       - name: Record agent safety drills for each model route
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        run: >-
-          python3 deploy/release_drills.py
-          --version "${RELEASE_VERSION}"
-          --commit "${GITHUB_SHA}"
-          --synthetic test-results/release-evidence/native-qualification
-          --routes deploy/release-model-routes.toml
-          --output dist/agent-safety-drills.json
+          GH_TOKEN: ${{ github.token }}
+          DRILL_ARTIFACT: ${{ inputs.managed_drill_artifact }}
+          DRILL_SHA256: ${{ inputs.managed_drill_sha256 }}
+        run: |
+          [[ "${DRILL_ARTIFACT}" =~ ^[1-9][0-9]*$ && "${DRILL_SHA256}" =~ ^[a-f0-9]{64}$ ]]
+          root="$(mktemp -d)"
+          artifact="repos/${GITHUB_REPOSITORY}/actions/artifacts/${DRILL_ARTIFACT}"
+          gh api "${artifact}" > "${root}/artifact.json"
+          run_id="$(jq -er --arg sha "${GITHUB_SHA}" --arg digest "sha256:${DRILL_SHA256}" \
+            --arg id "${DRILL_ARTIFACT}" --arg repo "${GITHUB_REPOSITORY_ID}" '
+            select((.id | tostring) == $id and .expired == false and .digest == $digest
+              and .name == ("release-qualification-" + $sha) and .workflow_run.head_sha == $sha
+              and (.workflow_run.head_repository_id | tostring) == $repo)
+            | .workflow_run.id | numbers' "${root}/artifact.json")"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" | jq -e \
+            --arg sha "${GITHUB_SHA}" --arg repo "${GITHUB_REPOSITORY}" '
+            .path == ".github/workflows/gke-qualification.yml" and .event == "workflow_dispatch"
+            and .head_branch == "main" and .head_sha == $sha and .head_repository.full_name == $repo
+            and .run_attempt == 1 and .status == "completed" and .conclusion == "success"' > /dev/null
+          gh api "${artifact}/zip" > "${root}/records.zip"
+          printf '%s  %s\n' "${DRILL_SHA256}" "${root}/records.zip" | shasum -a 256 -c
+          python3 -m zipfile -e "${root}/records.zip" "${root}/records"
+          shopt -s nullglob
+          capable=()
+          for directory in "${root}"/records/*/; do
+            [[ "${directory}" == "${root}/records/gke-native/" ]] && continue
+            capable+=(--capable "${directory}")
+          done
+          python3 deploy/release_drills.py \
+            --version "${RELEASE_VERSION}" --commit "${GITHUB_SHA}" \
+            --synthetic test-results/release-evidence/native-qualification \
+            --producer-run "${run_id}" --artifact-id "${DRILL_ARTIFACT}" --artifact-sha256 "${DRILL_SHA256}" \
+            --published-images test-results/release-evidence/published/published-images.json \
+            --host-evidence "${root}/records/gke.json" \
+            --routes deploy/release-model-routes.toml "${capable[@]}" \
+            --output dist/agent-safety-drills.json
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GitHub Container Registry
@@ -166,6 +211,14 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: deploy/promote-release-images.sh verify "${RELEASE_VERSION}" "${GITHUB_SHA}"
+      - name: Verify published image qualification evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN: ${{ steps.qualification.outputs.run_id }}
+        run: |
+          python3 reference-platform/tools/release_image_evidence.py
+          tar -czf dist/published-image-evidence.tar.gz -C test-results/release-evidence/images \
+            published-images.json stage-receipt.json platform.json hosted.json worker.json
       - name: Install pinned dependency builder
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -203,6 +256,7 @@ jobs:
             dist/native-qualification-evidence.tar.gz
             dist/native-qualification-evidence.sigstore.jsonl
             dist/agent-safety-drills.json
+            dist/published-image-evidence.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -325,6 +379,7 @@ jobs:
           gpu_runtime_asset="$(python3 -c 'import tomllib; print(tomllib.load(open("images/gpu/compatibility.toml", "rb"))["runtime"]["vllm_wheel_filename"])')"
           evidence_assets=(native-qualification-evidence.tar.gz native-qualification-evidence.sigstore.jsonl)
           evidence_assets+=(agent-safety-drills.json)
+          evidence_assets+=(published-image-evidence.tar.gz)
           release_assets=(SHA256SUMS heartwood-installer heartwood-native.tar.gz "${gpu_runtime_asset}")
           release_assets+=("${evidence_assets[@]}")
           expected_assets="$(printf '%s\n' "${release_assets[@]}" | sort)"

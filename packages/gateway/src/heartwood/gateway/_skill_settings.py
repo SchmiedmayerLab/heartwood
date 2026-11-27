@@ -48,9 +48,10 @@ _LOGGER = logging.getLogger(__name__)
 # revision. Advance them together with that submodule.
 BUNDLED_SKILL_DIGESTS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "aggregate-export": "2a8575cb0f0b06f48bd20551a50791ec33476b74cbbae6eef8156c029d9754ee",
-        "baseline-model": "2311e80e99d79d0a9f07e8d85b2cc073f8ca3c964209d81400a5ae7bd04ea22a",
-        "omop-cohort-summary": "4f1c6425c8089b487d3899f274b5fe4d38b5367d481f8235d711092a85537479",
+        "workload-prediction": "c2640c0fac1013661c4a6b0e19a2a3eb54a40897f92d47094a605a8a6ec5aa98",
+        "aggregate-export": "f4bccba15f9b2cafe5c8fd52ae965433a356fa0a578993dd06915130c056fcf4",
+        "baseline-model": "9c957ae931204f7707cd9ba44c58da3a87a48d67a1ba5f582c03255da82bbef3",
+        "omop-cohort-summary": "6a97399ed0f6e8fc07d43d9c4590a0bd1c5db9fb30379abc28129385542d6c31",
     }
 )
 

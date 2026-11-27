@@ -385,3 +385,21 @@ def test_gateway_secret_that_another_party_created_fails_the_launch(platform: Pl
 
     with pytest.raises(SessionError, match="created by another party"):
         sessions.write_gateway_secret("abc123", {"launch.json": "{}"})
+
+
+def test_removal_waits_until_the_api_confirms_namespace_absence(platform: Platform) -> None:
+    responses = iter([202, 409, 404])
+    statuses = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/namespaces/hw-s-demo":
+            assert request.method == "DELETE"
+            status = next(responses)
+            statuses.append(status)
+            return httpx.Response(status)
+        return httpx.Response(200)
+
+    client = httpx.Client(transport=httpx.MockTransport(handle), base_url="https://k.example.test")
+    sessions = Sessions(Kubernetes(client), platform.settings, list, sleep=lambda _: None)
+    sessions.remove("demo")
+    assert statuses == [202, 409, 404]

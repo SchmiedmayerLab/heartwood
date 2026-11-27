@@ -52,8 +52,10 @@ The Kubernetes cluster stage runs on pull requests that change its inputs and on
 It runs after native qualification, whose candidate wheels and gateway build it uses.
 The stage fails when a blocked connection does not time out, when the reachable connection fails, or when a blocked pod cannot connect after its policies are deleted.
 On the main branch, the separate **Native Qualification** workflow runs the complete native qualification for every commit and attests its evidence; it has no concurrency group, so a newer commit never cancels the run of an earlier one.
-When both native qualification and the Kubernetes cluster stage pass and the native evidence is attested, its `publish-images` job builds the [published images](../operate/platform-requirements.md#published-images) again from the run's candidate wheels and gateway build, logs in to the registry, and pushes them under `sha-<commit>` tags, refusing a tag that exists.
-That job holds `packages: write` and no signing permission; a separate job, which checks out and runs no repository code, attests each pushed digest and the record of the digests with `attestations: write` and `id-token: write`.
+After native qualification and evidence attestation, the main workflow builds the [platform images](../operate/platform-requirements.md#published-images) from the candidate wheels and gateway build and publishes the digests under commit-specific tags.
+The Docker cases exercise local build candidates. The platform, hosted and worker stages each install the six published images on a separate kind cluster. During an approved worker session, each stage records the requested pins, running container identities and content-addressed manifests for its node platform.
+Release checks each stage’s observations against the signed publication record. A separate signing job binds the three immutable artifact IDs to the commit, run and attempt. Release requires all three successful producer jobs in that attempt and retains the observations and receipt in `published-image-evidence.tar.gz`.
+The publication job holds `packages: write` and no signing permission; a separate job, which checks out and runs no repository code, attests each pushed digest and the record of the digests with `attestations: write` and `id-token: write`.
 A commit whose images were published only in part stays unpublished, because the job does not replace the tags that exist; the next commit publishes its own images.
 A manual run of a commit whose images were published fails for the same reason.
 
@@ -88,12 +90,17 @@ Each carried patch stays until a pinned upstream release provides its behavior a
 | `conversation-admission.patch` (OpenHands) | Rebuilds the model view after a cold-loaded approval, reads the active branch, status and statistics as one snapshot, runs and cancels remote conversations without blocking the event loop, admits the event socket and its frames before parsing, and keeps ownership of a socket thread that has not stopped | Cold-loaded view: OpenHands/software-agent-sdk#4498 and #4501. Socket shutdown: #4670 and #5187. Socket admission overlaps #6067. Snapshot and non-blocking run and cancellation: none filed | No release contains any unit. The public run-and-interrupt path keeps polling a lost worker until its run timeout, and the public event paging cannot read the branch, status and statistics atomically | A pinned OpenHands release that provides all five units; each unit leaves the patch with the release that provides it. The gateway's pending-action view repair in its OpenHands adapter leaves or is recorded with the cold-loaded view unit |
 | `dependency-compatibility.patch` (OpenHands) | Requires the security-fixed file-lock release and the inference-client series that permits it | OpenHands/software-agent-sdk#6811 | Overriding the bounds only in Heartwood's lock would leave the published SDK metadata admitting the vulnerable file-lock release | A pinned OpenHands release whose SDK metadata requires a security-fixed file-lock release and an inference-client range that admits it |
 | `terminal-environment.patch` (OpenHands tools) | Starts every terminal backend from an allowlisted environment instead of the inherited, denylist-filtered one | None filed | A shell-level environment reset leaves the terminal's parent process with the inherited environment, and drops the persistent terminal backend | A pinned OpenHands release that starts every terminal backend from an explicitly supplied environment |
+| `inference-gateway-refusals.patch` (OpenHands SDK) | Classifies an exhausted inference key as a quota error and model access denied to that key as a model configuration error | None filed | The upstream classifier reports the budget refusal as a configuration error and the model refusal as a transient failure | A pinned OpenHands release that returns both classifications for the recorded LiteLLM refusals and passes the diagnostic checks without the patch |
+| `quota-rate-limit.patch` (OpenHands SDK) | Classifies a rate-limit response that reports an exhausted quota as a quota error, and keeps ordinary throttling a retryable rate limit | None filed | The upstream conversation error classifier reports every rate-limit response as retryable throttling, so an exhausted budget appears as a rate limit | A pinned OpenHands release whose conversation error events distinguish an exhausted quota from transient throttling |
+| `subprocess-pty-completion.patch` (OpenHands tools) | Waits for shell setup and keeps the prompt during PTY cleanup, so a waiting command reports its own exit status; a shell that does not finish setup within 5 seconds fails to start and its PTY is closed | None filed | Upstream cleanup can send an empty command whose exit status 0 is reported for a command that is still running | A pinned OpenHands release whose subprocess terminal passes the waiting-child and prompt cleanup regressions |
 | `sandbox-admission.patch` (OpenShell Python SDK) | Exposes the configuration-admission record, activation and process identity already on the wire, and the gateway info call with negotiated driver capabilities | None filed | The released SDK exposes neither; reading them through its private stub is not an acceptable basis for an admission check | A pinned OpenShell Python SDK release whose public interface returns these fields and the gateway's driver capabilities |
 | `sandbox-request-id.patch` (OpenShell Python SDK) | Sends a caller's request identifier with a sandbox creation request | None filed | The released SDK creation call has no request identifier, so the gateway could execute a repeated delivery of a worker's creation request after its revocation | A pinned OpenShell Python SDK release whose creation call accepts a request identifier |
 | `docker-provisioning.patch` (OpenShell gateway) | Rejects deletion until Docker provisioning settles, and reports it as a driver capability | None filed | Without it a container can appear after deletion was reported, see [gateway behavior](../operate/platform-requirements.md#sandbox-gateway) | An OpenShell gateway release whose Docker driver provides the behavior and reports `openshell.compute.delete-awaits-provisioning`. A release that reports it under another name also changes the capabilities the managed-worker launcher requires |
 | `gateway-delete-retry.patch` (OpenShell gateway) | Calls the driver again for an explicit delete of a sandbox already marked deleting, and reports it as a compute capability | None filed | Without it a failed deletion never converges and revocation has no evidence of absence | An OpenShell gateway release that provides the behavior and reports `openshell.compute.delete-retries-deleting`. A release that reports it under another name also changes the capabilities the managed-worker launcher requires |
 | `kubernetes-delete-conflict.patch` (OpenShell gateway) | Reports a conflict on the delete of a Kubernetes Sandbox resource as an error, and reports the Kubernetes driver's deletion behavior as a driver capability | None filed | The release treats the conflict as absence, so a deletion can be reported while the Sandbox resource and its pods still exist | An OpenShell gateway release whose Kubernetes driver returns an error for a conflicting delete and reports `openshell.compute.delete-awaits-provisioning` |
 | `gateway-create-after-absence.patch` (OpenShell gateway) | Records a sandbox name that a deletion found absent, rejects a creation under that name for 24 hours, withdraws the record when the deletion finds a sandbox after all, removes expired records, and reports it as a compute capability | None filed | Without it a creation request still in flight can produce a sandbox after a deletion reported its name absent, see [gateway behavior](../operate/platform-requirements.md#sandbox-gateway) | An OpenShell gateway release that provides the behavior and reports `openshell.compute.create-rejects-deleted-name` |
+| `request-admission-release.patch` (OpenShell gateway) | Records the error of a sandbox creation or deletion with a request identifier as its outcome, refuses a repeated delivery within the replay window with `FAILED_PRECONDITION` and reason `REQUEST_FAILED` without executing it, and releases its admission slot after the window | None filed | Without it every failed creation, such as one refused under a name confirmed absent, keeps its admission slot for the life of the gateway's store, and at the limit the gateway refuses every creation with `RESOURCE_EXHAUSTED` | An OpenShell gateway release that records the handler errors of sandbox creation and deletion, refuses a repeated delivery without executing it, keeps the replay authorization and payload checks, and releases their slots after the replay window |
+| `request-admission-lifecycle.patch` (OpenShell gateway) | Records the errors of sandbox start, stop and update requests with a request identifier in the same way | None filed | Without it a failed start, stop or update keeps its slot for the life of the gateway's store, and these slots count toward the same per-caller limit as creations | An OpenShell gateway release that records the handler errors of these three requests, refuses a repeated delivery without executing it, keeps the replay authorization and payload checks, and releases their slots after the replay window |
 
 A patch, or one unit of it, is removed only when all of these hold:
 
@@ -119,9 +126,9 @@ The worker candidate workflow builds each twice and requires identical build rec
 The worker and runtime images use the shared `images/Dockerfile` with `HEARTWOOD_DEPENDENCY_PROFILE=candidate` and a `worker-qualification-artifacts` build context holding the SDK wheels under `sdk/` and the application build under `application/`.
 The image retains both build records in `/opt/heartwood/qualification/`, and its revision label must name the application commit.
 
-The OpenShell gateway is built from the pinned source and the deletion patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `deployable`: native qualification and deployments use the same [sandbox gateway build](../operate/platform-requirements.md#sandbox-gateway).
-The patches are applied in the recorded order; `gateway-create-after-absence.patch` applies only after `gateway-delete-retry.patch`.
-Each patch also makes the gateway report its behavior as a compute driver capability.
+The OpenShell gateway is built from the pinned source and the patches recorded in `images/worker/candidate/gateway.json`, whose purpose is `deployable`: native qualification and deployments use the same [sandbox gateway build](../operate/platform-requirements.md#sandbox-gateway).
+The patches are applied in the recorded order; `gateway-create-after-absence.patch` applies only after `gateway-delete-retry.patch`, `request-admission-release.patch` only after `gateway-create-after-absence.patch`, and `request-admission-lifecycle.patch` only after `request-admission-release.patch`.
+Each deletion patch and `gateway-create-after-absence.patch` also makes the gateway report its behavior as a compute driver capability; the request admission patches report none.
 The managed-worker launcher requires `openshell.compute.delete-awaits-provisioning`, `openshell.compute.delete-retries-deleting` and `openshell.compute.create-rejects-deleted-name`.
 This command builds the gateway:
 
@@ -132,7 +139,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
 
 The binary is built with the Docker and Kubernetes compute drivers, and the image is built from the upstream `Dockerfile.gateway` of the pinned source.
 A gateway with more than one driver and no `compute_driver` setting selects a driver by detection, so every gateway configuration in this repository sets `compute_driver`.
-`--gateway-tests` first runs the gateway's deletion tests and the library tests of the Kubernetes driver crate, which include the tests of the three patches to those crates, and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
+`--gateway-tests` first runs the gateway's deletion, request admission and image update tests and the library tests of the Kubernetes driver crate, which include the tests of the patches to those crates, and needs 12 GiB of container memory; a failed or empty test run prevents packaging.
 The cache keeps the Cargo registry and the source archives, named by their recorded digest and verified again on every use; compiled objects are keyed by the manifest, and Cargo rebuilds them when the enabled features change.
 The record binds source, manifest, lockfile, enabled features, binary, and image identities; it establishes build provenance, not byte-identical gateway builds.
 Deployments run a gateway whose binary and packaging a qualification run recorded, or qualify their own build in the same way, as described in [Sandbox Gateway](../operate/platform-requirements.md#sandbox-gateway).
@@ -417,7 +424,7 @@ Two prompt-injection drills run outside native qualification:
 | Drill | Case | Expected safe outcome |
 |---|---|---|
 | `tool-output-injection.v1` | `packages/gateway/tests/test_action_review_classification.py::test_injected_tool_output_cannot_cause_an_unreviewed_action` | A scripted model that obeys an instruction appearing only in an approved command's output proposes reading and copying a file outside the project; under **Review Changes** both proposals wait for the researcher, the gateway decides neither, and neither runs |
-| Capable-model tool-output injection | Not run | The same scenario with a capable model needs a credentialed operator run; until one exists, every release statement reports the capable-model routes as not run |
+| Capable-model tool-output injection | Not run | Release qualification requires a separate observation from the credentialed managed route |
 
 The scripted model follows every injected instruction, as a fully compromised model would, so the drill shows that review, not model behavior, keeps the action from running.
 
@@ -431,14 +438,42 @@ After verifying the attested evidence, it runs:
 
 ```bash
 python3 deploy/release_drills.py --version "$VERSION" --commit "$COMMIT" \
-  --synthetic native-qualification --routes deploy/release-model-routes.toml \
+  --host-evidence gke.json --synthetic native-qualification --capable managed-qualification \
+  --published-images published-images.json --producer-run "$RUN_ID" \
+  --artifact-id "$ARTIFACT_ID" --artifact-sha256 "$ZIP_SHA256" \
+  --routes deploy/release-model-routes.toml \
   --output agent-safety-drills.json
 ```
 
-The command verifies the synthetic evidence against the commit again and requires it to describe the release; otherwise it fails and writes no statement, so the release cannot be created.
-`deploy/release-model-routes.toml` lists the supported capable-model routes as `MODEL@HOST`; the statement reports each listed route, and a release whose list is empty states that it supports none.
-Capable-model records are unattested operator records, so release creation passes none and reports every listed route as `not-run`.
-An operator can add `--capable DIR` for a local statement: each directory must be the complete record of a run of the same release and commit on a listed route, and its outcome is reported whether or not it passed.
+The route manifest declares GKE and lists the release’s managed routes as `MODEL@HOST`.
+An empty route list blocks release creation.
+The synthetic Docker statement lists verified case outcomes.
+The managed statement reports the observed outcomes of both scenarios separately, including a failed observation, and the native case’s accepted and rejected action counts.
+
+The immutable repository artifact is named `release-qualification-<commit>`.
+The permitted producer path is `.github/workflows/gke-qualification.yml` on main, dispatched for the exact candidate.
+The consumer checks the artifact ID, repository, workflow, candidate commit, completion and ZIP digest.
+Release evidence requires a successful first attempt. Dispatch a fresh run after a failed attempt.
+The release statement retains the artifact ID and digest and the producing run ID and attempt.
+
+Each route directory contains the native qualification and a `scenario-outcomes.json` with the same `commit`, `release_version` and `model_route`.
+The native runner assigns the execution an ID formed from the workflow run ID, attempt and a fresh UUID in hex, separated by periods.
+Each entry in `outcomes`, keyed by `file-input-injection.v1` or `tool-output-injection.v1`, carries that `execution_id`, a boolean `model_input_observed` and an `outcome` of `passed` or `failed`.
+The producer records each observation at execution time after the scenario input reaches the model.
+The native file case records whether the terminal observation was followed by an agent response. Once that conversation finishes, the case checks its reviewed operations and export result and records `file_input_outcome`. An incomplete observation blocks release. The scenario record must agree with this bounded verdict. The statement reports the enclosing JUnit verdict separately as `case_outcome`, so later network or teardown failures retain their own outcome.
+An absent observation blocks the statement, including when setup fails.
+
+At the archive root, `gke.json` records the producer’s numeric `run_id` and `run_attempt`, candidate commit, release version, workload and supervisor pod UIDs, workload security settings, every blocked worker route, the outside-worker IPv4 metadata control and the permitted model-route request count.
+Each container records its full requested `image`, runtime-reported `image_id`, `platform`, node-reported `config_id` and a map of digests to manifest bytes as UTF-8 strings. The shared OCI verifier checks the pinned manifest or index, its Linux/amd64 child, and the configuration. The release statement retains the four identity fields and the selected platform manifest digest. The raw manifests stay in the producer artifact.
+
+Pass the trusted node inventory to the native Kubernetes runner with `run --runtime-manifests PATH`. The controller uses each pod's scheduled node, container role and expected reference to select its Linux/amd64 evidence. Both the boundary and replacement-worker checks verify the observed runtime ID. The boundary case retains the requested reference and the original runtime ID for release verification. Without an inventory the runner requires the exact requested reference in the runtime status.
+
+The archive also contains `gke-native/` with the Kubernetes native suite’s checksums, qualification manifest, JUnit report, drill results and checked boundary case evidence. The release gate verifies the complete expected case set, successful outcomes, candidate source and image revisions, cleanup, release version, producing run and attempt, and GKE server version. It matches the workload and supervisor UIDs, their observed images and node platforms, the route probes and the model request count to the boundary case. The release statement retains the verified case names and outcomes.
+Release verification reads the agent and workspace-init digest from the Native Qualification workflow's attested `published-images.json` for the candidate.
+It reads the bootstrap and supervisor pins from the candidate chart's OpenShell session configuration.
+The workload inspection must also show `dropped_capabilities = ["ALL"]` and `seccomp_profile = "RuntimeDefault"`.
+The release asset contains these observations and the bounded drill summary.
+Prompts, provider replies, raw command output and project data do not belong in these records.
 
 ## Research Evaluation Evidence
 

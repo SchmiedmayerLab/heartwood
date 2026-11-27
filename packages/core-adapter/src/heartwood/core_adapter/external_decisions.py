@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 from heartwood.core_adapter._facade import BackendErrorCode, BackendErrorEvent, BackendEvent
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.external_actions import (
+    REFUSAL_DESTINATION,
     ExternalActionAdapter,
     ExternalActionDecision,
     ExternalActionError,
@@ -81,7 +82,13 @@ def propose_external_action_locked(
     ):
         raise ExternalActionError("worker tool has no trusted outside service binding")
     policy = adapter.policy_sha256
-    request = ExternalActionRequest.model_validate(adapter.prepare(tool_name, arguments))
+    try:
+        prepared = adapter.prepare(tool_name, arguments)
+    except ExternalActionError as error:
+        if error.code is not None:
+            _record_pending_refusal(service, source_event_id, error)
+        raise
+    request = ExternalActionRequest.model_validate(prepared)
     if request.tool_name != tool_name:
         raise ExternalActionError("service request changed the proposed tool")
     if request.target_operation_id is not None:
@@ -99,6 +106,37 @@ def propose_external_action_locked(
     _check_external_authority(service, proposal)
     event = _record_external(service, ExternalActionRecord(phase="proposed", proposal=proposal))
     return (event,) if closed is None else (closed, event)
+
+
+def _record_pending_refusal(
+    service: SessionService, source_event_id: str, error: ExternalActionError
+) -> None:
+    """Record once per change why a worker call has no review, such as a missing sign-in.
+
+    The call is proposed again on a later read; a refusal with the same code since its
+    last review record is not recorded again.
+    """
+    for event in reversed(service.replay_events()):
+        if event.kind == EventKind.EXTERNAL_ACTION_RECORDED:
+            record = ExternalActionRecord.model_validate_json(json.dumps(event.payload["record"]))
+            if record.proposal.source_event_id == source_event_id:
+                break
+        elif (
+            event.kind == EventKind.ERROR_RECORDED
+            and event.payload.get("pending_call") == source_event_id
+        ):
+            if event.payload.get("code") == error.code:
+                return
+            break
+    service._record_event(
+        EventKind.ERROR_RECORDED,
+        {
+            "code": error.code,
+            "reason": error.detail,
+            "pending_call": source_event_id,
+            "affects_lifecycle": False,
+        },
+    )
 
 
 def propose_external_result_locked(
@@ -177,6 +215,7 @@ def decide_external_action(
                 EventKind.ERROR_RECORDED,
                 {
                     "reason": "outside operation already has a decision",
+                    "outside_review": True,
                     "affects_lifecycle": False,
                 },
             ),
@@ -203,12 +242,18 @@ def decide_external_action(
             proposal=proposal,
             decision=current.decision or decision,
         )
-    except Exception:
+    except Exception as error:
+        # Only a refusal the adapter coded is shown with its detail; other text stays out.
         return (
             service._record_event(
                 EventKind.ERROR_RECORDED,
                 {
-                    "reason": "outside authorization or input validation failed",
+                    **(
+                        {"code": error.code, "reason": error.detail}
+                        if isinstance(error, ExternalActionError) and error.code is not None
+                        else {"reason": "outside authorization or input validation failed"}
+                    ),
+                    "outside_review": True,
                     "affects_lifecycle": False,
                 },
             ),
@@ -288,6 +333,7 @@ def decide_external_result(
                 EventKind.ERROR_RECORDED,
                 {
                     "reason": "outside result release validation failed",
+                    "outside_review": True,
                     "affects_lifecycle": False,
                 },
             ),
@@ -534,11 +580,12 @@ def _check_target(request: ExternalActionRequest, target: ExternalActionRecord |
     """Admit a cancellation only for an operation this session sent to the same service.
 
     The target identifier the service receives comes from this record, never from the
-    worker's text.
+    worker's text. A refused call reached no service, so it has nothing to cancel.
     """
     if (
         target is None
         or target.phase != "observed"
+        or target.proposal.request.destination == REFUSAL_DESTINATION
         or target.proposal.request.service_id != request.service_id
         or target.proposal.request.project_context_id != request.project_context_id
         or target.proposal.request.target_operation_id is not None

@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT
 {{- $initResources := dict "limits" (dict "cpu" "500m" "memory" "256Mi") "requests" (dict "cpu" "50m" "memory" "64Mi") -}}
 {{- $mounts := include "heartwood.hubMounts" . | fromJson -}}
 {{- $storage := dict "capacity" .Values.hub.storage.capacity "storage_class" .Values.hub.storage.storageClassName -}}
-{{- $settings := dict "namespace" $sessions "issuer" (include "heartwood.issuer" .) "client_id" "heartwood-hub" "client_secret_file" "/usr/local/etc/heartwood/hub/client/client-secret" "researcher_id_key_file" "/usr/local/etc/heartwood/hub/researcher-ids/key" "ca_file" "/usr/local/etc/heartwood/platform-ca/ca.crt" "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "token_file" "/var/run/secrets/heartwood/control/token" "public_origin" .Values.hub.publicOrigin "proxy_api_url" (printf "https://proxy-api.%s.svc.cluster.local:8001" .Release.Namespace) "trusted_proxy_sources" .Values.hub.trustedProxySources "gateway_image" $gatewayImage "container_security_context" $context "resources" $resources "init_resources" $initResources "storage" $storage "volume_mounts" $mounts.main "init_mounts" $mounts.init -}}
+{{- $settings := dict "namespace" $sessions "issuer" (include "heartwood.issuer" .) "client_id" "heartwood-hub" "client_secret_file" "/usr/local/etc/heartwood/hub/client/client-secret" "researcher_id_key_file" "/usr/local/etc/heartwood/hub/researcher-ids/key" "ca_file" "/usr/local/etc/heartwood/platform-ca/ca.crt" "control_url" (printf "https://heartwood-control.%s.svc.cluster.local:8443" .Release.Namespace) "token_file" "/var/run/secrets/heartwood/control/token" "project_domain" .Values.hub.projectDomain "public_origin" .Values.hub.publicOrigin "proxy_api_url" (printf "https://proxy-api.%s.svc.cluster.local:8001" .Release.Namespace) "trusted_proxy_sources" .Values.hub.trustedProxySources "gateway_image" $gatewayImage "container_security_context" $context "resources" $resources "init_resources" $initResources "storage" $storage "volume_mounts" $mounts.main "init_mounts" $mounts.init "tls_directory" "/usr/local/etc/heartwood/hub/tls" "hub_url" "https://hub:8081" "gateway_service" (include "heartwood.gatewayService" .) -}}
 # The Hub's configuration file and its settings. It holds no credential.
 apiVersion: v1
 kind: ConfigMap
@@ -27,6 +27,26 @@ data:
     {{- .Files.Get "files/hub/heartwood_hub.py" | nindent 4 }}
   settings.json: |
     {{- $settings | toPrettyJson | nindent 4 }}
+---
+# The headless Service of the gateway pods. Each gateway pod has the host name
+# hw-gw-<session> under it, so the proxy and the Hub reach it by the name that its
+# certificate carries. The name resolves as soon as the pod has an address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "heartwood.gatewayService" . }}
+  namespace: {{ $sessions }}
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    heartwood.platform/role: hosted-gateway
+  ports:
+    - name: https
+      port: 8888
+      targetPort: 8888
 ---
 # The secret of the Hub's Keycloak client, which the realm import and the Hub read.
 apiVersion: v1

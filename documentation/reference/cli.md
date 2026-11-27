@@ -255,6 +255,7 @@ Top-level `--interface`, `--port`, `--plain`, `--prompt`, and `--review-mode` se
 | `--host HOST` | Bind host; default `127.0.0.1` |
 | `--port PORT` | Bind port; default `8767` |
 | `--web-root DIR` | Browser asset directory; default the packaged assets |
+| `--tls-certificate PATH`, `--tls-key PATH` | Serve the port only over TLS with this PEM certificate chain and its key; both or neither, and only with an `https` `--public-origin` |
 | `--deployment PATH` | Absolute operator manifest binding the project to external state, policy, and optional managed workers |
 | `--review-mode MODE` | Review mode selected at start; policy limits still apply |
 | `--capability-fd N` | Read the operator capability from inherited descriptor `N` instead of printing a launch link |
@@ -326,7 +327,7 @@ These run from a repository checkout, not an installed release.
 | `uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py --bootstrap` | Build or verify the maintained runtime wheels in `vendor/runtime-wheels/` |
 | `… deploy/build-worker-candidate.py --output DIR` | Build the maintained SDK wheels into a new directory |
 | `… deploy/build-worker-candidate.py --application --output DIR` | Build the committed Heartwood application wheels |
-| `… deploy/build-worker-candidate.py --gateway --cache DIR --output DIR [--gateway-tests]` | Build the pinned sandbox gateway; `--gateway-tests` first runs its deletion tests and the Kubernetes driver's library tests and needs 12 GiB of container memory |
+| `… deploy/build-worker-candidate.py --gateway --cache DIR --output DIR [--gateway-tests]` | Build the pinned sandbox gateway; `--gateway-tests` first runs its deletion, request admission and image update tests and the Kubernetes driver's library tests and needs 12 GiB of container memory |
 | `python3 deploy/qualify-native-worker.py --worker-image IMAGE --runtime-image IMAGE --gateway-artifacts DIR --records-artifacts DIR --output DIR [--model-profile PATH]` | Run native worker qualification; `--model-profile` adds a capable-model case whose credential is read from standard input |
 | `python3 deploy/qualification_evidence.py [--commit SHA] DIR` | List every reason an evidence directory does not establish a qualification pass |
 | `uv run python packages/gateway/scripts/export_platform_contract.py DIR` | Export the platform contract bundle to a new directory |

@@ -9,13 +9,18 @@ from __future__ import annotations
 import base64
 import json
 import secrets
+import subprocess
+import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
+import yaml
 from fakes import (
     AUDIENCE,
     HUB,
@@ -33,14 +38,18 @@ from heartwood_platform.common.tokens import ResearcherTokens, ServiceTokens
 from heartwood_platform.control.__main__ import Settings
 from heartwood_platform.control.app import create_app
 from heartwood_platform.control.budgets import Allocation, Ledger
+from heartwood_platform.control.gateway_certificates import GatewayCertificates
 from heartwood_platform.control.inference import SessionRoute
 from heartwood_platform.control.keycloak import Keycloak
 from heartwood_platform.control.launch import LaunchService
 from heartwood_platform.control.prices import PriceSheet
+from heartwood_platform.control.project_data import MountedDataset, ProjectData, ProjectDataSettings
 from heartwood_platform.control.registry import NotAMemberError, Project, Registry, Session
 from heartwood_platform.control.researchers import read_key, researcher_id
 from heartwood_platform.control.sessions import ProvisionedSession, Sessions, SessionSettings
+from httpx2 import Response
 from starlette.testclient import TestClient
+from test_gateway_certificates import issuer_directory, synthetic_authority
 from test_hosted import HOSTED
 
 from heartwood.schemas import PlatformLaunchContext
@@ -104,7 +113,13 @@ class FakeInference:
 
 
 class Platform:
-    def __init__(self, directory: Path) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        prices: PriceSheet | None = None,
+        *,
+        grants: dict[str, MountedDataset] | None = None,
+    ) -> None:
         self.key = SigningKey()
         self.keycloak = FakeKeycloak()
         self.reviews = TokenReviews()
@@ -141,7 +156,8 @@ class Platform:
             ),
             self.registry.session_ids,
         )
-        self.ledger = Ledger(directory / "control.sqlite3", clock=lambda: _NOW)
+        prices = prices or PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES))
+        self.ledger = Ledger(directory / "control.sqlite3", prices.denomination, clock=lambda: _NOW)
         self.ledger.synchronize(
             [
                 Allocation("demo", "inference", Decimal(5)),
@@ -150,7 +166,31 @@ class Platform:
             ]
         )
         self.inference = FakeInference()
-        launches = LaunchService(
+        project_data = None
+        if grants:
+            settings = ProjectDataSettings(
+                data_url="https://data.test",
+                token_file=directory / "absent",
+                copy_image="test@sha256:" + "0" * 64,
+                storage_class="copy",
+                workspace="research",
+                mount_path="/data",
+                object_store_namespace="platform",
+                object_store_labels={},
+                object_store_port=7070,
+                mounted_datasets=grants,
+            )
+            self.mount_settings = settings
+            project_data = ProjectData(
+                Kubernetes(self.kubernetes.client()),
+                settings,
+                httpx.Client(
+                    transport=httpx.MockTransport(
+                        lambda _: pytest.fail("mounted launch requested a copy")
+                    )
+                ),
+            )
+        self.launches = launches = LaunchService(
             self.registry,
             keycloak,
             sessions,
@@ -161,21 +201,29 @@ class Platform:
             ledger=self.ledger,
             session_reservation=Decimal(1),
             inference=self.inference,
+            project_data=project_data,
+            certificates=GatewayCertificates(
+                issuer_directory(directory / "issuer", synthetic_authority(), _NOW),
+                "hw-gateways",
+                "heartwood-sessions",
+                clock=lambda: _NOW,
+            ),
         )
         self.client = TestClient(
             create_app(
                 launches,
                 ResearcherTokens(ISSUER, AUDIENCE, self.key.key_set),
                 ServiceTokens(self.reviews.review, AUDIENCE, frozenset({HUB})),
-                PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)),
+                prices,
                 self.ledger,
                 clock=lambda: _NOW,
                 operators=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({OPERATOR})),
                 contexts=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({_DATA, JOBS})),
+                jobs=ServiceTokens(self.reviews.review, AUDIENCE, frozenset({JOBS})),
             )
         )
 
-    def launch(self, subject: str, project: str) -> dict[str, object]:
+    def launch(self, subject: str, project: str) -> dict[str, Any]:
         response = self.client.put(
             f"/v1/researchers/{_id(subject)}/projects/{project}/launch", headers=_HUB
         )
@@ -204,6 +252,40 @@ def test_spawner_lists_the_projects_of_a_researcher(platform: Platform) -> None:
     assert projects(_ALICE) == {"projects": ["demo", "other"]}
     assert projects(_BOB) == {"projects": ["demo"]}
     assert projects("unknown") == {"projects": []}
+
+
+def test_hosted_nonmember_own_launch_is_refused_before_provisioning(platform: Platform) -> None:
+    values_path = _OBJECTS.parents[1] / "values-kind.yaml"
+    root = Path(__file__).resolve().parents[3]
+    fixture = root / "packages/webui/tests/hosted-memberships.py"
+    override = json.loads(subprocess.check_output([sys.executable, fixture, values_path]))
+    subjects = {
+        r["username"]: r["subject"] for r in yaml.safe_load(values_path.read_text())["researchers"]
+    }
+    first, second = subjects["researcher-one"], subjects["researcher-two"]
+    platform.registry.synchronize(
+        [
+            Project(p["id"], p["billingAttributionRef"], p["policyRef"], frozenset(p["members"]))
+            for p in override["projects"]
+        ]
+    )
+    for subject, expected in ((first, ["demo", "other", "small"]), (second, ["demo", "other"])):
+        response = platform.client.get(f"/v1/researchers/{_id(subject)}/projects", headers=_HUB)
+        assert response.status_code == 200
+        assert response.json()["projects"] == expected
+    platform.launch(second, "other")
+    sessions = platform.registry.session_ids()
+    kube_calls = len(platform.kubernetes.calls)
+    client_calls = len(platform.keycloak.requests)
+    response = platform.client.put(
+        f"/v1/researchers/{_id(second)}/projects/small/launch", headers=_HUB
+    )
+    assert response.status_code == 403
+    assert response.json() == {"error": "not a member of the project"}
+    assert platform.registry.session(second, "small") is None
+    assert platform.registry.session_ids() == sessions
+    assert len(platform.kubernetes.calls) == kube_calls
+    assert len(platform.keycloak.requests) == client_calls
 
 
 def test_launch_returns_the_registry_binding_and_prepares_the_project_client(
@@ -249,6 +331,10 @@ def test_gateway_secret_holds_the_launch_and_the_credentials_and_the_reply_holds
     secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{launch['session']}"]
     files = {name: base64.b64decode(value).decode() for name, value in secret["data"].items()}
     assert json.loads(files.pop("launch.json")) == launch
+    certificate, key = files.pop("gateway-tls.crt"), files.pop("gateway-tls.key")
+    assert certificate.count("-----BEGIN CERTIFICATE-----") == 2
+    assert key.startswith("-----BEGIN PRIVATE KEY-----")
+    assert key not in json.dumps(launch)
     assert files == {
         "model-discovery-key": f"discovery-key-of-{launch['session']}",
         "keycloak-client-secret": "secret-of-uuid-1",
@@ -268,7 +354,12 @@ def test_relaunch_reuses_the_session_and_researchers_share_the_project_client(
 ) -> None:
     first = platform.launch(_BOB, "demo")
 
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{first['session']}"]
+    key = secret["data"]["gateway-tls.key"]
     assert platform.launch(_BOB, "demo")["session"] == first["session"]
+    # A relaunch writes a new key and certificate of the gateway.
+    secret = platform.kubernetes.kind("Secret", "heartwood-sessions")[f"hw-gw-{first['session']}"]
+    assert secret["data"]["gateway-tls.key"] != key
     assert platform.launch(_ALICE, "demo")["session"] != first["session"]
     assert len(platform.keycloak.clients) == 1
     assert len(platform.keycloak.by_client_id("hw-proj-demo")["redirectUris"]) == 2
@@ -440,6 +531,10 @@ def test_settings_refuse_duplicate_projects_and_other_template_fields(tmp_path: 
             "platform_ca_file": "/etc/heartwood-control/platform-ca/ca.crt",
             "actor_key_file": "/etc/heartwood-control/actor-key/actor-key",
         },
+        "gateway_tls": {
+            "issuer_directory": "/var/run/heartwood-control/gateway-issuer",
+            "service": "hw-gateways",
+        },
         "projects": [project],
         "synthetic_prices": SYNTHETIC_PRICES,
         "inference": inference,
@@ -514,7 +609,10 @@ def test_deletion_during_a_launch_waits_and_then_removes_everything(tmp_path: Pa
     sessions = SlowSessions()
     keycloak = FakeKeycloak()
     clients = Keycloak(keycloak.client(), "heartwood", "heartwood-control", lambda: keycloak.secret)
-    ledger = Ledger(tmp_path / "control.sqlite3")
+    ledger = Ledger(
+        tmp_path / "control.sqlite3",
+        PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)).denomination,
+    )
     ledger.synchronize([Allocation("demo", "inference", Decimal(5))])
     launches = LaunchService(
         registry,
@@ -717,7 +815,10 @@ def test_an_identifier_that_two_subjects_share_names_neither(tmp_path: Path) -> 
         "reference-platform",
         _TEMPLATE,
         lambda _: shared,
-        ledger=Ledger(tmp_path / "control.sqlite3"),
+        ledger=Ledger(
+            tmp_path / "control.sqlite3",
+            PriceSheet.model_validate_json(json.dumps(SYNTHETIC_PRICES)).denomination,
+        ),
         session_reservation=Decimal(1),
     )
 
@@ -771,3 +872,219 @@ def test_the_data_and_job_services_read_the_launch_context_of_a_members_session(
         ).status_code
         == 405
     )
+
+
+@pytest.mark.parametrize("token", ["data-token", "operator-token", "hub-token"])
+def test_only_jobs_can_access_job_budgets(platform: Platform, token: str) -> None:
+    body = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 10}
+    headers = {"Authorization": f"Bearer {token}"}
+    path = "/v1/projects/demo/job-reservations/op"
+    for method, endpoint in (
+        ("POST", "/v1/projects/demo/job-quotes"),
+        ("PUT", path),
+        ("POST", path + "/settlement"),
+    ):
+        assert (
+            platform.client.request(method, endpoint, json=body, headers=headers).status_code == 401
+        )
+    assert platform.ledger.balances("demo")[0].revision == 1
+
+
+def test_job_accounting_replays_at_the_original_rate(platform: Platform) -> None:
+    headers = {"Authorization": "Bearer jobs-token"}
+    path = "/v1/projects/demo/job-reservations/op"
+    body = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 60}
+
+    held = platform.client.put(path, json=body, headers=headers)
+    assert held.status_code == 200
+    assert held.json()["amount"] == "0.018"
+    replay = {**body, "runtime_profile_ref": "removed-profile"}
+    assert platform.client.put(path, json=replay, headers=headers).json() == held.json()
+    assert platform.ledger.balances("demo")[0].revision == 2
+    settlement = path + "/settlement"
+    # The executor can run past the maximum admissible limit.
+    settled = platform.client.post(settlement, json={**replay, "seconds": 604801}, headers=headers)
+    assert settled.status_code == 200
+    assert settled.json()["incurred"] == "181.4403"
+    assert platform.client.post(settlement, json=body, headers=headers).json() == settled.json()
+    assert platform.client.put(path, json=body, headers=headers).json()["error"] == "settled"
+    balance = platform.ledger.balances("demo")[0]
+    assert (balance.reserved, balance.spent, balance.revision) == (
+        Decimal(0),
+        Decimal("181.4403"),
+        3,
+    )
+
+
+def test_release_before_reserve_fences_an_operation_without_an_allocation(
+    platform: Platform,
+) -> None:
+    path = "/v1/projects/other/job-reservations/op"
+    headers = {"Authorization": "Bearer jobs-token"}
+    body = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 10}
+    settled = platform.client.post(path + "/settlement", json=body, headers=headers)
+    assert settled.json()["incurred"] == "0"
+    platform.ledger.synchronize([Allocation("other", "compute", Decimal(1))])
+    assert platform.client.put(path, json=body, headers=headers).json()["error"] == "settled"
+    assert platform.ledger.balances("other")[0].available == 1
+
+
+def test_competing_jobs_cannot_partially_reserve_the_last_funds(platform: Platform) -> None:
+    platform.ledger.synchronize([Allocation("demo", "compute", Decimal("0.02"))])
+    start = threading.Barrier(2)
+
+    def reserve(operation: str) -> int:
+        start.wait(timeout=5)
+        response = platform.client.put(
+            f"/v1/projects/demo/job-reservations/{operation}",
+            json={"runtime_profile_ref": "synthetic-batch-small", "seconds": 60},
+            headers={"Authorization": "Bearer jobs-token"},
+        )
+        return response.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(reserve, ("op-1", "op-2"))) == [200, 409]
+    balance = platform.ledger.balances("demo")[0]
+    assert balance.job_reservations == (1, Decimal("0.018"))
+    assert balance.available == Decimal("0.002")
+
+
+def test_restarted_ledger_keeps_its_denomination_and_original_job_rate(tmp_path: Path) -> None:
+    headers = {"Authorization": "Bearer jobs-token"}
+    path = "/v1/projects/demo/job-reservations/original"
+    usage = {"runtime_profile_ref": "synthetic-batch-small", "seconds": 60}
+    platform = Platform(tmp_path)
+    held = platform.client.put(path, json=usage, headers=headers).json()
+    assert held["amount"] == "0.018"
+    assert held["denomination"] == {"kind": "currency", "unit": "USD"}
+    config = json.loads(json.dumps(SYNTHETIC_PRICES))
+    for sku in config["sku_prices"]:
+        sku["PricingCurrency"] = "EUR"
+    with pytest.raises(ValueError, match="Ledger denomination is currency USD"):
+        Platform(tmp_path, PriceSheet.model_validate_json(json.dumps(config)))
+    for sku in config["sku_prices"]:
+        sku["PricingCurrency"] = "USD"
+        if sku["SkuId"] == "synthetic-batch-small":
+            sku["UnitPrice"] = "0.20"
+    for profile in config["runtime_profiles"]:
+        if profile["runtime_profile_ref"] == "synthetic-batch-small":
+            profile["rates"][0]["quantity_per_pricing_unit"] = "10"
+    platform = Platform(tmp_path, PriceSheet.model_validate_json(json.dumps(config)))
+    assert platform.client.put(path, json=usage, headers=headers).json() == held
+    billed = platform.client.post(
+        path + "/settlement", json={**usage, "seconds": 10}, headers=headers
+    ).json()
+    assert billed["incurred"] == "0.003"
+    assert billed["denomination"] == held["denomination"]
+    assert platform.client.post(path + "/settlement", json=usage, headers=headers).json() == billed
+    fresh = platform.client.put(path + "-new", json=usage, headers=headers).json()
+    assert Decimal(fresh["amount"]) == Decimal("1.2")
+
+
+def test_mounted_versions_are_scoped_to_members_and_revoked_with_the_session(
+    tmp_path: Path,
+) -> None:
+    a = MountedDataset(id="cohort", version="a" * 64, size=2**40, objects=9)
+    b = a.model_copy(update={"version": "b" * 64})
+    platform = Platform(tmp_path, grants={"demo": a, "other": b})
+
+    def request(subject: str, project: str, grant: MountedDataset) -> Response:
+        return platform.client.put(
+            f"/v1/researchers/{_id(subject)}/projects/{project}/launch",
+            params={"dataset": grant.selection},
+            headers=_HUB,
+        )
+
+    assert request(_BOB, "other", b).status_code == 403
+    assert request(_BOB, "demo", b).status_code == 403
+    assert platform.registry.session_ids() == []
+    response = request(_BOB, "demo", a)
+    assert response.status_code == 200, response.text
+    first = response.json()
+    assert first["project_data"]["content_sha256"] == a.version
+    assert platform.launch(_BOB, "demo")["project_data"] == first["project_data"]
+    second = platform.launch(_ALICE, "other")
+    for launch, project, grant in [(first, "demo", a), (second, "other", b)]:
+        ns = launch["namespace"]
+        volume = platform.kubernetes.kind("PersistentVolume")[ns + "-dataset"]
+        spec = volume["spec"]
+        assert spec["claimRef"]["uid"] == launch["project_data"]["claim_uid"]
+        assert spec["claimRef"]["namespace"] == ns
+        assert spec["accessModes"] == ["ReadOnlyMany"]
+        assert spec["csi"]["readOnly"] is True
+        assert spec["csi"]["volumeAttributes"] == {
+            "bucketName": f"hw-project-{project}",
+            "authenticationSource": "driver",
+        }
+        assert f"prefix datasets/cohort/{grant.version}/" in spec["mountOptions"]
+        assert volume["metadata"]["ownerReferences"][0]["uid"] == launch["namespace_uid"]
+        claim = platform.kubernetes.kind("PersistentVolumeClaim", ns)["hw-mounted-data"]
+        assert claim["spec"]["volumeName"] == volume["metadata"]["name"]
+        assert claim["metadata"]["labels"]["openshell.ai/sandbox-attachable"] == "true"
+
+    pv = platform.kubernetes.kind("PersistentVolume")[first["namespace"] + "-dataset"]
+    pv["spec"]["claimRef"]["uid"] = "different-claim"
+    assert request(_BOB, "demo", a).status_code == 503
+    platform.registry.synchronize(
+        [Project("other", "grant-other", "policy-1", frozenset({_ALICE}))]
+    )
+    platform.launches.reconcile_dataset_grants()
+    assert platform.registry.session_ids() == [second["session"]]
+    assert not platform.kubernetes.kind("PersistentVolumeClaim", first["namespace"])
+    assert platform.kubernetes.kind("PersistentVolumeClaim", second["namespace"])
+
+
+def test_mount_recovery_and_replacement_use_distinct_session_claims(tmp_path: Path) -> None:
+    old = MountedDataset(id="sequence", version="1" * 64, size=2**40, objects=15)
+    new = old.model_copy(update={"version": "2" * 64})
+    platform = Platform(tmp_path, grants={"demo": old})
+    path = f"/v1/researchers/{_id(_BOB)}/projects/demo/launch"
+    failure = ("POST", "/api/v1/persistentvolumes")
+    platform.kubernetes.failing.add(failure)
+    assert platform.client.put(path, headers=_HUB).status_code == 502
+    (session,) = platform.registry.session_ids()
+    namespace = "hw-s-" + session
+    claim = platform.kubernetes.kind("PersistentVolumeClaim", namespace)["hw-mounted-data"]
+    assert "openshell.ai/sandbox-attachable" not in claim["metadata"]["labels"]
+    platform.kubernetes.failing.remove(failure)
+    launch = platform.launch(_BOB, "demo")
+    assert launch["project_data"]["claim_uid"] == claim["metadata"]["uid"]
+    # Startup reads the persisted old selection and the replacement operator settings.
+    platform.mount_settings.mounted_datasets["demo"] = new
+    platform.launches.reconcile_dataset_grants()
+    assert not platform.kubernetes.kind("PersistentVolumeClaim", namespace)
+    assert platform.registry.session_ids() == []
+    assert (
+        platform.client.put(path, params={"dataset": old.selection}, headers=_HUB).status_code
+        == 403
+    )
+    replacement = platform.launch(_BOB, "demo")
+    assert replacement["namespace"] != namespace
+    assert replacement["project_data"]["claim_uid"] != launch["project_data"]["claim_uid"]
+    assert replacement["project_data"]["content_sha256"] == new.version
+
+
+def test_dataset_revocation_retires_namespace_before_binding_cleanup_and_retries(
+    tmp_path: Path,
+) -> None:
+    old = MountedDataset(id="cohort", version="1" * 64, size=1024, objects=1)
+    platform = Platform(tmp_path, grants={"demo": old})
+    launch = platform.launch(_BOB, "demo")
+    namespace = launch["namespace"]
+    platform.mount_settings.mounted_datasets.pop("demo")
+    binding = (
+        "PATCH",
+        "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings/heartwood-openshell-node-reader",
+    )
+    platform.kubernetes.failing.add(binding)
+    with pytest.raises(ExceptionGroup, match="retire all expired dataset sessions"):
+        platform.launches.reconcile_dataset_grants()
+    assert f"/api/v1/namespaces/{namespace}" not in platform.kubernetes.objects
+    assert not platform.kubernetes.kind("PersistentVolumeClaim", namespace)
+    assert Registry(tmp_path / "control.sqlite3").session_ids() == [launch["session"]]
+    platform.kubernetes.failing.remove(binding)
+    # Restoring the same grant during a failed retirement must not resurrect the session.
+    platform.mount_settings.mounted_datasets["demo"] = old
+    platform.launches.reconcile_dataset_grants()
+    assert platform.registry.session_ids() == []
+    assert platform.launch(_BOB, "demo")["namespace"] != namespace

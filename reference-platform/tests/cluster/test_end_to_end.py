@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from hub import Browser, Server, error_codes, events_of, gateway_pods, pending_group
+from hub import Browser, Server, error_codes, events_of, gateway_pods, pending_group, project_url
 from identity import (
     FIRST,
     PLATFORM,
@@ -204,9 +204,15 @@ def _terminal(record: dict[str, Any]) -> bool:
 
 
 def _of_tool(record: dict[str, Any], tool: str) -> bool:
-    """Whether an outside operation calls an MCP tool of that name, as the gateway names it."""
+    """Whether an outside operation calls a tool of that name, as the gateway names it.
+
+    A planning tool keeps its name; an MCP tool carries its server and digest.
+    """
     name = record["proposal"]["request"]["tool_name"]
-    return re.fullmatch(rf"[a-z0-9_]+__{re.escape(tool)}_[0-9a-f]{{8}}", name) is not None
+    return (
+        name == tool
+        or re.fullmatch(rf"[a-z0-9_]+__{re.escape(tool)}_[0-9a-f]{{8}}", name) is not None
+    )
 
 
 def _running(events: list[dict[str, Any]]) -> bool:
@@ -446,6 +452,33 @@ def jobs(platform: Platform) -> Jobs:
     return Jobs(completed, cancelled, cancellation)
 
 
+def test_the_agent_discovers_the_platform_planning_capabilities(platform: Platform) -> None:
+    demo = platform.demo
+    _chat(
+        demo,
+        [
+            ["planning_overview", {}],
+            _WAITING,
+            ["finish", {"message": "The synthetic planning task completed."}],
+        ],
+    )
+    record = _review(demo, platform.reviewed, "planning_overview", _terminal)
+    assert record["approved"] == ["worker-call", "outside-operation", "outside-result"]
+    assert record["proposal"]["request"]["service_id"] == "heartwood-planning"
+    operation = record["observation"]["operation"]
+    assert operation["status"] == "completed", operation
+    assert operation["project_context_id"] == demo.session
+    services = operation["result"]["services"]
+    assert (services["budgets"], services["estimates"]) == ("available", "available")
+    assert all(
+        item["project_context_id"] == demo.session for item in operation["result"]["budgets"]
+    )
+    # The researcher's planning view holds the same discovery.
+    status, planning = demo.api("GET", "/project/planning")
+    assert status == 200, planning
+    assert planning["services"]["estimates"] == "available"
+
+
 def test_a_batch_job_runs_through_the_reviewed_operation_path(
     platform: Platform, jobs: Jobs, cluster: Cluster
 ) -> None:
@@ -456,8 +489,7 @@ def test_a_batch_job_runs_through_the_reviewed_operation_path(
     assert review["kind"] == "submit"
     proposal = review["proposal"]
     assert _COHORT in json.dumps(proposal["data_scope"])
-    # Jobs reserve no budget on this platform, which the proposal states.
-    assert "This deployment reserves no budget for jobs." in json.dumps(proposal)
+    assert f"of budget {platform.demo.project}-compute" in json.dumps(proposal)
     # The researcher approved the call, the submission and the release of the result.
     assert record["approved"] == ["worker-call", "outside-operation", "outside-result"]
     operation = record["observation"]["operation"]
@@ -501,9 +533,7 @@ def _tokens(cluster: Cluster, server: Server, username: str, service: str) -> st
     """Sign a researcher in at the project client of a session; exchange for one service."""
     client_id = f"hw-proj-{server.project}"
     client_secret = secret(cluster, SESSIONS, f"hw-gw-{server.session}", "keycloak-client-secret")
-    redirect = (
-        f"https://proxy-public.heartwood-platform.svc.cluster.local{server.base}/oauth_callback"
-    )
+    redirect = project_url(server.base + "/oauth_callback")
     signed_in = sign_in(
         cluster,
         server.browser.pod,
@@ -710,6 +740,27 @@ def test_the_audit_export_verifies_and_names_the_keyed_actor(
     for raw in (FIRST, "researcher-one"):
         assert raw not in content
         assert base64.b64encode(raw.encode()).decode() not in content
+
+
+def test_project_origins_and_logout(platform: Platform) -> None:
+    demo, other, second = platform.demo, platform.other, platform.second
+    origin = project_url(demo.base).split("/user/")[0]
+    assert demo.browser.get(origin + "/hub/home")[0] == 404
+    for peer in (other, second):
+        status, _ = demo.browser.api(peer.base, "GET", "/sessions", demo.capability)
+        assert status == 401
+        status, _, _ = peer.browser.get(
+            project_url(peer.base) + "/sessions", "--header", f"Origin: {origin}"
+        )
+        assert status == 403
+        status, _, _ = demo.browser.get(origin + peer.base + "/sessions")
+        assert status == 404
+    status, _ = demo.api("POST", "/logout")
+    assert status == 204
+    assert demo.api("GET", "/sessions")[0] == 401
+    assert other.api("GET", "/sessions")[0] == 200
+    demo.capability = demo.browser.launch(demo.base)
+    assert demo.api("GET", "/sessions")[0] == 200
 
 
 def test_deleting_the_server_settles_the_sessions_inference_reservation(

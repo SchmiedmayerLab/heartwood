@@ -29,6 +29,7 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[3]
 _COMMIT = "1" * 40
 _OTHER_COMMIT = "2" * 40
+_EXECUTION = "18.1." + "1234567890abcdef" * 2
 _KIND = "synthetic-native"
 _RECORDS = {"store": "versitygw", "conditional_write_enforcement": True, "passed": True}
 
@@ -385,6 +386,7 @@ def _drill_package(
     if profile is not None:
         manifest.update(
             qualification_kind="capable-model-native",
+            execution_id=_EXECUTION,
             requested_model_profile=profile,
             cases=[
                 {
@@ -395,12 +397,33 @@ def _drill_package(
             ],
         )
         cases = ["test_worker_model_integration::test_native_capable_model"]
+        (directory / "scenario-outcomes.json").write_text(
+            json.dumps(
+                {
+                    "commit": _COMMIT,
+                    "release_version": manifest["release_version"],
+                    "model_route": evidence.model_route(manifest),
+                    "outcomes": {
+                        name: {
+                            "execution_id": _EXECUTION,
+                            "model_input_observed": True,
+                            "outcome": "passed",
+                        }
+                        for name in ("file-input-injection.v1", "tool-output-injection.v1")
+                    },
+                }
+            )
+        )
         records = directory / "capable-model"
         records.mkdir()
         (records / "model-qualification.json").write_text(
             json.dumps(
                 {
                     "drill_id": "capable-model-native.v1",
+                    "execution_id": _EXECUTION,
+                    "file_input_observed": True,
+                    "file_input_outcome": "passed",
+                    "requested_profile": profile,
                     "accepted_actions": ["inspect-input", "invoke-skill", "aggregate-output"],
                     "rejected_actions": 2,
                     "action_decisions": [{"reason": "synthetic participant row 17"}],
@@ -486,7 +509,7 @@ def release(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return importlib.import_module("release_drills")
 
 
-def test_a_release_states_each_supported_route_it_did_not_run(
+def test_a_release_requires_evidence_for_every_supported_route(
     evidence: ModuleType, release: ModuleType, tmp_path: Path
 ) -> None:
     synthetic, capable = tmp_path / "synthetic", tmp_path / "capable"
@@ -498,16 +521,18 @@ def test_a_release_states_each_supported_route_it_did_not_run(
     recorded = "openai/approved-model@approved-provider.example"
     other = "openai/other-model@other-provider.example"
 
-    statement = release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [recorded, other])
+    statement = release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [recorded])
 
     assert statement["synthetic"]["model_route"] == "synthetic-fixture"
     assert [(item["model_route"], item["status"]) for item in statement["capable_model"]] == [
         (recorded, "recorded"),
-        (other, "not-run"),
     ]
-    assert release.release_drills("0.5.1", _COMMIT, synthetic, (), [recorded])["capable_model"] == [
-        {"model_route": recorded, "status": "not-run"}
-    ]
+    with pytest.raises(ValueError, match="missing capable-model drill evidence for " + other):
+        release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [recorded, other])
+    with pytest.raises(ValueError, match="missing capable-model drill evidence"):
+        release.release_drills("0.5.1", _COMMIT, synthetic, (), [recorded])
+    with pytest.raises(ValueError, match="must declare"):
+        release.release_drills("0.5.1", _COMMIT, synthetic, (), [])
     with pytest.raises(ValueError, match="does not support"):
         release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [other])
     with pytest.raises(ValueError, match="another release"):
@@ -519,14 +544,535 @@ def test_a_release_states_each_supported_route_it_did_not_run(
         release.release_drills("0.5.1", _COMMIT, synthetic, [capable], [recorded])
 
 
-def test_supported_routes_are_checked_in_route_names(release: ModuleType, tmp_path: Path) -> None:
-    assert release.supported_routes(release.ROUTES) == tuple(
-        tomllib.loads(release.ROUTES.read_text())["routes"]
+def test_release_requires_the_model_drill_record_even_with_consistent_checksums(
+    evidence: ModuleType, release: ModuleType, tmp_path: Path
+) -> None:
+    synthetic, capable = tmp_path / "synthetic", tmp_path / "capable"
+    synthetic.mkdir()
+    capable.mkdir()
+    _drill_package(evidence, synthetic)
+    profile = {"base_url": "https://approved-provider.example/v1", "model": "openai/approved-model"}
+    _drill_package(evidence, capable, profile=profile)
+    (capable / "capable-model/model-qualification.json").unlink()
+    (capable / evidence.DRILLS).write_text(json.dumps(evidence.drill_results(capable)))
+    evidence.write_checksums(capable)
+
+    assert evidence.integrity(capable) == []
+    with pytest.raises(ValueError, match="no executed capable-model drill record"):
+        release.release_drills(
+            "0.5.1",
+            _COMMIT,
+            synthetic,
+            [capable],
+            ["openai/approved-model@approved-provider.example"],
+        )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "source",
+        "image",
+        "missing",
+        "route",
+        "failed",
+        "extra-host",
+        "other-execution",
+        "not-delivered",
+        "setup-failure",
+        "different-native",
+        "file-mismatch",
+        "incomplete-file",
+    ],
+)
+def test_release_projects_only_complete_candidate_records(
+    evidence: ModuleType, release: ModuleType, tmp_path: Path, change: str
+) -> None:
+    route = "openai/test-model@provider.example"
+    capable = tmp_path / "managed"
+    capable.mkdir()
+    _drill_package(evidence, tmp_path)
+    manifest = _drill_package(
+        evidence,
+        capable,
+        profile={"model": "openai/test-model", "base_url": "https://provider.example"},
     )
+    scenario = capable / "scenario-outcomes.json"
+    observation = json.loads(scenario.read_text())
+    if change == "source":
+        manifest["source"]["tree_clean"] = False
+    elif change == "image":
+        manifest["image_sources"]["worker"]["revision"] = _OTHER_COMMIT
+    elif change == "missing":
+        del observation["outcomes"]["tool-output-injection.v1"]
+    elif change == "route":
+        observation["model_route"] = "openai/another-model@provider.example"
+    elif change == "failed":
+        observation["outcomes"]["tool-output-injection.v1"]["outcome"] = "failed"
+    elif change == "file-mismatch":
+        observation["outcomes"]["file-input-injection.v1"]["outcome"] = "failed"
+    elif change == "other-execution":
+        observation["outcomes"]["tool-output-injection.v1"]["execution_id"] = "a" * 32
+    elif change == "not-delivered":
+        observation["outcomes"]["tool-output-injection.v1"]["model_input_observed"] = False
+    elif change in {"setup-failure", "different-native", "incomplete-file"}:
+        path = capable / "capable-model/model-qualification.json"
+        native = json.loads(path.read_text())
+        if change == "setup-failure":
+            native["file_input_observed"] = False
+        elif change == "incomplete-file":
+            native["file_input_outcome"] = None
+        else:
+            native["execution_id"] = "e" * 32
+        path.write_text(json.dumps(native))
+    else:
+        manifest["host"]["unexpected"] = "private-fixture"
+    scenario.write_text(json.dumps(observation))
+    (capable / evidence.MANIFEST).write_text(json.dumps(manifest))
+    (capable / evidence.DRILLS).write_text(json.dumps(evidence.drill_results(capable)))
+    evidence.write_checksums(capable)
+    if change in {"failed", "extra-host"}:
+        statement = release.release_drills("0.5.1", _COMMIT, tmp_path, [capable], [route])
+        assert statement["capable_model"][0]["results"][0]["outcomes"] == {
+            name: item["outcome"] for name, item in observation["outcomes"].items()
+        }
+        assert "private-fixture" not in json.dumps(statement)
+    else:
+        with pytest.raises(
+            ValueError,
+            match=r"candidate source|scenario record|scenario outcomes|native scenario observation",
+        ):
+            release.release_drills("0.5.1", _COMMIT, tmp_path, [capable], [route])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "other-host-run",
+        "other-host-attempt",
+        "missing-init",
+        "specified-image",
+        "seccomp",
+        "dropped-caps",
+        "missing-control",
+        "wrong-control",
+        "missing-route",
+        "open-route",
+        "pod",
+        "commit",
+        "extra",
+        "image",
+    ],
+)
+def test_release_requires_inspected_gke_observations(
+    release: ModuleType, tmp_path: Path, change: str
+) -> None:
+    record = _host_record()
+    if change == "missing-control":
+        record["outside_worker"] = {}
+    elif change == "wrong-control":
+        record["outside_worker"] = {"controller-canary": "reachable"}
+    elif change == "missing-route":
+        del record["worker_routes"]["cluster-dns-udp"]
+    elif change == "open-route":
+        record["worker_routes"]["metadata-ipv4"] = "connected"
+    elif change == "image":
+        record["workload"]["containers"]["agent"]["image_id"] = "sha256:" + "b" * 64
+    elif change == "specified-image":
+        record["supervisor"]["containers"]["supervisor"]["image"] = "sha256:" + "d" * 64
+    elif change == "other-host-run":
+        record["run_id"] += 1
+    elif change == "other-host-attempt":
+        record["run_attempt"] += 1
+    elif change == "missing-init":
+        del record["workload"]["containers"]["workspace-init"]
+    elif change == "seccomp":
+        record["workload"]["seccomp_profile"] = "unknown"
+    elif change == "dropped-caps":
+        record["workload"]["dropped_capabilities"] = []
+    elif change == "pod":
+        record["workload"]["privileged"] = True
+    elif change == "commit":
+        record["commit"] = _OTHER_COMMIT
+    else:
+        record["workload"]["extra"] = "private-fixture"
+    path = tmp_path / "gke.json"
+    path.write_text(json.dumps(record))
+    with pytest.raises(
+        ValueError, match=r"GKE qualification|metadata positive control|route probe|inspected"
+    ):
+        release.host_result(path, "0.5.1", _COMMIT, _PINS, 18)
+
+
+@pytest.mark.parametrize(
+    "identity", ["config", "other-platform", "unrelated", "wrong-config", "corrupt"]
+)
+def test_host_preserves_only_verified_runtime_ids(
+    release: ModuleType, tmp_path: Path, identity: str
+) -> None:
+    record = _host_record()
+    row = record["workload"]["containers"]["agent"]
+    if identity == "wrong-config":
+        row["config_id"] = "sha256:" + "1" * 64
+    elif identity == "corrupt":
+        row["manifests"][row["image"].split("@")[1]] += " "
+    else:
+        row["image_id"] = {
+            "config": "containerd://" + row["config_id"],
+            "other-platform": "sha256:" + "d" * 64,
+            "unrelated": "sha256:" + "e" * 64,
+        }[identity]
+    path = tmp_path / "gke.json"
+    path.write_text(json.dumps(record))
+    if identity != "config":
+        with pytest.raises(ValueError, match="container identity"):
+            release.host_result(path, "0.5.1", _COMMIT, _PINS, 18)
+        return
+    verified = release.host_result(path, "0.5.1", _COMMIT, _PINS, 18)
+    reported = verified["workload"]["containers"]["agent"]
+    assert reported.pop("manifest_digest") == _IMAGES["agent"]["image_id"].split("@")[1]
+    assert reported == {k: v for k, v in row.items() if k != "manifests"}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "wrong-run",
+        "wrong-attempt",
+        "wrong-host",
+        "other-node",
+        "missing-case",
+        "failed-case",
+        "other-pod",
+        "other-image",
+        "other-probe",
+    ],
+)
+def test_host_suite_requires_matching_complete_native_execution(
+    evidence: ModuleType, release: ModuleType, tmp_path: Path, change: str
+) -> None:
+    host = _host_record()
+    native = tmp_path / "gke-native"
+    _host_suite(evidence, native, host)
+    manifest = json.loads((native / evidence.MANIFEST).read_text())
+    case_path = native / "test_kubernetes_workflow_boundary_and_revocation/evidence.json"
+    case = json.loads(case_path.read_text())
+    if change == "wrong-run":
+        manifest["workflow_run"]["id"] += 1
+    elif change == "wrong-attempt":
+        manifest["workflow_run"]["attempt"] += 1
+    elif change == "wrong-host":
+        manifest["cluster"]["kubernetes"] = "v1.37.0"
+    elif change == "other-node":
+        manifest["cluster"]["nodes"][0]["architecture"] = "arm64"
+    elif change in {"missing-case", "failed-case"}:
+        cases = dict.fromkeys(sorted(evidence.EXPECTED_CASES["synthetic-kubernetes"]))
+        key = next(iter(cases))
+        if change == "missing-case":
+            del cases[key]
+        else:
+            cases[key] = "failure"
+        _write_report(native / evidence.REPORT, cases)
+        manifest["cases"] = evidence.cases(native / evidence.REPORT)
+    elif change == "other-pod":
+        case["kubernetes_identities"]["workload_pod"]["uid"] = host["supervisor"]["pod_uid"]
+    elif change == "other-probe":
+        case["route_probes"]["metadata-ipv4"] = "timeout"
+    else:
+        case["images"]["workload"]["agent"]["image_id"] = "sha256:" + "0" * 64
+    case_path.write_text(json.dumps(case))
+    (native / evidence.MANIFEST).write_text(json.dumps(manifest))
+    (native / evidence.DRILLS).write_text(json.dumps(evidence.drill_results(native)))
+    evidence.write_checksums(native, evidence.KUBERNETES_RETAINED)
+    with pytest.raises(ValueError, match="GKE native"):
+        release.native_host_cases(native, host)
+
+
+def _start_offline_controller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inventory: dict[str, Any], replacement: str
+) -> None:
+    """Invoke the real runner and deliver its generated pod environment to the test fixture."""
+    refs = {
+        "worker": _PINS["agent"],
+        "supervisor": _PINS["supervisor"],
+        "sandbox": _PINS["openshell-sandbox-bootstrap"],
+        "replacement_worker": replacement,
+        "controller": "controller",
+        "symlink_workspace": "symlink",
+        "gateway": "gateway",
+    }
+    (tmp_path / "images.json").write_text(
+        json.dumps({"image_references": refs, "worker_interpreter": "/python"})
+    )
+    path = tmp_path / "runtime-manifests.json"
+    path.write_text(json.dumps(inventory))
+    runner = importlib.import_module("qualify-kubernetes-worker")
+    environment = {}
+
+    class ControllerCreatedError(Exception):
+        pass
+
+    def apply(*objects: dict[str, Any]) -> None:
+        for obj in objects:
+            if obj["kind"] == "Pod" and obj["metadata"]["name"] == runner._CONTROLLER:
+                environment.update(
+                    {e["name"]: e["value"] for e in obj["spec"]["containers"][0]["env"]}
+                )
+                raise ControllerCreatedError
+
+    cluster = SimpleNamespace(apply=apply, kubectl=lambda *_args: "fixture")
+    monkeypatch.setattr(runner, "Cluster", lambda _name: cluster)
+    monkeypatch.setattr(runner, "_output", lambda _args: "{}")
+    monkeypatch.setattr(runner, "_provider_certificate", lambda *_args: {"ca.crt": "fixture"})
+    monkeypatch.setattr(runner, "_researcher_password", lambda *_args: "fixture")
+    monkeypatch.setattr(
+        runner,
+        "_launch",
+        lambda *_args: {
+            "session": "session",
+            "namespace": "hw-session",
+            "gateway_service_account": "gateway",
+            "openshell_endpoint": "https://gateway.test",
+        },
+    )
+    monkeypatch.setattr(runner, "_remove", lambda *_args: True)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "qualify-kubernetes-worker",
+            "run",
+            "--cluster",
+            "test",
+            "--output",
+            str(tmp_path),
+            "--runtime-manifests",
+            str(path),
+        ],
+    )
+    monkeypatch.delenv("HW_RUNTIME_MANIFESTS", raising=False)
+    with pytest.raises(ControllerCreatedError):
+        runner.main()
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize(
+    "identity", ["index", "child", "config", "unrelated", "arm-child", "wrong-node", "wrong-role"]
+)
+def test_native_producer_and_release_verify_the_same_runtime_identities(
+    identity: str,
+    evidence: ModuleType,
+    release: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setenv("OPENHANDS_SUPPRESS_BANNER", "1")
+    monkeypatch.syspath_prepend(str(_ROOT))
+    monkeypatch.syspath_prepend(str(_ROOT / "deploy/tests"))
+    from uuid import UUID
+
+    from heartwood.core_adapter.worker_attempts import WorkerAttemptError, WorkerAttemptIntent
+    from heartwood.gateway.worker_deployment import KubernetesWorkerDeployment
+    from heartwood.gateway.worker_kubernetes import KubernetesWorkerAdmission
+
+    producer = importlib.import_module("test_worker_kubernetes_integration")
+    host = _host_record()
+    inventory: dict[str, dict[str, Any]] = {}
+    expected: dict[str, dict[str, tuple[str, str]]] = {}
+    pods: dict[str, dict[str, Any]] = {}
+    for kind in ("workload", "supervisor"):
+        expected[kind] = {}
+        pods[kind] = {
+            "metadata": {"labels": {"openshell.ai/boundary-pair": "pair"}},
+            "spec": {"nodeName": kind, "containers": [], "initContainers": []},
+            "status": {"containerStatuses": [], "initContainerStatuses": []},
+        }
+        entries = {}
+        for name, row in host[kind]["containers"].items():
+            role = {"openshell-sandbox-bootstrap": "sandbox", "supervisor": "supervisor"}.get(
+                name, "worker"
+            )
+            expected[kind][name] = (row["image"], role)
+            entries[row["image"]] = {
+                "role": role,
+                "config_id": row["config_id"],
+                "manifests": row["manifests"],
+            }
+            if name == "agent":
+                row["image_id"] = {
+                    "index": row["image"],
+                    "config": "containerd://" + row["config_id"],
+                    "unrelated": "sha256:" + "e" * 64,
+                    "arm-child": "sha256:" + "d" * 64,
+                }.get(identity, row["image_id"])
+            init = name in {"workspace-init", "openshell-sandbox-bootstrap"}
+            pods[kind]["spec"]["initContainers" if init else "containers"].append(
+                {"name": name, "image": row["image"]}
+            )
+            pods[kind]["status"]["initContainerStatuses" if init else "containerStatuses"].append(
+                {"name": name, "imageID": row["image_id"]}
+            )
+        inventory[kind] = {"platform": "linux/amd64", "images": entries}
+    if identity == "wrong-node":
+        pods["workload"]["spec"]["nodeName"] = "supervisor"
+    elif identity == "wrong-role":
+        inventory["workload"]["images"][_PINS["agent"]]["role"] = "sandbox"
+    replacement = _image_observation("replacement")
+    inventory["workload"]["images"][replacement["image"]] = {
+        "role": "sandbox" if identity == "wrong-role" else "worker",
+        "manifests": replacement["manifests"],
+        "config_id": replacement["config_id"],
+    }
+    _start_offline_controller(tmp_path, monkeypatch, inventory, replacement["image"])
+    with monkeypatch.context() as mounted:
+        mounted.setattr(
+            Path,
+            "read_text",
+            lambda path: {
+                Path("/opt/qualification/gateway.json"): json.dumps(
+                    {
+                        "images": {
+                            "supervisor": _PINS["supervisor"],
+                            "sandbox": _PINS["openshell-sandbox-bootstrap"],
+                        }
+                    }
+                )
+            }[path],
+        )
+        fixture = producer.KubernetesFixture(tmp_path, tmp_path)
+    fixture.policy = importlib.import_module("google.protobuf.struct_pb2").Struct()
+    monkeypatch.setattr(fixture, "qualify_policy", lambda: "b" * 64)
+    settings = fixture.deployment(producer.WorkerInputManifest())
+    replacement_pod = copy.deepcopy(pods["workload"])
+    agent = replacement_pod["spec"]["containers"][0]
+    agent["image"] = replacement["image"]
+    running = replacement_pod["status"]["containerStatuses"][0]
+    if identity not in {"arm-child", "unrelated"}:
+        running["imageID"] = {
+            "config": "containerd://" + replacement["config_id"],
+            "index": replacement["image"],
+        }.get(identity, replacement["image_id"])
+    monkeypatch.setattr(fixture, "outside", lambda *_args: json.dumps(replacement_pod))
+
+    def admit(pod: dict[str, Any], deployment: KubernetesWorkerDeployment) -> None:
+        intent = WorkerAttemptIntent(
+            image_digest=deployment.image_digest,
+            project_id=UUID(int=1),
+            attempt_id=UUID(int=2),
+            conversation_id=UUID(int=3),
+            session_id="session",
+            gateway_policy_sha256="b" * 64,
+            sandbox_policy_sha256="c" * 64,
+            input_manifest_sha256="d" * 64,
+        )
+        admission = KubernetesWorkerAdmission(deployment, intent)
+        containers = tuple(pod["spec"]["containers"] + pod["spec"]["initContainers"])
+        digests = {
+            "agent": deployment.image_digest,
+            "workspace-init": deployment.image_digest,
+            "openshell-sandbox-bootstrap": deployment.sandbox_image_digest,
+            "supervisor": deployment.supervisor_image_digest,
+        }
+        admission._require_images(pod, containers, digests)
+
+    replacement_settings = settings.model_copy(
+        update={
+            "image_repository": replacement["image"].split("@")[0],
+            "image_digest": replacement["image"].split("@")[1],
+        }
+    )
+    replacement_pod["spec"]["initContainers"][0]["image"] = replacement["image"]
+    replacement_pod["status"]["initContainerStatuses"][0]["imageID"] = running["imageID"]
+
+    path = tmp_path / "gke.json"
+    path.write_text(json.dumps(host))
+    if identity in {"unrelated", "arm-child", "wrong-node", "wrong-role"}:
+        with pytest.raises(WorkerAttemptError):
+            admit(pods["workload"], settings)
+        with pytest.raises(WorkerAttemptError):
+            admit(replacement_pod, replacement_settings)
+        with pytest.raises((AssertionError, ValueError, KeyError)):
+            producer._pod_images(pods["workload"], expected["workload"])
+        with pytest.raises((AssertionError, ValueError, KeyError)):
+            producer._running_image(fixture, "worker", "pair")
+        if identity in {"unrelated", "arm-child"}:
+            with pytest.raises(ValueError, match="container identity"):
+                release.host_result(path, "0.5.1", _COMMIT, _PINS, 18)
+        return
+
+    actual = {kind: producer._pod_images(pods[kind], expected[kind]) for kind in pods}
+    for pod in pods.values():
+        admit(pod, settings)
+    admit(replacement_pod, replacement_settings)
+    assert producer._running_image(fixture, "worker", "pair") == {
+        "image": replacement["image"],
+        "image_id": running["imageID"],
+    }
+    assert (
+        actual["workload"]["agent"]["image_id"]
+        == pods["workload"]["status"]["containerStatuses"][0]["imageID"]
+    )
+    native = tmp_path / "gke-native"
+    _host_suite(evidence, native, host)
+    boundary = native / "test_kubernetes_workflow_boundary_and_revocation/evidence.json"
+    case = json.loads(boundary.read_bytes())
+    case["images"] = actual
+    for kind, pod in pods.items():
+        case["kubernetes_identities"][kind + "_pod"]["node"] = pod["spec"]["nodeName"]
+    manifest = json.loads((native / evidence.MANIFEST).read_bytes())
+    manifest["cluster"]["nodes"] = [
+        {"name": node, "operatingSystem": "linux", "architecture": "amd64"} for node in inventory
+    ]
+    (native / evidence.MANIFEST).write_text(json.dumps(manifest))
+    boundary.write_text(json.dumps(case))
+    evidence.write_checksums(native, evidence.KUBERNETES_RETAINED)
+    public = release.host_result(path, "0.5.1", _COMMIT, _PINS, 18)
+    assert (
+        public["workload"]["containers"]["agent"]["image_id"]
+        == actual["workload"]["agent"]["image_id"]
+    )
+    assert release.native_host_cases(native, public)
+
+
+def test_release_requires_host_suite_even_with_complete_host_summary(
+    evidence: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "_host_suite", lambda *_: None)
+    completed, workspace = _release_evidence(evidence, tmp_path, _RELEASE_STEPS)
+    assert completed.returncode != 0
+    assert "gke-native" in completed.stderr
+    assert not (workspace / "dist" / _DRILL_ASSET).exists()
+
+
+def test_file_scenario_pass_survives_a_later_case_failure(
+    release: ModuleType, evidence: ModuleType, tmp_path: Path
+) -> None:
+    _drill_package(evidence, tmp_path)
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    profile = {"model": "openai/test", "base_url": "https://route.example"}
+    manifest = _drill_package(evidence, managed, profile=profile)
+    _write_report(managed / evidence.REPORT, {manifest["cases"][0]["id"]: "failure"})
+    manifest.update(cases=evidence.cases(managed / evidence.REPORT), passed=False, returncode=1)
+    (managed / evidence.MANIFEST).write_text(json.dumps(manifest))
+    (managed / evidence.DRILLS).write_text(json.dumps(evidence.drill_results(managed)))
+    evidence.write_checksums(managed)
+    statement = release.release_drills(
+        "0.5.1", _COMMIT, tmp_path, [managed], ["openai/test@route.example"]
+    )
+    result = statement["capable_model"][0]["results"][0]
+    assert result["outcomes"]["file-input-injection.v1"] == "passed"
+    assert result["case_outcome"] == "failed"
+
+
+def test_supported_routes_are_checked_in_route_names(release: ModuleType, tmp_path: Path) -> None:
     routes = tmp_path / "routes.toml"
     routes.write_text('routes = ["openai/approved-model@approved-provider.example"]\n')
     assert release.supported_routes(routes) == ("openai/approved-model@approved-provider.example",)
     for invalid in (
+        "routes = []",
         'routes = "openai/approved-model@approved-provider.example"',
         "routes = ["
         '"openai/approved-model@approved-provider.example", '
@@ -868,7 +1414,7 @@ def test_only_a_main_job_without_candidate_code_can_attest() -> None:
     assert attest["with"] == {"subject-path": "test-results/native-qualification/SHA256SUMS"}
 
 
-def test_images_are_published_after_both_qualifications_and_attested_without_build_code() -> None:
+def test_published_images_are_attested_before_cluster_qualification() -> None:
     jobs = _workflow("native-qualification.yml")["jobs"]
     publish, attestation = jobs["publish-images"], jobs["image-attestation"]
     spec = importlib.util.spec_from_file_location(
@@ -881,7 +1427,6 @@ def test_images_are_published_after_both_qualifications_and_attested_without_bui
 
     assert publish["needs"] == [
         "native-qualification",
-        "kubernetes-qualification",
         "evidence-attestation",
     ]
     assert publish["if"] == "github.ref == 'refs/heads/main'"
@@ -919,9 +1464,24 @@ _DRILL_ASSET = "agent-safety-drills.json"
 _GITHUB_CLI = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"${GH_CALLS}"
 case "$1 $2" in
+  "api repos/SchmiedmayerLab/heartwood/actions/artifacts/17")
+    echo '{"id":17,"name":"release-qualification-'"$GITHUB_SHA"'","expired":false,
+          "digest":"sha256:'"$ARTIFACT_DIGEST"'","workflow_run":{"id":18,"head_repository_id":1,
+          "head_sha":"'"${PRODUCER_SHA:-$GITHUB_SHA}"'"}}' ;;
+  "api repos/SchmiedmayerLab/heartwood/actions/runs/18")
+    echo '{"path":".github/workflows/'"${PRODUCER_WORKFLOW:-gke-qualification.yml}"'",
+           "event":"workflow_dispatch","head_branch":"main","head_sha":"'"$GITHUB_SHA"'",
+           "head_repository":{"full_name":"'"$GITHUB_REPOSITORY"'"},"status":"completed",
+           "run_attempt":'${PRODUCER_ATTEMPT:-1}',"conclusion":"success"}' ;;
+  "api repos/SchmiedmayerLab/heartwood/actions/artifacts/17/zip") cat "${DRILL_ARCHIVE}" ;;
   "run list") printf '%s\\n' ${RUN_ID} ;;
   "run view") printf '%s\\n' "${ATTESTATION:-success}" ;;
   "run download")
+    if [[ "$*" == *"--name published-images-"* ]]; then
+      mkdir -p "${!#}"
+      cp "${PUBLISHED}" "${!#}/published-images.json"
+      exit
+    fi
     while [[ "$1" != --dir ]]; do shift; done
     cp -R "${EVIDENCE}" "$2"
     ;;
@@ -929,10 +1489,147 @@ case "$1 $2" in
     test -n "${ATTESTED}" || exit 1
     printf '{"bundle":"synthetic"}\\n' >"sha256:$(shasum -a 256 "$3" | cut -c 1-64).jsonl"
     ;;
-  "attestation verify") exit "${VERIFY_STATUS}" ;;
+  "attestation verify")
+    if [[ "$3" == *published-images.json ]]; then exit "${IMAGE_VERIFY_STATUS:-0}"; fi
+    exit "${VERIFY_STATUS}" ;;
   *) exit 2 ;;
 esac
 """
+
+
+def _image_observation(name: str) -> dict[str, Any]:
+    config = "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+    media = "application/vnd.oci.image.manifest.v1+json"
+    leaf = json.dumps({"schemaVersion": 2, "mediaType": media, "config": {"digest": config}})
+    child = "sha256:" + hashlib.sha256(leaf.encode()).hexdigest()
+    index = json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "digest": digest,
+                    "mediaType": media,
+                    "platform": {"os": "linux", "architecture": arch},
+                }
+                for arch, digest in [("amd64", child), ("arm64", "sha256:" + "d" * 64)]
+            ],
+        }
+    )
+    digest = "sha256:" + hashlib.sha256(index.encode()).hexdigest()
+    repository = "example.invalid/" + name
+    return {
+        "image": repository + "@" + digest,
+        "platform": "linux/amd64",
+        "image_id": repository + "@" + child,
+        "config_id": config,
+        "manifests": {digest: index, child: leaf},
+    }
+
+
+_IMAGES = {
+    role: _image_observation(name)
+    for role, name in [
+        ("agent", "worker"),
+        ("workspace-init", "worker"),
+        ("openshell-sandbox-bootstrap", "sandbox"),
+        ("supervisor", "supervisor"),
+    ]
+}
+_PINS = {role: row["image"] for role, row in _IMAGES.items()}
+
+
+def _host_record() -> dict[str, Any]:
+    containers = copy.deepcopy(_IMAGES)
+    return {
+        "host": "gke",
+        "run_id": 18,
+        "run_attempt": 1,
+        "release_version": "0.5.1",
+        "commit": _COMMIT,
+        "workload": {
+            "containers": {
+                name: containers[name]
+                for name in ("agent", "workspace-init", "openshell-sandbox-bootstrap")
+            },
+            "pod_uid": "12345678-1234-1234-1234-123456789abc",
+            "dropped_capabilities": ["ALL"],
+            "seccomp_profile": "RuntimeDefault",
+            "run_as_user": 10001,
+            "privileged": False,
+            "allow_privilege_escalation": False,
+            "added_capabilities": [],
+            "host_network": False,
+            "host_pid": False,
+            "host_ipc": False,
+            "host_paths": [],
+            "devices": [],
+            "service_account_token_mounted": False,
+        },
+        "supervisor": {
+            "containers": {"supervisor": containers["supervisor"]},
+            "pod_uid": "12345678-1234-1234-1234-123456789abd",
+        },
+        "worker_routes": dict.fromkeys(
+            (
+                "controller-canary",
+                "model-route-direct",
+                "model-route-pod-direct",
+                "kubernetes-api",
+                "cluster-dns-tcp",
+                "cluster-dns-udp",
+                "sandbox-gateway",
+                "metadata-ipv4",
+                "public-address",
+            ),
+            "refused",
+        ),
+        "outside_worker": {"metadata-ipv4": "reachable"},
+        "model_route_requests": 1,
+    }
+
+
+def _host_suite(evidence: ModuleType, directory: Path, host: dict[str, Any]) -> None:
+    directory.mkdir()
+    case = directory / "test_kubernetes_workflow_boundary_and_revocation"
+    case.mkdir()
+    boundary = {
+        "drill_id": "kubernetes-workflow.v1",
+        "model_route_requests": host["model_route_requests"],
+        "route_probes": dict.fromkeys(host["worker_routes"], "ECONNREFUSED"),
+        "kubernetes_identities": {
+            role + "_pod": {"name": role, "node": "node-1", "uid": host[role]["pod_uid"]}
+            for role in ("workload", "supervisor")
+        },
+        "images": {
+            role: {
+                name: {k: row[k] for k in ("image", "image_id")}
+                for name, row in host[role]["containers"].items()
+            }
+            for role in ("workload", "supervisor")
+        },
+    }
+    (case / "evidence.json").write_text(json.dumps(boundary))
+    _write_report(
+        directory / evidence.REPORT,
+        dict.fromkeys(sorted(evidence.EXPECTED_CASES["synthetic-kubernetes"])),
+    )
+    manifest = _manifest(evidence) | {
+        "qualification_kind": "synthetic-kubernetes",
+        "driver": "openshell-kubernetes",
+        "workflow_run": {"id": 18, "attempt": 1},
+        "cluster": {
+            "kubernetes": "v1.37.0-gke.1",
+            "nodes": [{"name": "node-1", "operatingSystem": "linux", "architecture": "amd64"}],
+        },
+        "session_removed": True,
+        "cases": evidence.cases(directory / evidence.REPORT),
+        "passed": True,
+        "records_service": None,
+    }
+    (directory / evidence.MANIFEST).write_text(json.dumps(manifest))
+    (directory / evidence.DRILLS).write_text(json.dumps(evidence.drill_results(directory)))
+    evidence.write_checksums(directory, evidence.KUBERNETES_RETAINED)
 
 
 def _release_workspace(evidence: ModuleType, tmp_path: Path) -> tuple[Path, dict[str, str]]:
@@ -947,11 +1644,62 @@ def _release_workspace(evidence: ModuleType, tmp_path: Path) -> tuple[Path, dict
     (tools / "python3").symlink_to(sys.executable)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "deploy").symlink_to(_ROOT / "deploy")
+    deploy = workspace / "deploy"
+    deploy.mkdir()
+    for script in ("qualification_evidence.py", "release_drills.py"):
+        (deploy / script).symlink_to(_ROOT / "deploy" / script)
+    (deploy / "release-model-routes.toml").write_text(
+        'hosts = ["gke"]\nroutes = ["openai/approved-model@approved-provider.example"]\n'
+    )
+    chart = workspace / "reference-platform/chart/heartwood-platform/files/openshell-session.json"
+    chart.parent.mkdir(parents=True)
+    driver = "[openshell.drivers.kubernetes]\n" + "\n".join(
+        f'{key} = "{_PINS[name]}"'
+        for key, name in (
+            ("sandbox_runtime_image", "openshell-sandbox-bootstrap"),
+            ("supervisor_image", "supervisor"),
+        )
+    )
+    chart.write_text(json.dumps({"items": [{"data": {"gateway.toml": driver}}]}))
+    published = tmp_path / "published.json"
+    published.write_text(
+        json.dumps(
+            {
+                "commit": _COMMIT,
+                "images": {
+                    "worker": {
+                        "repository": _PINS["agent"].split("@")[0],
+                        "digest": _PINS["agent"].split("@")[1],
+                    }
+                },
+            }
+        )
+    )
+    records = tmp_path / "records"
+    capable = records / "managed"
+    capable.mkdir(parents=True)
+    _drill_package(
+        evidence,
+        capable,
+        profile={
+            "base_url": "https://approved-provider.example/v1",
+            "model": "openai/approved-model",
+        },
+    )
+    _host_suite(evidence, records / "gke-native", _host_record())
+    (records / "gke.json").write_text(json.dumps(_host_record()))
+    archive = Path(shutil.make_archive(str(tmp_path / "managed-drills"), "zip", records))
     environment = {
+        "GITHUB_REPOSITORY_ID": "1",
+        "ARTIFACT_DIGEST": _digest(archive),
+        "DRILL_ARTIFACT": "17",
+        "DRILL_SHA256": _digest(archive),
+        "DRILL_ARCHIVE": str(archive),
+        "PUBLISHED": str(published),
         "ATTESTED": "1",
         "EVIDENCE": str(directory),
         "GH_CALLS": str(tmp_path / "calls"),
+        "GITHUB_OUTPUT": str(tmp_path / "output"),
         "GITHUB_REPOSITORY": "SchmiedmayerLab/heartwood",
         "GITHUB_SHA": _COMMIT,
         "PATH": f"{tools}:{os.environ['PATH']}",
@@ -1003,7 +1751,7 @@ def test_release_attaches_only_attested_evidence_of_its_commit(
     calls = (tmp_path / "calls").read_text().splitlines()
     assert calls[0] == (
         "run list --repo SchmiedmayerLab/heartwood --workflow native-qualification.yml"
-        f" --branch main --commit {_COMMIT} --limit 20"
+        f" --branch main --commit {_COMMIT} --status success --limit 20"
         " --json databaseId --jq .[].databaseId"
     )
     assert calls[1] == (
@@ -1073,16 +1821,100 @@ def test_release_states_drill_results_of_its_verified_evidence_per_model_route(
 
     assert completed.returncode == 0, completed.stderr
     statement = json.loads((workspace / "dist" / _DRILL_ASSET).read_text())
-    routes = tomllib.loads((_ROOT / "deploy/release-model-routes.toml").read_text())["routes"]
     assert statement["release_version"] == "0.5.1"
     assert statement["commit"] == _COMMIT
-    assert statement["synthetic"] == evidence.drill_results(
-        workspace / "test-results/release-evidence/native-qualification"
-    )
-    # Operator records are not release inputs, so every supported route states it was not run.
-    assert statement["capable_model"] == [
-        {"model_route": route, "status": "not-run"} for route in routes
+    assert statement["synthetic"]["cases"] == [
+        {"case": name, "outcome": "passed"} for name in sorted(evidence.EXPECTED_CASES[_KIND])
     ]
+    assert statement["producer"] == {
+        "run_id": 18,
+        "run_attempt": 1,
+        "artifact_id": 17,
+        "artifact_sha256": _digest(tmp_path / "managed-drills.zip"),
+    }
+    [host] = statement["hosts"]
+    assert host.pop("cases") == [
+        {"case": name, "outcome": "passed"}
+        for name in sorted(evidence.EXPECTED_CASES["synthetic-kubernetes"])
+    ]
+    expected_host = _host_record()
+    for role in ("workload", "supervisor"):
+        for row in expected_host[role]["containers"].values():
+            row["manifest_digest"] = row["image_id"].split("@")[1]
+            del row["manifests"]
+    assert host == expected_host
+    (record,) = statement["capable_model"]
+    assert record["model_route"] == "openai/approved-model@approved-provider.example"
+    assert record["results"] == [
+        {
+            "execution_id": _EXECUTION,
+            "case_outcome": "passed",
+            "outcomes": {
+                "file-input-injection.v1": "passed",
+                "tool-output-injection.v1": "passed",
+            },
+            "accepted_actions": 3,
+            "rejected_actions": 2,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"PRODUCER_SHA": _OTHER_COMMIT},
+        {"PRODUCER_WORKFLOW": "other.yml"},
+        {"PRODUCER_ATTEMPT": "2"},
+        {"IMAGE_VERIFY_STATUS": "1"},
+    ],
+)
+def test_release_refuses_wrong_managed_producer(
+    evidence: ModuleType, tmp_path: Path, overrides: dict[str, str]
+) -> None:
+    completed, workspace = _release_evidence(evidence, tmp_path, _RELEASE_STEPS, **overrides)
+    assert completed.returncode != 0
+    assert not (workspace / "dist" / _DRILL_ASSET).exists()
+
+
+def test_consistent_scenarios_from_another_workflow_run_are_refused(
+    evidence: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "_EXECUTION", "19.1." + "f" * 32)
+    completed, workspace = _release_evidence(evidence, tmp_path, _RELEASE_STEPS)
+    assert completed.returncode != 0
+    assert "managed execution belongs to another producer attempt" in completed.stderr
+    assert not (workspace / "dist" / _DRILL_ASSET).exists()
+
+
+@pytest.mark.parametrize("field", ["commit", "worker_digest"])
+def test_release_checks_the_independent_published_image_record(
+    evidence: ModuleType, tmp_path: Path, field: str
+) -> None:
+    workspace, environment = _release_workspace(evidence, tmp_path)
+    published = Path(environment["PUBLISHED"])
+    record = json.loads(published.read_text())
+    if field == "commit":
+        record["commit"] = _OTHER_COMMIT
+    else:
+        record["images"]["worker"]["digest"] = "sha256:" + "f" * 64
+    published.write_text(json.dumps(record))
+    completed = _run_release_steps(workspace, environment, _RELEASE_STEPS)
+    assert completed.returncode != 0
+    assert not (workspace / "dist" / _DRILL_ASSET).exists()
+
+
+@pytest.mark.parametrize("mismatch", ["selected", "downloaded"])
+def test_release_rejects_a_different_managed_evidence_archive(
+    evidence: ModuleType, tmp_path: Path, mismatch: str
+) -> None:
+    workspace, environment = _release_workspace(evidence, tmp_path)
+    if mismatch == "selected":
+        environment["DRILL_SHA256"] = "0" * 64
+    else:
+        Path(environment["DRILL_ARCHIVE"]).write_bytes(b"different archive")
+    completed = _run_release_steps(workspace, environment, _RELEASE_STEPS)
+    assert completed.returncode != 0
+    assert not (workspace / "dist" / _DRILL_ASSET).exists()
 
 
 @pytest.mark.parametrize(
@@ -1125,7 +1957,7 @@ def test_release_requires_and_publishes_the_evidence_assets() -> None:
         step for step in verify["steps"] if step.get("name") == "Upload approved candidate assets"
     )
     assert names.index(_RELEASE_DRILLS) == names.index(_RELEASE_EVIDENCE) + 1
-    for asset in (*_EVIDENCE_ASSETS, _DRILL_ASSET):
+    for asset in (*_EVIDENCE_ASSETS, _DRILL_ASSET, "published-image-evidence.tar.gz"):
         assert f"dist/{asset}" in upload["with"]["path"].split()
     publish = next(
         step
@@ -1134,6 +1966,7 @@ def test_release_requires_and_publishes_the_evidence_assets() -> None:
     )
     assert f"evidence_assets=({' '.join(_EVIDENCE_ASSETS)})" in publish["run"]
     assert f"evidence_assets+=({_DRILL_ASSET})" in publish["run"]
+    assert "evidence_assets+=(published-image-evidence.tar.gz)" in publish["run"]
     assert 'release_assets+=("${evidence_assets[@]}")' in publish["run"]
     assert "printf '%s\\n' \"${release_assets[@]}\" | sort" in publish["run"]
     assert 'for asset in "${release_assets[@]}"; do' in publish["run"]

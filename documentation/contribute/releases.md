@@ -14,7 +14,7 @@ Versions use strict Semantic Versioning without a `v` prefix, such as `0.5.1` or
 1. Update `VERSION.toml` and every version-owned package, lock, image, installer, and documentation reference together; `deploy/verify_release_candidate.py` lists any that differ.
 2. Run the complete test and documentation suites.
 3. Merge the reviewed change to `main` and wait for **Main Validation** to pass on that commit.
-4. Start **Create Release** from `main` with the exact version.
+4. Start **Create Release** from `main` with the exact version, the repository artifact ID of the reviewed GKE and managed drill records, and the SHA-256 of that artifact ZIP.
 5. Review the draft release: generated notes, assets, checksums, qualification evidence, and target commit.
 6. Approve the `release` environment to publish.
 
@@ -32,7 +32,8 @@ The workflow stops unless all of the following hold for the commit:
 `Release Candidate Ready` requires every Main Validation job, including capable-model acceptance.
 On `main`, the separate **Native Qualification** workflow qualifies and attests every commit without cancelling earlier runs; see [Native Qualification Evidence](../architecture/testing.md#native-qualification-evidence).
 Release creation downloads that run's evidence and attestation, verifies them with `gh attestation verify` bound to this repository, the Native Qualification workflow, `refs/heads/main`, and the commit, and with `deploy/qualification_evidence.py`, and fails when either is missing or does not verify.
-It then writes `agent-safety-drills.json` from that evidence for the routes in `deploy/release-model-routes.toml`.
+It also checks the selected GKE qualification artifact against its successful first workflow attempt, candidate revision and reviewed digest. Dispatch a new qualification run if an earlier attempt failed. The release verifies the native GKE suite and matches its inspected pods and route probes to the host record. It verifies the observed runtime identities against the candidate chart and the separately attested worker image.
+The release asset `agent-safety-drills.json` records the verified host observations and the outcomes for every declared managed route.
 Pull-request runs are not attested.
 
 The workflow then builds the native assets from the commit, tests the installer layout and an installation from an empty Ubuntu container, attests every asset, and creates a draft release with GitHub-generated notes.

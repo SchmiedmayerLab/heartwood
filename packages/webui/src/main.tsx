@@ -9,7 +9,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { initializeGatewayAccess } from "./gatewayAccess";
+import {
+  gatewayBasePath,
+  initializeGatewayAccess,
+  joinPath,
+} from "./gatewayAccess";
 import "./grove.css";
 import "./styles.css";
 
@@ -29,7 +33,18 @@ void initializeGatewayAccess().then(
   () =>
     application.render(
       <StrictMode>
-        <App />
+        <App
+          onSignedOut={() =>
+            application.render(
+              <main>
+                <h1>Signed out of this project</h1>
+                <a href={joinPath(gatewayBasePath(), "/identity/login")}>
+                  Sign in again
+                </a>
+              </main>,
+            )
+          }
+        />
       </StrictMode>,
     ),
   () =>

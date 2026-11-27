@@ -20,6 +20,7 @@ import json
 import re
 import ssl
 import sys
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,10 +48,17 @@ class Grant(BaseModel):
     # Empty for every object of the bucket, or a prefix that ends with a slash.
     prefix: str = Field(default="", pattern=r"^([a-z0-9][a-z0-9-]*/)*$")
 
+    sealed_mount: bool = False
+
     @model_validator(mode="after")
     def _one_account(self) -> Self:
         if (self.account is None) == (self.account_file is None):
             raise ValueError("a grant names its account or the file of its account")
+        if self.sealed_mount and (
+            self.actions != ("s3:GetObject",)
+            or not re.fullmatch(r"datasets/[a-z0-9-]+/[0-9a-f]{64}/", self.prefix)
+        ):
+            raise ValueError("a mounted grant reads one sealed dataset version")
         return self
 
 
@@ -64,7 +72,7 @@ class PolicySettings(BaseModel):
     ca_file: Path
     root_access_key_file: Path
     root_secret_key_file: Path
-    buckets: dict[str, tuple[Grant, ...]] = Field(min_length=1)
+    buckets: dict[str, tuple[Grant, ...]]
 
     @model_validator(mode="after")
     def _bucket_names(self) -> Self:
@@ -100,7 +108,42 @@ def bucket_policy(bucket: str, grants: tuple[Grant, ...]) -> dict[str, Any]:
         }
         for grant in grants
     ]
+    for grant in grants:
+        if grant.sealed_mount:
+            statements.extend(
+                [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"AWS": [_account(grant)]},
+                        "Action": ["s3:ListBucket"],
+                        "Resource": [f"arn:aws:s3:::{bucket}"],
+                        "Condition": {"StringLike": {"s3:prefix": [grant.prefix + "*"]}},
+                    },
+                    {
+                        "Effect": "Deny",
+                        "Principal": "*",
+                        "Action": ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"],
+                        "Resource": [f"arn:aws:s3:::{bucket}/{grant.prefix}*"],
+                    },
+                ]
+            )
     return {"Version": "2012-10-17", "Statement": statements}
+
+
+def _mount_seal(bucket: str, statement: dict[str, Any]) -> bool:
+    resources = statement.get("Resource")
+    return (
+        statement.get("Principal") == "*"
+        and set(statement.get("Action", []))
+        == {"s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"}
+        and isinstance(resources, list)
+        and len(resources) == 1
+        and re.fullmatch(
+            rf"arn:aws:s3:::{re.escape(bucket)}/datasets/[a-z0-9-]+/[0-9a-f]{{64}}/\*", resources[0]
+        )
+        is not None
+        and "Condition" not in statement
+    )
 
 
 def write_policies(
@@ -113,18 +156,76 @@ def write_policies(
     policies = {
         bucket: bucket_policy(bucket, grants) for bucket, grants in sorted(settings.buckets.items())
     }
-    for bucket, policy in policies.items():
-        url = presign(
-            method="PUT",
+
+    def signed(method: str, path: str, query: dict[str, str]) -> str:
+        return presign(
+            method=method,
             endpoint=settings.endpoint,
-            path=f"/{bucket}",
+            path=path,
             credentials=root,
             region=settings.region,
             expires=_EXPIRES,
             now=clock(),
-            query={"policy": ""},
+            query=query,
         )
-        response = client.put(url, content=json.dumps(policy).encode())
+
+    # The existing policy is the durable record of sealed versions. Enumerate even
+    # when the final project is removed, so an old reader grant cannot outlive it.
+    buckets: set[str] = set()
+    query: dict[str, str] = {}
+    seen: set[str] = set()
+    while True:
+        listing = client.get(signed("GET", "/", query))
+        if listing.status_code != 200:
+            raise RuntimeError(f"listing project buckets returned {listing.status_code}")
+        page = ET.fromstring(listing.content)
+        entries = page.find("{*}Buckets")
+        if entries is None:
+            raise ValueError("bucket inventory has no Buckets element")
+        for entry in entries.findall("{*}Bucket"):
+            name = entry.findtext("{*}Name")
+            if not name:
+                raise ValueError("bucket inventory has an unnamed bucket")
+            if re.fullmatch(r"hw-project-[a-z0-9][a-z0-9-]*", name):
+                buckets.add(name)
+        token = page.findtext("{*}ContinuationToken")
+        if not token:
+            break
+        if token in seen:
+            raise ValueError("bucket inventory repeated a continuation token")
+        seen.add(token)
+        query = {"continuation-token": token}
+
+    for bucket in sorted(buckets | policies.keys(), key=lambda b: (b in policies, b)):
+        path = f"/{bucket}"
+        response = client.get(signed("GET", path, {"policy": ""}))
+        if (
+            response.status_code == 404
+            and ET.fromstring(response.content).findtext("{*}Code") == "NoSuchBucketPolicy"
+        ):
+            previous = []
+        elif response.status_code == 200:
+            previous = response.json()["Statement"]
+            if not isinstance(previous, list):
+                raise ValueError(f"unexpected policy statements for {bucket}")
+        else:
+            raise RuntimeError(f"reading the policy of {bucket} returned {response.status_code}")
+        seals = [rule for rule in previous if rule["Effect"] == "Deny"]
+        if bucket not in policies:
+            # Recognize a formerly mounted project by the exact seal the writer issued.
+            # Leave unrelated buckets and their policies alone.
+            if not any(_mount_seal(bucket, rule) for rule in seals):
+                continue
+            policies[bucket] = {"Version": "2012-10-17", "Statement": []}
+        policy = policies[bucket]
+        for seal in seals:
+            if seal not in policy["Statement"]:
+                policy["Statement"].append(seal)
+        if previous == policy["Statement"]:
+            continue
+        response = client.put(
+            signed("PUT", path, {"policy": ""}), content=json.dumps(policy).encode()
+        )
         if response.status_code not in {httpx.codes.OK, httpx.codes.NO_CONTENT}:
             raise RuntimeError(f"the policy of {bucket} was answered with {response.status_code}")
         print(f"set the policy of {bucket} with {len(policy['Statement'])} statements")

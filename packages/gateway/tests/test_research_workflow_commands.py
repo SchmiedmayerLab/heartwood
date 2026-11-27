@@ -23,6 +23,7 @@ import pytest
 from openhands.sdk.llm import Message, MessageToolCall
 from openhands.sdk.testing import TestLLM
 
+import heartwood.core_adapter._service as session_service
 from heartwood.compliance.research import ResearchTask, research_tasks
 from heartwood.compliance.review_benchmarks import (
     planning_review_suite,
@@ -48,6 +49,7 @@ from heartwood.core_adapter import (
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.research_workflows import research_workflow
 from heartwood.core_adapter.session_activity import session_activity
+from heartwood.core_adapter.workflow_runtime import WorkflowEvaluator, workflow_admission_reason
 from heartwood.gateway import ModelProfile, OpenHandsSdkBackend, ProjectContext, SessionGateway
 from heartwood.gateway import _openhands_sdk as sdk_module
 from heartwood.gateway._research_evaluation import ParallelReviewPreparer, ResearchStageEvaluator
@@ -942,6 +944,41 @@ def test_bounded_workflow_correction_journals_and_rechecks_attempts(
         restored.stop()
 
 
+def test_a_correction_turn_refused_at_admission_stops_the_correction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = ReviewBackend()
+    gateway = _gateway(tmp_path, backend)
+    try:
+        _begin_seeded_code_review(gateway, backend, tmp_path)
+        backend.finish_review()
+        admission = workflow_admission_reason
+
+        def refuse_turns(
+            service: SessionService,
+            evaluator: WorkflowEvaluator | None,
+            command: SessionCommand | None,
+            *,
+            admit: bool = True,
+        ) -> str | None:
+            # The correction's own turn is refused, as when a workflow budget is reached.
+            if command is not None and command.kind == CommandKind.CHAT.value:
+                return "Workflow budget reached: elapsed_seconds"
+            return admission(service, evaluator, command, admit=admit)
+
+        monkeypatch.setattr(session_service, "workflow_admission_reason", refuse_turns)
+        gateway.handle(_projected_command(gateway, "correct"))
+        gateway.session_projection(session_id="research")
+        state = _state(gateway)
+    finally:
+        gateway.stop()
+
+    attempt = state.corrections[-1].attempts[-1]
+    assert state.phase == "blocked"
+    assert (attempt.status, attempt.unavailable_reason) == ("unavailable", "no-structured-outcome")
+    assert state.corrections[-1].stop_reason == "unavailable"
+
+
 @pytest.mark.parametrize("action", ["cancel", "steer", "pause", "denied", "budget"])
 def test_correction_respects_control_and_admission_boundaries(
     tmp_path: Path,
@@ -1527,7 +1564,9 @@ def _sdk_gateway(
             conversation_key=f"{root}#{session_id}",
             structured_task_outcomes=True,
             specialist_catalog=catalog,
-            env={},
+            # The terminal does not inherit the process environment; without PATH, bash's
+            # default path on macOS has no `python` for the approved analysis command.
+            env={"PATH": os.environ["PATH"]},
         )
 
     gateway = SessionGateway(

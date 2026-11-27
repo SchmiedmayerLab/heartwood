@@ -90,7 +90,7 @@ from heartwood.gateway._local_model_lifecycle import LocalModelLifecycle
 from heartwood.gateway._local_models import (
     HuggingFaceModelRepository,
 )
-from heartwood.gateway._mcp_policy import McpDestination
+from heartwood.gateway._mcp_policy import McpDestination, McpServerError
 from heartwood.gateway._mcp_servers import (
     McpOutsideAdapter,
     McpServerManager,
@@ -498,6 +498,7 @@ class SessionGateway:
         external_actions_factory: Callable[[str], ExternalActionAdapter] | None = None,
         mcp_destinations: Sequence[McpDestination] | None = None,
         service_tokens: ServiceTokens | None = None,
+        sign_in_revision: Callable[[], int] | None = None,
         platform_planning: PlatformPlanningBinding | None = None,
         subscription_provider: SubscriptionProvider | None = None,
         workspace_inspector: WorkspaceInspector | None = None,
@@ -571,11 +572,30 @@ class SessionGateway:
                 "Research MCP servers and another outside service cannot share a gateway"
             )
         self._external_actions_factory = external_actions_factory
+        # Worker sessions receive planning tools only when no other outside service shares
+        # the gateway, and the planning projection reports the same condition. Research
+        # services report their own availability from ``worker_available`` below.
+        planning_tools_unavailable: McpServerError | None = None
+        if worker_plan_factory is None:
+            planning_tools_unavailable = McpServerError(
+                "mcp-worker-required", "planning tools run only in isolated worker sessions"
+            )
+        elif external_actions_factory is not None:
+            planning_tools_unavailable = McpServerError(
+                "mcp-planning-outside-service",
+                "planning tools are not offered while the embedding supplies another outside "
+                "service",
+            )
+        self._agent_tool_sessions = planning_tools_unavailable is None
         if platform_planning is not None and self.project.protected_state is None:
             raise ValueError("Platform planning requires protected state")
         self._planning = (
             PlatformPlanning(
-                platform_planning, journal_path=self.project.state_root / "planning.jsonl"
+                platform_planning,
+                journal_path=self.project.state_root / "planning.jsonl",
+                contains_file=self.project.contains,
+                run_ids=lambda: {str(run.run_id) for run in self.experiment_records().runs},
+                agent_tools_unavailable=planning_tools_unavailable,
             )
             if platform_planning is not None
             else None
@@ -657,6 +677,7 @@ class SessionGateway:
             credential_store=self.credential_store,
             destinations=() if mcp_destinations is None else mcp_destinations,
             service_tokens=service_tokens,
+            sign_in_revision=sign_in_revision,
             # A command-line gateway manages the servers of a deployment whose sessions run
             # in workers; it binds tools to sessions only with a worker of its own.
             worker_available=worker_plan_factory is not None
@@ -1678,6 +1699,32 @@ class SessionGateway:
         )
 
     @gateway_operation
+    def settled_session_snapshot(
+        self, *, session_id: str, after_sequence: int | None = None
+    ) -> GatewaySessionSnapshot | None:
+        """Read the owning gateway's journal after command and final callback publication."""
+        with self._session_command_locks_lock:
+            command_lock = self._session_command_locks.get(session_id)
+        if command_lock is None:
+            raise SessionRecoveryError("No locally owned session run")
+        if not command_lock.acquire(blocking=False):
+            return None
+        try:
+            with self._state_lock:
+                service = self._services.get(session_id)
+                if service is None or not service.store.owns_writer:
+                    raise SessionRecoveryError("No locally owned session run")
+                if not service.wait_for_idle(0):
+                    return None
+                return self._snapshot_from_events_locked(
+                    session_id=session_id,
+                    all_events=service.replay_complete_reports(),
+                    after_sequence=after_sequence,
+                )
+        finally:
+            command_lock.release()
+
+    @gateway_operation
     def websocket(
         self,
         *,
@@ -2651,11 +2698,13 @@ class SessionGateway:
             return worker.context()
 
         mcp_adapter: McpOutsideAdapter | None = None
-        if self._worker_plan_factory is not None and self._external_actions_factory is None:
+        if self._agent_tool_sessions:
+            # Worker sessions receive research service tools, and planning tools when the
+            # deployment offers planning; both run through outside review.
             bound = self.mcp_servers.bound_tools()
             mcp_adapter = (
                 McpOutsideAdapter(self.mcp_servers, bound, planning=self._planning)
-                if bound
+                if bound or self._planning is not None
                 else None
             )
         backend = self._backend(

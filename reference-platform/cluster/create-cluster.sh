@@ -71,5 +71,19 @@ kubectl --context "${context}" --namespace kube-system rollout status daemonset/
 kubectl --context "${context}" --namespace kube-system rollout status deployment/calico-kube-controllers --timeout 300s
 kubectl --context "${context}" wait --for condition=Ready node --all --timeout 180s
 
+# Resolve the synthetic project zone at the same public Service as the Hub.
+# Keep kind's existing DNS plugins and change only this new cluster's Corefile.
+dns=(kubectl --context "${context}" --namespace kube-system)
+"${dns[@]}" get configmap coredns -o json | python3 -c '
+import json, sys
+config = json.load(sys.stdin)
+core = config["data"]["Corefile"]
+root = ".:53 {"
+if core.count(root) != 1:
+    sys.exit("Expected one root server block in the kind Corefile")
+rule = r"rewrite stop name regex ^(r[0-9a-f]{32}[.][a-z0-9-]+[.]projects[.]heartwood[.]test)[.]$ proxy-public.heartwood-platform.svc.cluster.local. answer auto"
+print(json.dumps({"data": {"Corefile": core.replace(root, root + "\n    " + rule)}}))
+' | "${dns[@]}" patch configmap coredns --type merge --patch-file /dev/stdin
+
 kubectl --context "${context}" apply --filename "${downloads}/agent-sandbox.yaml"
 kubectl --context "${context}" --namespace agent-sandbox-system rollout status deployment --timeout 240s

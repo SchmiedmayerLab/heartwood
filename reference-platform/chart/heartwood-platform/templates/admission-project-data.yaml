@@ -78,3 +78,98 @@ metadata:
 spec:
   policyName: heartwood-project-data-copy
   validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: heartwood-mounted-dataset-claims
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: [persistentvolumeclaims]
+        operations: [CREATE]
+  validations:
+    - expression: >-
+        !(object.metadata.name == 'hw-mounted-data' ||
+        (has(object.spec.volumeName) && object.spec.volumeName.matches('^hw-s-[a-f0-9]{16}-dataset$')))
+        || (request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:heartwood-control'
+        && request.namespace.matches('^hw-s-[a-f0-9]{16}$')
+        && object.metadata.name == 'hw-mounted-data' && object.spec.volumeName == request.namespace + '-dataset'
+        && object.spec.accessModes == ['ReadOnlyMany'] && object.spec.storageClassName == '')
+      message: the control service reserves mounted dataset claims in their session namespace
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-mounted-dataset-claims
+spec:
+  policyName: heartwood-mounted-dataset-claims
+  validationActions: [Deny]
+{{- $mounts := false }}
+{{- range .Values.projects }}{{- if .interactiveDataset }}{{- $mounts = true }}{{- end }}{{- end }}
+{{- if $mounts }}
+{{- /*
+Dataset volumes reach the object store over HTTPS with a certificate of the platform CA.
+mount-s3 starts with a cleared environment and reads only the trust bundle of its image,
+so CA environment variables never reach it. At creation, this policy mounts the platform
+CA read-only over that bundle in each Mountpoint pod that carries the dataset-reader
+label, which the store's network policy admits. The pods reach only the store, so they
+trust the platform CA alone. A pod is refused when the mutation fails, and a pod without
+the certificate fails the TLS handshake with the store.
+*/}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: heartwood-dataset-reader-ca
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: Never
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: mount-s3
+    objectSelector:
+      matchLabels:
+        heartwood.platform/role: dataset-reader
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: [CREATE]
+        resources: [pods]
+  # The patch addresses the single container of a Mountpoint pod.
+  matchConditions:
+    - name: one-container
+      expression: object.spec.containers.size() == 1
+  mutations:
+    # JSON patches address the single container by its index, so the policy does not depend
+    # on the name the driver gives it. The Object constructors are declared only for the
+    # mutation expression, so the volume and the mount are written out in each branch.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          (has(object.spec.volumes)
+          ? [JSONPatch{op: 'add', path: '/spec/volumes/-',
+          value: Object.spec.volumes{name: 'heartwood-platform-ca', configMap: Object.spec.volumes.configMap{name: 'platform-ca'}}}]
+          : [JSONPatch{op: 'add', path: '/spec/volumes',
+          value: [Object.spec.volumes{name: 'heartwood-platform-ca', configMap: Object.spec.volumes.configMap{name: 'platform-ca'}}]}])
+          + (has(object.spec.containers[0].volumeMounts)
+          ? [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts/-',
+          value: Object.spec.containers.volumeMounts{name: 'heartwood-platform-ca', readOnly: true, subPath: 'ca.crt', mountPath: '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'}}]
+          : [JSONPatch{op: 'add', path: '/spec/containers/0/volumeMounts',
+          value: [Object.spec.containers.volumeMounts{name: 'heartwood-platform-ca', readOnly: true, subPath: 'ca.crt', mountPath: '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'}]}])
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: heartwood-dataset-reader-ca
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+spec:
+  policyName: heartwood-dataset-reader-ca
+{{- end }}

@@ -318,6 +318,16 @@ def _build_parser() -> argparse.ArgumentParser:
     gateway_serve.add_argument("--port", type=int, default=8767, help="Gateway bind port.")
     gateway_serve.add_argument("--web-root", type=Path, default=_DEFAULT_WEB_ROOT)
     gateway_serve.add_argument(
+        "--tls-certificate",
+        type=Path,
+        help="Serve TLS with this PEM certificate chain; requires --tls-key.",
+    )
+    gateway_serve.add_argument(
+        "--tls-key",
+        type=Path,
+        help="PEM private key of --tls-certificate.",
+    )
+    gateway_serve.add_argument(
         "--capability-fd",
         type=int,
         help="Consume an inherited file or pipe descriptor containing the operator capability.",
@@ -458,6 +468,13 @@ def _main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
     if args.command == "gateway" and args.gateway_command == "serve":
+        if (args.tls_certificate is None) != (args.tls_key is None):
+            parser.error("--tls-certificate and --tls-key must be given together")
+        # A browser reaches a TLS port only through an https origin, which a proxy route names.
+        if args.tls_certificate is not None and not (args.public_origin or "").startswith(
+            "https://"
+        ):
+            parser.error("--tls-certificate requires an https --public-origin")
         return _handle_serve(
             project=project,
             host=args.host,
@@ -474,6 +491,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
             deployment_path=args.deployment,
             capability_descriptor=args.capability_fd,
             review_mode=args.review_mode,
+            tls_certificate=args.tls_certificate,
+            tls_key=args.tls_key,
         )
     if args.command == "doctor":
         return _handle_doctor(project=project, as_json=args.json, deployment_path=args.deployment)
@@ -1053,6 +1072,8 @@ def _handle_serve(
     deployment_path: Path | None = None,
     capability_descriptor: int | None = None,
     review_mode: str | None = None,
+    tls_certificate: Path | None = None,
+    tls_key: Path | None = None,
 ) -> int:
     deployment = (
         load_project_deployment(deployment_path, project_root=project.root)
@@ -1135,6 +1156,9 @@ def _handle_serve(
                     service_tokens=access.service_token
                     if isinstance(access, IdentityAccess)
                     else None,
+                    sign_in_revision=access.sign_in_revision
+                    if isinstance(access, IdentityAccess)
+                    else None,
                 )
                 if deployment is not None
                 else SessionGateway(project=project)
@@ -1165,6 +1189,8 @@ def _handle_serve(
             proxy_headers=False,
             access_log=False,
             ws_max_size=8192,
+            ssl_certfile=tls_certificate,
+            ssl_keyfile=tls_key,
         )
         with config.bind_socket() as listener:
             listener.set_inheritable(False)

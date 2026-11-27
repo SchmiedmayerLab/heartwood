@@ -13,9 +13,9 @@ a reported estimate or balance in it never guarantees that the platform admits w
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.schemas._planning_contract import (
     BudgetObservation,
@@ -29,8 +29,10 @@ __all__ = [
     "ElementReview",
     "EstimateComparison",
     "EstimateState",
+    "ObservationEvidence",
     "PlanProjection",
     "PlanRevision",
+    "PlanningAgentTools",
     "PlanningEstimateRequest",
     "PlanningOutcome",
     "PlanningProjection",
@@ -67,6 +69,23 @@ class PlanningServices(_PlanningView):
     checked_at: AwareDatetime | None = None
 
 
+class PlanningAgentTools(_PlanningView):
+    """Whether a session's agent can call the planning tools, reported like research services."""
+
+    availability: Literal["available", "unavailable"]
+    unavailable_reason: _Text | None = None
+    unavailable_code: _Text | None = None
+
+    @model_validator(mode="after")
+    def _reason_with_unavailability(self) -> Self:
+        unavailable = self.availability == "unavailable"
+        if unavailable != (self.unavailable_reason is not None) or unavailable != (
+            self.unavailable_code is not None
+        ):
+            raise ValueError("unavailable agent tools need a code and reason, available none")
+        return self
+
+
 class PlanningOutcome(_PlanningView):
     """A planning condition with its stable diagnostic and the record it concerns."""
 
@@ -100,9 +119,22 @@ class EstimateState(_PlanningView):
     )
 
 
+class ObservationEvidence(_PlanningView):
+    """A citation for an immutable platform observation in this launch context."""
+
+    reference: str
+    operation_id: _Text
+    service_id: _Text
+    backend_operation_ref: _Text
+    observed_at: AwareDatetime
+    status: _Text
+    platform_record_ref: _Text
+
+
 class PlanRevision(_PlanningView):
     """One prediction revision with its linked platform records and review states."""
 
+    observation_evidence: tuple[ObservationEvidence, ...] = ()
     overview: PlanningOverview
     elements: tuple[ElementReview, ...]
     estimates: tuple[EstimateState, ...]
@@ -134,6 +166,9 @@ class PlanningProjection(_PlanningView):
     offered: bool = Field(description="Whether this deployment connects a planning service.")
     launch: PlatformLaunchContext | None = None
     services: PlanningServices | None = None
+    agent_tools: PlanningAgentTools | None = Field(
+        default=None, description="Agent planning tool availability; absent when not offered."
+    )
     budgets: tuple[BudgetObservation, ...] = Field(
         default=(), description="The latest observation of each platform budget."
     )

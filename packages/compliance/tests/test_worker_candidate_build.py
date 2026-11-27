@@ -359,6 +359,30 @@ def test_generated_revision_archives_are_pinned_by_content() -> None:
             assert "directory" not in source
 
 
+def test_openshell_inputs_name_the_canonical_repository() -> None:
+    gateway = json.loads((_ROOT / "images/worker/candidate/gateway.json").read_text())
+    assert gateway["source"]["url"].startswith(
+        "https://codeload.github.com/ai-openshell/openshell/"
+    )
+    releases = "https://github.com/ai-openshell/openshell/releases/download/"
+    cli = gateway["cli"]
+    assert all(item["url"].startswith(releases) for item in cli.values())
+    for dockerfile, stage_prefix in (
+        ("images/Dockerfile", "hosted-openshell-cli"),
+        ("reference-platform/services/Dockerfile", "openshell-cli"),
+    ):
+        content = (_ROOT / dockerfile).read_text()
+        for arch in ("amd64", "arm64"):
+            stage = f"{stage_prefix}-{arch}"
+            pins = re.findall(
+                rf"^FROM scratch AS {stage}\n"
+                r"ADD --checksum=sha256:([0-9a-f]{64}) \\\n\s+(\S+) /openshell\.tar\.gz$",
+                content,
+                re.MULTILINE,
+            )
+            assert pins == [(cli[arch]["sha256"], cli[arch]["url"])], (dockerfile, stage)
+
+
 @pytest.fixture
 def builder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     spec = importlib.util.spec_from_file_location(
@@ -492,22 +516,42 @@ def test_changed_archive_cannot_execute_build_code(
     assert not (tmp_path / "wheels/build-record.json").exists()
 
 
-@pytest.mark.parametrize("condition", ["valid", "missing-license", "duplicate-identity"])
+@pytest.mark.parametrize(
+    ("condition", "declared", "files"),
+    [
+        ("valid", ["LICENSE"], {"LICENSE": "Synthetic test license"}),
+        ("valid", ["LICENSE.md"], {"LICENSE.md": "Synthetic test license"}),
+        ("valid", ["LICENSE", "NOTICE"], {"LICENSE": "License", "NOTICE": "Notice"}),
+        ("refused", ["LICENSE"], {}),
+        ("refused", ["LICENSE"], {"LICENSE": ""}),
+        ("refused", ["LICENSE"], {"LICENSE": " \n\t"}),
+        ("refused", [], {"LICENSE": "Synthetic test license"}),
+        ("refused", ["LICENSE", "COPYING"], {"LICENSE": "Synthetic test license"}),
+        ("refused", ["NOTICE"], {"NOTICE": "Synthetic test notice"}),
+        ("duplicate-identity", ["LICENSE"], {"LICENSE": "Synthetic test license"}),
+    ],
+)
 def test_wheel_identity_requires_preserved_license_and_unambiguous_metadata(
-    builder: ModuleType, tmp_path: Path, condition: str
+    builder: ModuleType,
+    tmp_path: Path,
+    condition: str,
+    declared: list[str],
+    files: dict[str, str],
 ) -> None:
     wheel = tmp_path / "synthetic.whl"
     metadata = "Name: synthetic\nVersion: 1.0+heartwood.1\n"
+    metadata += "".join(f"License-File: {name}\n" for name in declared)
     if condition == "duplicate-identity":
         metadata += "Name: substituted\n"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("synthetic.dist-info/METADATA", metadata)
-        if condition != "missing-license":
-            archive.writestr("synthetic.dist-info/licenses/LICENSE", "Synthetic test license")
+        for name, content in files.items():
+            archive.writestr(f"synthetic.dist-info/licenses/{name}", content)
     if condition == "valid":
         assert builder._wheel_identity(wheel) == ("synthetic", "1.0+heartwood.1")
     else:
-        with pytest.raises(ValueError, match="Candidate wheel"):
+        match = "identity" if condition == "duplicate-identity" else "upstream license"
+        with pytest.raises(ValueError, match=match):
             builder._wheel_identity(wheel)
 
 
@@ -616,7 +660,13 @@ def test_gateway_tests_require_positive_results_and_preserve_build_limits(
     assert command[command.index("--config") + 1] == (
         "profile.release.package.openshell-server.opt-level=0"
     )
-    assert command[-3:] == ["delete", "--", "--test-threads=1"]
+    assert command[-5:] == [
+        "delete",
+        "--",
+        "--test-threads=1",
+        "mutation_replay",
+        "image_update_tests",
+    ]
     assert json.loads((tmp_path / "gateway-test-command.json").read_text()) == command
 
 
@@ -857,4 +907,5 @@ def test_candidate_application_install_keeps_bundled_skills_verifiable(tmp_path:
         "aggregate-export",
         "baseline-model",
         "omop-cohort-summary",
+        "workload-prediction",
     }

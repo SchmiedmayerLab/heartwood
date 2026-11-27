@@ -323,10 +323,9 @@ sessions:
 # in the sessions namespace. Researchers sign in to the Hub and to their gateways through
 # Keycloak.
 hub:
-  # HTTPS origin under which researchers open the Hub's proxy. Gateways redirect their
-  # sign-in to <publicOrigin>/user/<researcher>/<project>/oauth_callback. The default is the
-  # in-cluster address of the proxy Service. The proxy serves a certificate of the
-  # platform CA for the names of its Services and the host of this origin.
+  # Wildcard DNS records *.<project>.<projectDomain> point to proxy-public.
+  projectDomain: projects.heartwood.test
+  # HTTPS origin of the Hub. Its default is the in-cluster proxy Service.
   publicOrigin: "https://proxy-public.heartwood-platform.svc.cluster.local"
   # Networks from which gateways accept proxied requests: the pod network that holds the
   # proxy. Required: a gateway does not start without at least one range. Network
@@ -393,6 +392,17 @@ jupyterhub:
       tag: "4.4.5@sha256:6ce210488f5598e2dd5130d82e84d9f74b72538b66895861240bd84926ec50bd"
     networkPolicy:
       enabled: false
+    # The Hub serves port 8081 over TLS with the certificate in the Secret hub-tls and
+    # requires a client certificate, which a probe of kubelet does not present. The hook
+    # waits until the Hub answers over TLS, so the pod is ready only then.
+    livenessProbe:
+      enabled: false
+    readinessProbe:
+      enabled: false
+    lifecycle:
+      postStart:
+        exec:
+          command: [python3, -I, /usr/local/etc/heartwood/hub/config/heartwood_hub.py]
     # KubeSpawner uses the Hub's ServiceAccount token.
     extraPodSpec:
       automountServiceAccountToken: true
@@ -413,6 +423,24 @@ jupyterhub:
           items:
             - key: ca.crt
               path: ca.crt
+      # The Hub's serving certificate and the platform CA, in the layout that the idle
+      # culler reads.
+      - name: tls
+        projected:
+          defaultMode: 0440
+          sources:
+            - secret:
+                name: hub-tls
+                items:
+                  - key: tls.crt
+                    path: hub-internal/hub-internal.crt
+                  - key: tls.key
+                    path: hub-internal/hub-internal.key
+            - configMap:
+                name: platform-ca
+                items:
+                  - key: ca.crt
+                    path: hub-ca/hub-ca.crt
       # The Hub's token for the control service.
       - name: control-token
         projected:
@@ -440,9 +468,13 @@ jupyterhub:
       - name: control-token
         mountPath: /var/run/secrets/heartwood/control
         readOnly: true
+      - name: tls
+        mountPath: /usr/local/etc/heartwood/hub/tls
+        readOnly: true
   # The proxy serves researchers and its API over HTTPS with the certificate in the
   # Secret proxy-tls, which the platform chart signs with the platform CA. Its Service
-  # has no HTTP port.
+  # has no HTTP port. It reaches the Hub and the gateways over HTTPS, presents the same
+  # certificate as its client certificate and verifies them against the platform CA alone.
   proxy:
     https:
       enabled: true
@@ -453,9 +485,26 @@ jupyterhub:
       type: ClusterIP
       disableHttpPort: true
     chp:
+      # configurable-http-proxy forwards the researcher's Host header, from which Node
+      # takes the name it verifies an upstream certificate against. The preload makes it
+      # verify the target's host instead and leaves the forwarded Host header unchanged.
+      # configurable-http-proxy has no option for this.
+      extraEnv:
+        HEARTWOOD_NO_TARGET: ""
+        NODE_OPTIONS: >-
+          --import=data:text/javascript,import%7BAgent%7Dfrom%22node:https%22;const%20c=Agent.prototype.createConnection;Agent.prototype.createConnection=function(o,f)%7Breturn%20c.call(this,%7B...o,servername:o.host%7D,f)%7D
+      # Unmatched requests must never fall back to a Hub or project page.
+      # The subchart supplies the Hub for empty values. Kubernetes expands the
+      # empty environment variable after rendering so CHP uses its local 404 page.
+      defaultTarget: $(HEARTWOOD_NO_TARGET)
+      errorTarget: $(HEARTWOOD_NO_TARGET)
       extraCommandLineFlags:
+        - --host-routing
         - --api-ssl-key=/etc/chp/tls/tls.key
         - --api-ssl-cert=/etc/chp/tls/tls.crt
+        - --client-ssl-key=/etc/chp/tls/tls.key
+        - --client-ssl-cert=/etc/chp/tls/tls.crt
+        - --client-ssl-ca=/etc/chp/tls/ca.crt
       image:
         name: quay.io/jupyterhub/configurable-http-proxy
         tag: "5.4.0@sha256:7977d796d372642aa9eb962ff36590b3019f8f24493fcf9f1d07d2c81e8e6080"
@@ -492,6 +541,9 @@ jupyterhub:
     enabled: true
     timeout: 3600
     every: 300
+    # A gateway's certificate is valid for 30 days from its start, so the culler also
+    # stops a server after 27 days, and its next start receives a new certificate.
+    maxAge: 2332800
     users: false
     removeNamedServers: false
 

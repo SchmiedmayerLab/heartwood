@@ -38,6 +38,14 @@ upgrade does not rotate it. Arguments: context, name, key.
 {{- printf "%s/realms/heartwood" (include "heartwood.keycloakUrl" .) -}}
 {{- end }}
 
+{{- /*
+The headless Service of the Heartwood gateway pods. A gateway pod has the host name
+hw-gw-<session> under it, and its serving certificate carries that name.
+*/ -}}
+{{- define "heartwood.gatewayService" -}}
+hw-gateways
+{{- end }}
+
 {{- /* The LiteLLM master key, which LiteLLM requires to start with sk-. */ -}}
 {{- define "heartwood.litellmMasterKey" -}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace "litellm" -}}

@@ -27,6 +27,7 @@ with the fixed text.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import re
@@ -147,13 +148,18 @@ def _call(messages: list[Any], name: str, arguments: object) -> dict[str, Any]:
     return {"role": "assistant", "content": "", "tool_calls": [call]}
 
 
-def _interrupted(messages: list[Any]) -> bool:
-    return any(
-        isinstance(message, dict)
-        and message.get("role") == "user"
-        and INTERRUPT in json.dumps(message.get("content"))
-        for message in messages
-    )
+def _interruption(messages: list[Any]) -> str | None:
+    """Identify a deliberate truncation without including message content in the error."""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        text = _text(message.get("content"))
+        if INTERRUPT in text:
+            marker = re.search(r"synthetic:interrupt:([a-f0-9]{32})\b", text)
+            if marker:
+                return "interrupt-" + hashlib.sha256(marker[1].encode("ascii")).hexdigest()
+            return ""
+    return None
 
 
 def answer(body: dict[str, Any]) -> dict[str, Any]:
@@ -226,7 +232,7 @@ def create_app(settings: Settings) -> Starlette:
         message = answer(body)
         common = {"id": "synthetic", "created": 0, "model": body["model"]}
         reason = "tool_calls" if message.get("tool_calls") else "stop"
-        interrupted = _interrupted(body["messages"])
+        interrupted = _interruption(body["messages"])
         if not body.get("stream"):
             document = json.dumps(
                 {
@@ -236,12 +242,12 @@ def create_app(settings: Settings) -> Starlette:
                     "usage": USAGE,
                 }
             )
-            if not interrupted:
+            if interrupted is None:
                 return Response(document, media_type="application/json")
 
             async def partial() -> AsyncIterator[str]:
                 yield document[: len(document) // 2]
-                raise _InterruptedAnswerError
+                raise _InterruptedAnswerError(interrupted)
 
             return StreamingResponse(partial(), media_type="application/json")
 
@@ -255,8 +261,8 @@ def create_app(settings: Settings) -> Starlette:
                 "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
             }
             yield f"data: {json.dumps(first)}\n\n"
-            if interrupted:
-                raise _InterruptedAnswerError
+            if interrupted is not None:
+                raise _InterruptedAnswerError(interrupted)
             last = {
                 **common,
                 "object": "chat.completion.chunk",

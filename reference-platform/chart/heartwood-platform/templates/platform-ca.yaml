@@ -48,10 +48,11 @@ data:
 {{- /*
 The serving certificates of the platform services that clients reach over TLS, signed
 by the platform CA for the names of each Service. An existing certificate is kept
-while the CA is kept.
+while the CA is kept. The Hub's certificate also names localhost, under which the idle
+culler in the Hub's pod reaches it.
 */ -}}
 {{- $authority := buildCustomCert ($certificate | b64enc) ($key | b64enc) -}}
-{{- $services := list "keycloak" "heartwood-control" "heartwood-data" "versitygw" "litellm" "heartwood-jobs" -}}
+{{- $services := list "keycloak" "heartwood-control" "heartwood-data" "versitygw" "litellm" "heartwood-jobs" "hub" -}}
 {{- if .Values.inference.syntheticModel.enabled -}}
 {{- $services = append $services "synthetic-model" -}}
 {{- end -}}
@@ -69,6 +70,9 @@ while the CA is kept.
 {{- else -}}
 {{- $qualified := printf "%s.%s" $service $.Release.Namespace -}}
 {{- $names := list $service $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified) -}}
+{{- if eq $service "hub" -}}
+{{- $names = append $names "localhost" -}}
+{{- end -}}
 {{- $serving := genSignedCert $service nil $names 825 $authority -}}
 {{- $servingCertificate = $serving.Cert -}}
 {{- $servingKey = $serving.Key -}}
@@ -130,8 +134,29 @@ data:
     {{- $certificate | nindent 4 }}
 {{- end }}
 {{- /*
+The CA certificate for the Mountpoint pods of dataset volumes, in the namespace where the
+Mountpoint S3 CSI driver creates them. The policy heartwood-dataset-reader-ca mounts it
+as their trust bundle.
+*/ -}}
+{{- $mounts := false -}}
+{{- range .Values.projects }}{{- if .interactiveDataset }}{{- $mounts = true }}{{- end }}{{- end -}}
+{{- if $mounts }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-ca
+  namespace: mount-s3
+  labels:
+    {{- include "heartwood.labels" . | nindent 4 }}
+data:
+  ca.crt: |
+    {{- $certificate | nindent 4 }}
+{{- end }}
+{{- /*
 The serving certificate of the Hub's proxy, for the names of its public and API Services
-and the host of hub.publicOrigin. The names are recorded on the Secret, and an existing
+and the host of hub.publicOrigin, which the proxy also presents as its client certificate
+to the Hub. The names are recorded on the Secret, and an existing
 certificate is kept while the CA and the names are kept.
 */ -}}
 {{- $proxyNames := list -}}
@@ -139,7 +164,14 @@ certificate is kept while the CA and the names are kept.
 {{- $qualified := printf "%s.%s" $service $.Release.Namespace -}}
 {{- $proxyNames = concat $proxyNames (list $service $qualified (printf "%s.svc" $qualified) (printf "%s.svc.cluster.local" $qualified)) -}}
 {{- end -}}
-{{- $proxyNames = append $proxyNames (urlParse .Values.hub.publicOrigin).hostname | uniq -}}
+{{- $hubHost := (urlParse .Values.hub.publicOrigin).hostname -}}
+{{- $proxyNames = append $proxyNames $hubHost | uniq -}}
+{{- if or (eq $hubHost .Values.hub.projectDomain) (hasSuffix (printf ".%s" $hubHost) .Values.hub.projectDomain) (hasSuffix (printf ".%s" .Values.hub.projectDomain) $hubHost) -}}
+{{- fail "hub.projectDomain and the Hub host must be separate DNS domains" -}}
+{{- end -}}
+{{- range .Values.projects -}}
+{{- $proxyNames = append $proxyNames (printf "*.%s.%s" .id $.Values.hub.projectDomain) -}}
+{{- end -}}
 {{- $proxyNamesText := join "," $proxyNames -}}
 {{- $proxyCertificate := "" -}}
 {{- $proxyKey := "" -}}
@@ -166,3 +198,5 @@ type: kubernetes.io/tls
 data:
   tls.crt: {{ $proxyCertificate | b64enc }}
   tls.key: {{ $proxyKey | b64enc }}
+  # The proxy verifies the Hub and the gateways against the platform CA alone.
+  ca.crt: {{ $certificate | b64enc }}

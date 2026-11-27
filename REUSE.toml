@@ -63,13 +63,13 @@ SPDX-FileCopyrightText = "2026 Stanford University and the project authors (see 
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["images/worker/candidate/conversation-admission.patch", "images/worker/candidate/dependency-compatibility.patch", "images/worker/candidate/terminal-environment.patch"]
+path = ["images/worker/candidate/conversation-admission.patch", "images/worker/candidate/dependency-compatibility.patch", "images/worker/candidate/terminal-environment.patch", "images/worker/candidate/inference-gateway-refusals.patch", "images/worker/candidate/subprocess-pty-completion.patch", "images/worker/candidate/quota-rate-limit.patch"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 OpenHands contributors", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["images/worker/candidate/sandbox-admission.patch", "images/worker/candidate/sandbox-request-id.patch", "images/worker/candidate/docker-provisioning.patch", "images/worker/candidate/gateway-delete-retry.patch", "images/worker/candidate/kubernetes-delete-conflict.patch", "images/worker/candidate/gateway-create-after-absence.patch"]
+path = ["images/worker/candidate/sandbox-admission.patch", "images/worker/candidate/sandbox-request-id.patch", "images/worker/candidate/docker-provisioning.patch", "images/worker/candidate/gateway-delete-retry.patch", "images/worker/candidate/kubernetes-delete-conflict.patch", "images/worker/candidate/gateway-create-after-absence.patch", "images/worker/candidate/request-admission-release.patch", "images/worker/candidate/request-admission-lifecycle.patch"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025-2026 NVIDIA CORPORATION & AFFILIATES", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "Apache-2.0"
@@ -82,7 +82,7 @@ SPDX-License-Identifier = "MIT"
 
 # Changes to Funnel, which is MIT-licensed.
 [[annotations]]
-path = ["reference-platform/images/funnel/0001-optional-tls-for-server-listeners-and-rpc-client.patch", "reference-platform/images/funnel/0002-per-task-worker-credentials.patch"]
+path = ["reference-platform/images/funnel/0001-optional-tls-for-server-listeners-and-rpc-client.patch", "reference-platform/images/funnel/0002-per-task-worker-credentials.patch", "reference-platform/images/funnel/0003-executor-template-gpu-count.patch"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2017 Oregon Health and Science University Computational Biology", "2026 Stanford University and the project authors (see CONTRIBUTORS.md)"]
 SPDX-License-Identifier = "MIT"

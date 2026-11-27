@@ -209,7 +209,7 @@ The [sandbox gateway](#sandbox-gateway), with these settings:
 | `server.drivers.kubernetes.workspaceMode` | `shared` | Sandboxes run in the gateway's own namespace, which is the namespace the manifest names. |
 | `supervisor.image.digest` and `sandboxRuntime.image.digest` | The digests in the manifest keys `supervisor_image_digest` and `sandbox_image_digest` | Admission compares the images the pods run. |
 | `replicaCount` | `1` | The driver serializes the operations on one sandbox inside one gateway process, and the deletion behavior it reports was examined and qualified with one replica. |
-| `mutation_admission_limit_per_caller` under `openshell.gateway` in `gatewayConfig` | `100000`, at most what the gateway's data volume holds | Heartwood sends each creation with a request identifier, and a creation without a recorded outcome keeps its admission slot for the life of the gateway's store. |
+| `mutation_admission_limit_per_caller` under `openshell.gateway` in `gatewayConfig` | `100000`, at most what the gateway's data volume holds | Heartwood sends each creation with a request identifier. A failed creation keeps its admission slot for the replay window, and a creation without a recorded outcome keeps it for the life of the gateway's store. |
 | `supervisor.network.additionalCaConfigMapName` | A ConfigMap with the certificate authority of the model route, when that authority is not publicly trusted | The supervisor makes the TLS connection to each destination the sandbox policy allows. |
 
 Each sandbox has its own supervisor pod; the shared supervisor topology is not qualified.
@@ -217,7 +217,7 @@ The driver's policy `openshell-sandbox-supervisors` allows supervisor pods all e
 
 ### Published Images
 
-For each main-branch commit that passes native qualification and the Kubernetes qualification and whose native evidence is attested, the [Native Qualification workflow](https://github.com/SchmiedmayerLab/heartwood/blob/main/.github/workflows/native-qualification.yml) publishes the images of the Kubernetes worker path to the GitHub Container Registry for `linux/amd64`:
+For each main-branch commit that passes native qualification and whose native evidence is attested, the [Native Qualification workflow](https://github.com/SchmiedmayerLab/heartwood/blob/main/.github/workflows/native-qualification.yml) publishes the images of the Kubernetes worker path to the GitHub Container Registry for `linux/amd64`:
 
 | Image | Content | Chart value |
 |---|---|---|
@@ -231,7 +231,9 @@ For each main-branch commit that passes native qualification and the Kubernetes 
 The workflow pushes each image once under the tag `sha-<commit>` and refuses to replace an existing tag.
 Registry tags can be moved by anyone with write access to the package, so a deployment names each image by digest.
 The images are built from the candidate wheels and the gateway build that the run qualified, with the same build steps.
-They are built again for publication, so their digests differ from those of the images the qualification ran.
+The Kubernetes qualification jobs install the published digests on kind. A successful main-branch qualification run confirms the cluster checks passed for those digests.
+For runtimes that report a platform manifest or configuration digest, supply `hub.worker.runtimeImages` from the cluster's trusted image inventory. The gateway uses the scheduled node name, container role and requested reference to select the evidence. It hashes the manifest bytes and checks the Linux/amd64 child and its config digest. Refresh the inventory when replacing nodes or rotating images. A deployment without this inventory requires the runtime to report the full requested reference.
+
 Each digest has a GitHub build provenance attestation of that run.
 The run's artifact `published-images-<commit>` records the digests and the worker image's interpreter, and has an attestation of its own.
 
@@ -252,7 +254,7 @@ Deploy the verified reference `${image}@${digest}`, never the tag.
 
 ### Sandbox Gateway
 
-Heartwood provides a sandbox gateway build: the upstream OpenShell gateway at the revision recorded in `images/worker/candidate/gateway.json`, with the patches listed there, both the Docker and the Kubernetes compute drivers, and version `0.1.9+heartwood.3`, a local version that no upstream release uses.
+Heartwood provides a sandbox gateway build: the upstream OpenShell gateway at the revision recorded in `images/worker/candidate/gateway.json`, with the patches listed there, both the Docker and the Kubernetes compute drivers, and version `0.1.9+heartwood.4`, a local version that no upstream release uses.
 Native qualification runs against this build on both drivers, and revocation and cleanup claims apply to this build only.
 The patches, their purpose and the upstream change that allows their removal are listed in [Testing and Evidence](../architecture/testing.md#candidate-builds).
 
@@ -266,7 +268,7 @@ uv run --no-project --python 3.12.15 deploy/build-worker-candidate.py \
   --gateway --gateway-tests --output gateway-build --cache gateway-cache
 ```
 
-The script verifies every source, patch and image input against its recorded digest, runs the gateway's deletion tests and the Kubernetes driver's tests, and writes `gateway-build-record.json`.
+The script verifies every source, patch and image input against its recorded digest, runs the gateway's deletion, request admission and image update tests and the Kubernetes driver's tests, and writes `gateway-build-record.json`.
 The record holds the purpose `deployable`, the version, the upstream source revision, the enabled driver features, the digests of the manifest and the build script, the binary digests and the image identifier.
 The image carries the labels `org.opencontainers.image.title=heartwood-sandbox-gateway`, `org.opencontainers.image.version` and `org.opencontainers.image.revision` with the same version and source revision.
 
@@ -328,11 +330,13 @@ It also needs a caller with a user identity, such as the mutual TLS client ident
 Otherwise every creation is refused before any work.
 Each admission holds one of the caller's admission slots, `mutation_admission_limit_per_caller` with a default of 1,000.
 A completed creation holds its slot until its replay window ends.
-A creation whose outcome the gateway did not record, such as a failed creation or a creation refused under a name confirmed absent, holds its slot for as long as the gateway's store keeps it, and OpenShell provides no operation that releases it.
+A failed creation, such as one refused under a name confirmed absent, is recorded with its status code and gateway reason and also holds its slot until its replay window ends; a repeated delivery within the window is refused with `FAILED_PRECONDITION` and reason `REQUEST_FAILED` and is not executed.
+The gateway records failed deletion, start, stop and update requests with a request identifier in the same way.
+A request whose outcome the gateway did not record, because the gateway stopped during the request or could not write the outcome, and a failed request of any other mutation hold their slot for as long as the gateway's store keeps it, and OpenShell provides no operation that releases it.
 The slots count every mutation with a request identifier from the same caller identity, also those of other clients that use the identity Heartwood uses at the sandbox gateway.
 When the slots are used up, the gateway refuses every such request with `RESOURCE_EXHAUSTED` before any work; it gives the same status in other cases before any work, such as while its admission workers are busy.
-Size the limit for the completed creations within the window plus every creation without a recorded outcome over the lifetime of the gateway's store.
-The reference platform sets `mutation_admission_limit_per_caller = 100000` in each session's sandbox gateway, because one researcher and project use one gateway and its store for the life of the session, and every creation without a recorded outcome stays counted.
+Size the limit for the creations within the window plus every request without a recorded outcome over the lifetime of the gateway's store.
+The reference platform sets `mutation_admission_limit_per_caller = 100000` in each session's sandbox gateway, because one researcher and project use one gateway and its store for the life of the session, and every request without a recorded outcome stays counted.
 An admission is a store row of under a kilobyte, so 100,000 rows fit well within the gateway's 1 GiB data volume.
 
 Some cases keep a name rejected until its record expires although a deletion found its sandbox: two concurrent deletions that both find the sandbox, contention on the record that outlasts the gateway's eight attempts, a store outage longer than the gateway's retries, an error on the deletion's second read, and a gateway crash between the record and its withdrawal.

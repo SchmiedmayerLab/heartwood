@@ -15,6 +15,7 @@ ledger, monitors no spending and submits no work.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import ssl
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -27,7 +28,11 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from heartwood.core_adapter.external_actions import ExternalOperationEstimate
+from heartwood.core_adapter.external_actions import (
+    ExternalActionError,
+    ExternalOperationEstimate,
+    canonical_request,
+)
 from heartwood.gateway._access import (
     AccessUnavailableError,
     ServiceTokens,
@@ -43,6 +48,7 @@ from heartwood.gateway._mcp_policy import (
 from heartwood.persistence import DurableFileError, LockedJsonlStore
 from heartwood.schemas import (
     BudgetObservation,
+    JsonValue,
     PlanningOverview,
     PlanningReference,
     PlatformAuthorization,
@@ -58,6 +64,8 @@ from heartwood.schemas.planning import (
     ElementReview,
     EstimateComparison,
     EstimateState,
+    ObservationEvidence,
+    PlanningAgentTools,
     PlanningEstimateRequest,
     PlanningOutcome,
     PlanningProjection,
@@ -71,6 +79,7 @@ if TYPE_CHECKING:
     from fastmcp.client.transports import StreamableHttpTransport
     from mcp.types import CallToolResult
     from openhands.sdk.mcp import MCPClient
+    from openhands.sdk.tool.client_tool import ClientToolSpec
 
     from heartwood.gateway.platform_conformance import McpEndpoint
 
@@ -87,6 +96,16 @@ type _Record = (
 
 BUDGET_TOOL = "get_budgets"
 ESTIMATE_TOOL = "estimate_workload"
+# The tools a worker's agent calls; each call runs only after the researcher reviews it.
+OVERVIEW_AGENT_TOOL = "planning_overview"
+ESTIMATE_AGENT_TOOL = "request_plan_estimate"
+PREDICTION_AGENT_TOOL = "record_plan_prediction"
+# The service identity of agent planning calls in outside-operation records.
+PLANNING_SERVICE_ID = "heartwood-planning"
+# The largest planning result released to an agent, as canonical JSON.
+AGENT_RESULT_BYTES = 48 * 1024
+# The request of a call refused before it runs; no planning tool takes this argument.
+_REFUSAL = "refusal"
 _TIMEOUT_SECONDS = 15.0
 _MAX_RESULT_BYTES = 256 * 1024
 _KINDS: dict[str, type[BaseModel]] = {
@@ -114,7 +133,7 @@ class PlanningRecordError(ValueError):
 
 
 class PlanningStateError(RuntimeError):
-    """The local planning journal is damaged and needs integrity recovery."""
+    """The local planning journal requires operator attention before it can be used."""
 
 
 class PlanningNotOfferedError(RuntimeError):
@@ -354,7 +373,7 @@ class PlanningJournal:
             if not check(_entries(objects)):
                 raise _RepeatError
             return {
-                "schema_version": "heartwood.planning-entry.v1",
+                "schema_version": "heartwood.planning-entry.v2",
                 "kind": kind,
                 "record": record.model_dump(mode="json"),
             }
@@ -367,15 +386,48 @@ class PlanningJournal:
             raise PlanningStateError("Planning records require integrity recovery") from None
 
 
+def _legacy_prediction(value: object) -> bool:
+    """Distinguish valid free-text v1 references from a damaged prediction."""
+    if not isinstance(value, dict) or not isinstance(value.get("evidence"), list):
+        return False
+    evidence = []
+    for item in value["evidence"]:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("reference"), str)
+            or not item["reference"].strip()
+        ):
+            return False
+        evidence.append({**item, "reference": "project://legacy"})
+    try:
+        WorkloadPrediction.model_validate_json(json.dumps({**value, "evidence": evidence}))
+    except ValidationError:
+        return False
+    return True
+
+
 def _entries(objects: tuple[dict[str, Any], ...]) -> tuple[_Entry, ...]:
     entries: list[_Entry] = []
     for sequence, item in enumerate(objects, 1):
         model = _KINDS.get(str(item.get("kind")))
-        if item.get("schema_version") != "heartwood.planning-entry.v1" or model is None:
+        version = item.get("schema_version")
+        if (
+            version not in ("heartwood.planning-entry.v1", "heartwood.planning-entry.v2")
+            or model is None
+        ):
             raise PlanningStateError("Persisted planning record is invalid")
         try:
             record = model.model_validate_json(json.dumps(item.get("record")))
         except ValidationError:
+            if (
+                version == "heartwood.planning-entry.v1"
+                and model is WorkloadPrediction
+                and _legacy_prediction(item.get("record"))
+            ):
+                raise PlanningStateError(
+                    "This planning journal uses earlier evidence references. Preserve the journal "
+                    "before starting a new one. See Research Planning in Troubleshooting."
+                ) from None
             raise PlanningStateError("Persisted planning record is invalid") from None
         entries.append(_Entry(sequence, cast(_Record, record)))
     return tuple(entries)
@@ -402,12 +454,27 @@ class PlatformPlanning:
     across threads and processes, and this object's lock guards the service status.
     """
 
-    def __init__(self, binding: PlatformPlanningBinding, *, journal_path: Path) -> None:
-        """Keep planning records in ``journal_path``; the binding's clock judges validity."""
+    def __init__(
+        self,
+        binding: PlatformPlanningBinding,
+        *,
+        journal_path: Path,
+        contains_file: Callable[[Path], bool],
+        run_ids: Callable[[], set[str]],
+        agent_tools_unavailable: McpServerError | None,
+    ) -> None:
+        """Keep planning records in ``journal_path``; the binding's clock judges validity.
+
+        ``agent_tools_unavailable`` is the diagnostic for why no session's agent receives
+        the planning tools, or None when worker sessions receive them.
+        """
         self.launch = binding.launch
         self.client = binding.client
         self.journal = PlanningJournal(journal_path)
         self.clock = binding.clock
+        self._contains_file = contains_file
+        self._run_ids = run_ids
+        self._agent_tools = _agent_tool_availability(agent_tools_unavailable)
         self._lock = Lock()
         self._discovery: PlanningDiscovery | None = None
         self._services = PlanningServices(budgets="unchecked", estimates="unchecked")
@@ -434,6 +501,19 @@ class PlatformPlanning:
         if prediction.project_context_id != self.launch.project_context_id:
             raise PlanningRecordError("The prediction belongs to another platform project context")
 
+        runs = {
+            item.reference.removeprefix("experiment-run:")
+            for item in prediction.evidence
+            if item.reference.startswith("experiment-run:")
+        }
+        if runs and not runs <= self._run_ids():
+            raise PlanningRecordError("Experiment run is not recorded in this project")
+        for item in prediction.evidence:
+            if item.reference.startswith("project://") and not self._contains_file(
+                Path(item.reference.removeprefix("project://"))
+            ):
+                raise PlanningRecordError("Evidence path is outside the research project")
+
         def check(entries: tuple[_Entry, ...]) -> bool:
             predictions = _predictions(entries)
             key = _key(prediction.prediction)
@@ -446,17 +526,36 @@ class PlatformPlanning:
                     raise PlanningRecordError(
                         "A later prediction revision must name the one it supersedes"
                     )
-                return True
-            superseded = predictions.get(_key(prediction.supersedes))
-            if superseded is None:
-                raise PlanningRecordError("The superseded prediction revision is not recorded")
-            if (
-                superseded.plan.record_id != prediction.plan.record_id
-                or superseded.plan.revision > prediction.plan.revision
-            ):
-                raise PlanningRecordError(
-                    "A revision must keep its plan and must not lower the plan revision"
-                )
+            else:
+                superseded = predictions.get(_key(prediction.supersedes))
+                if superseded is None:
+                    raise PlanningRecordError("The superseded prediction revision is not recorded")
+                if (
+                    superseded.plan.record_id != prediction.plan.record_id
+                    or superseded.plan.revision > prediction.plan.revision
+                ):
+                    raise PlanningRecordError(
+                        "A revision must keep its plan and must not lower the plan revision"
+                    )
+            cited = {
+                item.reference
+                for item in prediction.evidence
+                if item.reference.startswith("observation:")
+            }
+            if cited and not cited <= {
+                _observation_reference(record)
+                for record in _of(entries, PlatformOperationObservation)
+            }:
+                raise PlanningRecordError("Evidence operation observation is not recorded")
+            prior_predictions = {
+                item.reference
+                for item in prediction.evidence
+                if item.reference.startswith("prediction:")
+            }
+            if prior_predictions and not prior_predictions <= {
+                f"prediction:{name}@{number}" for name, number in predictions
+            }:
+                raise PlanningRecordError("Evidence prediction revision is not recorded")
             return True
 
         self.journal.append(prediction, self._scoped(check))
@@ -621,28 +720,230 @@ class PlatformPlanning:
         with self._lock:
             services = self._services
         outcomes = _service_outcomes(services)
+        observations = tuple(
+            ObservationEvidence(
+                reference=_observation_reference(record),
+                operation_id=record.operation_id,
+                service_id=record.service_id,
+                backend_operation_ref=record.backend_operation_ref,
+                observed_at=record.observed_at,
+                status=record.status,
+                platform_record_ref=record.platform_record_ref,
+            )
+            for record in _of(entries, PlatformOperationObservation)
+        )
         projected: list[PlanProjection] = []
         for plan_id in sorted(plans):
             revisions = sorted(
                 plans[plan_id],
                 key=lambda item: (item.plan.revision, _key(item.prediction)),
             )
-            views: list[PlanRevision] = []
+            by_prediction: dict[tuple[str, int], PlanRevision] = {}
             for prediction in revisions:
-                views.append(_revision(entries, prediction, views, now))
+                parent = (
+                    by_prediction[_key(prediction.supersedes)]
+                    if prediction.supersedes is not None
+                    else None
+                )
+                by_prediction[_key(prediction.prediction)] = _revision(
+                    entries, prediction, parent, now, observations
+                )
+            views = tuple(by_prediction.values())
             outcomes.extend(_revision_outcomes(views[-1]))
             projected.append(
-                PlanProjection(
-                    plan_id=plan_id, revisions=tuple(views), comparison=_comparison(views)
-                )
+                PlanProjection(plan_id=plan_id, revisions=views, comparison=_comparison(views))
             )
         return PlanningProjection(
             offered=True,
             launch=self.launch,
             services=services,
+            agent_tools=self._agent_tools,
             budgets=tuple(budgets[key] for key in sorted(budgets)),
             plans=tuple(projected),
             outcomes=tuple(outcomes),
+        )
+
+    # Agent tools
+
+    @property
+    def client_tools(self) -> tuple[ClientToolSpec, ...]:
+        """Return the fixed planning tools a worker's agent receives."""
+        return _agent_tools()
+
+    def agent_request(self, tool_name: str, arguments: dict[str, JsonValue]) -> tuple[str, str]:
+        """Check an agent's planning call and return its review summary and exact request.
+
+        Nothing is recorded or sent. A call this state refuses, such as a prediction for
+        another launch context or arguments the tool does not define, becomes a refusal:
+        its review names the reason, and once released the agent receives that reason.
+        """
+        try:
+            summary, content = self._agent_request(tool_name, arguments)
+            return summary, canonical_request(content)
+        except PlanningRecordError as error:
+            reason = str(error)
+        except ExternalActionError:
+            reason = "The planning call is invalid or exceeds the request size limit"
+        return f"Tell the agent its {tool_name} call was refused: {reason}"[
+            :512
+        ], canonical_request(json.dumps({_REFUSAL: reason}))
+
+    def _agent_request(self, tool_name: str, values: dict[str, JsonValue]) -> tuple[str, str]:
+        if tool_name == OVERVIEW_AGENT_TOOL and not values:
+            return "Read the platform planning overview", "{}"
+        if tool_name == PREDICTION_AGENT_TOOL and set(values) == {"prediction"}:
+            prediction = cast(WorkloadPrediction, _parsed(WorkloadPrediction, values["prediction"]))
+            if prediction.project_context_id != self.launch.project_context_id:
+                raise PlanningRecordError(
+                    "The prediction belongs to another platform project context"
+                )
+            reference = prediction.prediction
+            return (
+                f"Record workload prediction {reference.record_id} revision {reference.revision}"
+            )[:512], json.dumps({"prediction": prediction.model_dump(mode="json")})
+        if tool_name == ESTIMATE_AGENT_TOOL:
+            request = cast(PlanningEstimateRequest, _parsed(PlanningEstimateRequest, values))
+            reference = request.prediction
+            return (
+                f"Request a platform estimate for prediction {reference.record_id} "
+                f"revision {reference.revision}"
+            )[:512], request.model_dump_json()
+        raise PlanningRecordError("The arguments do not match the planning tool")
+
+    def agent_call(
+        self, tool_name: str, request_json: str, *, operation_id: str
+    ) -> PlatformOperationObservation:
+        """Run a reviewed planning call through the same methods every interface uses.
+
+        The result is the planning overview afterwards. A refusal, a refused record or a
+        journal that needs recovery is reported as a failed call with the reason; a
+        refusal records and contacts nothing.
+        """
+        request = json.loads(request_json)
+        if _REFUSAL in request:
+            return self._agent_failure(tool_name, operation_id, str(request[_REFUSAL]))
+        try:
+            if tool_name == OVERVIEW_AGENT_TOOL:
+                self.refresh()
+            elif tool_name == PREDICTION_AGENT_TOOL:
+                self.record_prediction(
+                    WorkloadPrediction.model_validate_json(json.dumps(request["prediction"]))
+                )
+            elif tool_name == ESTIMATE_AGENT_TOOL:
+                self.request_estimate(PlanningEstimateRequest.model_validate_json(request_json))
+            else:
+                raise PlanningRecordError("This is not a planning tool")
+            return self.agent_observation(tool_name, operation_id=operation_id)
+        except (PlanningRecordError, PlanningStateError) as error:
+            return self._agent_failure(tool_name, operation_id, str(error))
+
+    def agent_observation(
+        self, tool_name: str, *, operation_id: str, limitation: str | None = None
+    ) -> PlatformOperationObservation:
+        """Report the current planning overview as a completed call; this contacts nothing.
+
+        An overview larger than an agent result keeps the latest revision of each plan,
+        and then no revisions; service status, budgets and outcomes remain, and the call
+        fails only when they alone exceed the limit.
+        """
+        try:
+            full = _agent_view(self.projection(), self.launch)
+        except PlanningStateError as error:
+            return self._agent_failure(tool_name, operation_id, str(error))
+        plans = cast(list[dict[str, Any]], full["plans"])
+        latest = [{**plan, "revisions": plan["revisions"][-1:]} for plan in plans]
+        shortened = (
+            "The overview lists only the latest revision of each plan; "
+            "the researcher can read every revision in the browser, terminal or notebook."
+        )
+        omitted = (
+            "The overview lists no plan revisions because they exceed an agent result; "
+            "the researcher can read them in the browser, terminal or notebook."
+        )
+        for view, note in (
+            (full, None),
+            ({**full, "plans": cast(JsonValue, latest)}, shortened),
+            ({**full, "plans": []}, omitted),
+        ):
+            notes = tuple(item for item in (limitation, note) if item is not None)
+            observation = PlatformOperationObservation(
+                project_context_id=self.launch.project_context_id,
+                operation_id=operation_id,
+                service_id=PLANNING_SERVICE_ID,
+                backend_operation_ref=tool_name,
+                observed_at=self.clock(),
+                status="completed",
+                platform_record_ref=f"planning:{operation_id}",
+                limitations=notes,
+                result=view,
+            )
+            released = json.dumps(
+                observation.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            )
+            if len(released.encode()) <= AGENT_RESULT_BYTES:
+                return observation
+        return self._agent_failure(
+            tool_name,
+            operation_id,
+            "The planning overview is larger than an agent result; "
+            "the researcher can read it in the browser, terminal or notebook.",
+        )
+
+    def agent_outcome(
+        self, tool_name: str, request_json: str, *, operation_id: str
+    ) -> PlatformOperationObservation:
+        """Report a call whose outcome was not recorded, without running it again.
+
+        A prediction counts as recorded only when the journal holds that exact revision;
+        for an estimate the result says whether the journal holds one for the revision,
+        scope and elements.
+        """
+        request = json.loads(request_json)
+        if _REFUSAL in request:
+            return self._agent_failure(tool_name, operation_id, str(request[_REFUSAL]))
+        note = "The outcome of this call was not observed; this is the current planning overview."
+        try:
+            if tool_name == PREDICTION_AGENT_TOOL:
+                prediction = WorkloadPrediction.model_validate_json(
+                    json.dumps(request["prediction"])
+                )
+                if _predictions(self._entries()).get(_key(prediction.prediction)) != prediction:
+                    return self._agent_failure(
+                        tool_name, operation_id, "The prediction revision was not recorded"
+                    )
+            elif tool_name == ESTIMATE_AGENT_TOOL:
+                estimate = PlanningEstimateRequest.model_validate_json(request_json)
+                held = any(
+                    _key(item.prediction) == _key(estimate.prediction)
+                    and item.scope == estimate.scope
+                    and (
+                        estimate.scope == "plan"
+                        or set(item.covered_element_ids) == set(estimate.element_ids)
+                    )
+                    for item in _of(self._entries(), PlatformEstimate)
+                )
+                note = (
+                    "The outcome of this call was not observed. The journal "
+                    + ("holds an" if held else "holds no")
+                    + " estimate for this revision, scope and elements; this is the current "
+                    "planning overview."
+                )
+        except PlanningStateError as error:
+            return self._agent_failure(tool_name, operation_id, str(error))
+        return self.agent_observation(tool_name, operation_id=operation_id, limitation=note)
+
+    def _agent_failure(
+        self, tool_name: str, operation_id: str, reason: str
+    ) -> PlatformOperationObservation:
+        return PlatformOperationObservation(
+            project_context_id=self.launch.project_context_id,
+            operation_id=operation_id,
+            service_id=PLANNING_SERVICE_ID,
+            backend_operation_ref=tool_name,
+            observed_at=self.clock(),
+            status="failed",
+            platform_record_ref=f"planning:{operation_id}",
+            limitations=(reason,),
         )
 
     def _entries(self) -> tuple[_Entry, ...]:
@@ -669,7 +970,8 @@ class PlatformPlanning:
             raise PlanningRecordError("The record belongs to another platform project context")
 
         def check(entries: tuple[_Entry, ...]) -> bool:
-            if any(_identity(item.record) == _identity(record) for item in entries):
+            identity = _identity(record)
+            if any(_identity(item.record) == identity for item in entries):
                 if any(item.record == record for item in entries):
                     return False
                 raise PlanningRecordError("A different record with this identity is linked")
@@ -727,45 +1029,32 @@ def _next(entries: tuple[_Entry, ...]) -> int:
     return entries[-1].sequence + 1 if entries else 1
 
 
+def _observation_reference(record: PlatformOperationObservation) -> str:
+    content = json.dumps(record.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return "observation:" + hashlib.sha256(content.encode()).hexdigest()
+
+
 def _revision(
     entries: tuple[_Entry, ...],
     prediction: WorkloadPrediction,
-    earlier: Sequence[PlanRevision],
+    previous: PlanRevision | None,
     now: datetime,
+    observations: tuple[ObservationEvidence, ...],
 ) -> PlanRevision:
     """Project one revision; an unchanged element keeps the approval of its last revision."""
     overview = _overview(entries, prediction)
-    reviews = _element_reviews(overview)
-    previous = earlier[-1] if earlier else None
-    elements: list[ElementReview] = []
-    for element in prediction.elements:
-        review = reviews[element.element_id]
-        if review.review == "requires-review" and previous is not None:
-            before = next(
-                (
-                    (item, state)
-                    for item, state in zip(
-                        previous.overview.prediction.elements, previous.elements, strict=True
-                    )
-                    if item.element_id == element.element_id
-                ),
-                None,
-            )
-            if (
-                before is not None
-                and before[0] == element
-                and before[1].review in {"approved", "unchanged-since-approval"}
-            ):
-                review = review.model_copy(
-                    update={
-                        "review": "unchanged-since-approval",
-                        "approved_in": before[1].approved_in,
-                    }
-                )
-        elements.append(review)
+    operations = {item.operation_id for item in overview.operations}
+    cited = {
+        item.reference for item in prediction.evidence if item.reference.startswith("observation:")
+    }
     return PlanRevision(
+        observation_evidence=tuple(
+            item
+            for item in observations
+            if item.operation_id in operations or item.reference in cited
+        ),
         overview=overview,
-        elements=tuple(elements),
+        elements=_element_reviews(overview, previous),
         estimates=tuple(
             EstimateState(
                 estimate_id=item.estimate_id,
@@ -832,8 +1121,7 @@ def _identity(record: _Record) -> tuple[str, ...]:
     if isinstance(record, PlatformAuthorization):
         return ("authorization", record.authorization_id)
     if isinstance(record, PlatformOperationObservation):
-        # Each observation of an operation is kept; the latest one is shown.
-        return ("operation", record.operation_id, record.observed_at.isoformat(), record.status)
+        return ("operation", _observation_reference(record))
     # Predictions, estimates and budgets have their own repeat checks.
     return ("unlinked",)
 
@@ -852,7 +1140,11 @@ def _prediction_for(entries: tuple[_Entry, ...], record: _Record) -> WorkloadPre
             (
                 item
                 for item in sets
-                if any(op.operation_id == record.operation_id for op in item.proposal.operations)
+                if any(
+                    op.operation_id == record.operation_id
+                    and op.request.service_id == record.service_id
+                    for op in item.proposal.operations
+                )
             ),
             None,
         )
@@ -873,7 +1165,10 @@ def _overview(entries: tuple[_Entry, ...], prediction: WorkloadPrediction) -> Pl
     operations = {op.operation_id for item in sets for op in item.proposal.operations}
     latest: dict[str, PlatformOperationObservation] = {}
     for observation in _of(entries, PlatformOperationObservation):
-        if observation.operation_id in operations:
+        if observation.operation_id not in operations:
+            continue
+        current = latest.get(observation.operation_id)
+        if current is None or observation.observed_at >= current.observed_at:
             latest[observation.operation_id] = observation
     return PlanningOverview(
         prediction=prediction,
@@ -907,7 +1202,9 @@ def _answers(
     )
 
 
-def _element_reviews(overview: PlanningOverview) -> dict[str, ElementReview]:
+def _element_reviews(
+    overview: PlanningOverview, previous: PlanRevision | None
+) -> tuple[ElementReview, ...]:
     """Derive each element's researcher review and platform authorization state."""
     decisions: dict[tuple[str, int], ResearcherDecision] = {}
     for decision in sorted(overview.researcher_decisions, key=lambda item: item.decided_at):
@@ -915,7 +1212,24 @@ def _element_reviews(overview: PlanningOverview) -> dict[str, ElementReview]:
     authorizations: dict[tuple[str, int], PlatformAuthorization] = {}
     for authorization in sorted(overview.authorizations, key=lambda item: item.observed_at):
         authorizations[_key(authorization.proposal)] = authorization
-    reviews: dict[str, ElementReview] = {}
+    inherited: dict[str, PlanningReference] = {}
+    if previous is not None:
+        predecessor = previous.overview.prediction
+        prior_evidence = {item.evidence_id: item for item in predecessor.evidence}
+        unchanged_evidence = {
+            item.evidence_id
+            for item in overview.prediction.evidence
+            if prior_evidence.get(item.evidence_id) == item
+        }
+        current = {item.element_id: item for item in overview.prediction.elements}
+        for element, review in zip(predecessor.elements, previous.elements, strict=True):
+            if (
+                review.approved_in is not None
+                and current.get(element.element_id) == element
+                and unchanged_evidence.issuperset(element.evidence_ids)
+            ):
+                inherited[element.element_id] = review.approved_in
+    reviews: list[ElementReview] = []
     for element in overview.prediction.elements:
         covering = [
             item
@@ -939,21 +1253,29 @@ def _element_reviews(overview: PlanningOverview) -> dict[str, ElementReview]:
             key=lambda item: item.observed_at,
         )
         latest = decided[-1].decision if decided else None
-        reviews[element.element_id] = ElementReview(
-            element_id=element.element_id,
-            kind=element.kind,
-            runtime_profile_ref=element.runtime_profile_ref,
-            review=(
-                "approved"
-                if latest == "approved"
-                else "denied"
-                if latest == "denied"
-                else "requires-review"
-            ),
-            approved_in=overview.prediction.prediction if latest == "approved" else None,
-            platform=authorized[-1].status if authorized else "not-requested",
+        approved_in = None
+        state: Literal["approved", "denied", "unchanged-since-approval", "requires-review"]
+        if latest == "approved":
+            state = "approved"
+            approved_in = overview.prediction.prediction
+        elif latest == "denied":
+            state = "denied"
+        elif latest is None and element.element_id in inherited:
+            state = "unchanged-since-approval"
+            approved_in = inherited[element.element_id]
+        else:
+            state = "requires-review"
+        reviews.append(
+            ElementReview(
+                element_id=element.element_id,
+                kind=element.kind,
+                runtime_profile_ref=element.runtime_profile_ref,
+                review=state,
+                approved_in=approved_in,
+                platform=authorized[-1].status if authorized else "not-requested",
+            )
         )
-    return reviews
+    return tuple(reviews)
 
 
 def _budget_changed(entries: tuple[_Entry, ...], estimate: PlatformEstimate) -> bool:
@@ -1059,14 +1381,158 @@ def _outcome(check_id: str, subject: str) -> PlanningOutcome:
     )
 
 
+_REVIEWED = (
+    "\n\nThe researcher reviews the call before it runs, and the result arrives later as a "
+    "separate message."
+)
+
+
+def _parsed(model: type[BaseModel], value: object) -> BaseModel:
+    try:
+        return model.model_validate_json(json.dumps(value))
+    except (ValidationError, ValueError, TypeError):
+        raise PlanningRecordError("The arguments do not match the planning tool") from None
+
+
+def _agent_tools() -> tuple[ClientToolSpec, ...]:
+    from openhands.sdk.tool.client_tool import ClientToolSpec
+
+    # The record's own schema, with its definitions where the references resolve.
+    prediction = WorkloadPrediction.model_json_schema()
+    reference = {
+        "type": "object",
+        "description": "The recorded prediction revision.",
+        "properties": {
+            "record_id": {"type": "string"},
+            "revision": {"type": "integer", "minimum": 1},
+        },
+        "required": ["record_id", "revision"],
+        "additionalProperties": False,
+    }
+    return (
+        ClientToolSpec(
+            name=OVERVIEW_AGENT_TOOL,
+            description=(
+                "Report which planning capabilities this platform offers, budgets and "
+                "estimates, each as available, not-offered, unavailable or refused, or "
+                "unchecked before the first discovery. Also "
+                "return the latest budget observations with their observation times, the "
+                "recorded prediction revisions with their platform estimates and element "
+                "reviews, observation references for evidence, and planning outcomes. Call "
+                "it before relying on a budget or an estimate: a platform may offer neither."
+                + _REVIEWED
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        ClientToolSpec(
+            name=PREDICTION_AGENT_TOOL,
+            description=(
+                "Record one immutable workload prediction revision for this launch context. "
+                "The prediction is a heartwood.workload-prediction.v1 record whose "
+                "project_context_id is the one planning_overview reports; a later revision "
+                "names the revision it supersedes." + _REVIEWED
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prediction": {
+                        key: value for key, value in prediction.items() if key != "$defs"
+                    }
+                },
+                "required": ["prediction"],
+                "additionalProperties": False,
+                "$defs": prediction["$defs"],
+            },
+        ),
+        ClientToolSpec(
+            name=ESTIMATE_AGENT_TOOL,
+            description=(
+                "Ask the platform to estimate a recorded prediction revision, for the whole "
+                "plan or for named elements. Call it only when planning_overview reports "
+                "estimates as available. The platform reserves, charges and runs nothing."
+                + _REVIEWED
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prediction": reference,
+                    "scope": {"type": "string", "enum": ["plan", "elements"]},
+                    "element_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Elements to estimate; only for elements scope.",
+                    },
+                },
+                "required": ["prediction"],
+                "additionalProperties": False,
+            },
+        ),
+    )
+
+
+def _agent_view(
+    projection: PlanningProjection, launch: PlatformLaunchContext
+) -> dict[str, JsonValue]:
+    """Keep what an agent plans with; proposals, decisions and launch details stay out."""
+    plans: list[JsonValue] = []
+    for plan in projection.plans:
+        revisions: list[JsonValue] = []
+        for revision in plan.revisions:
+            prediction = revision.overview.prediction
+            states = {item.estimate_id: item for item in revision.estimates}
+            revisions.append(
+                {
+                    "prediction": prediction.prediction.model_dump(mode="json"),
+                    "plan": prediction.plan.model_dump(mode="json"),
+                    "elements": [item.model_dump(mode="json") for item in revision.elements],
+                    "estimates": [
+                        {
+                            **item.model_dump(mode="json"),
+                            "state": states[item.estimate_id].state,
+                            "budget_changed": states[item.estimate_id].budget_changed,
+                        }
+                        for item in revision.overview.estimates
+                    ],
+                    "observation_evidence": [
+                        item.model_dump(mode="json") for item in revision.observation_evidence
+                    ],
+                }
+            )
+        plans.append({"plan_id": plan.plan_id, "revisions": revisions})
+    return {
+        "project_context_id": launch.project_context_id,
+        "services": None
+        if projection.services is None
+        else projection.services.model_dump(mode="json"),
+        "budgets": [item.model_dump(mode="json") for item in projection.budgets],
+        "plans": plans,
+        "outcomes": [item.model_dump(mode="json") for item in projection.outcomes],
+    }
+
+
+def _agent_tool_availability(unavailable: McpServerError | None) -> PlanningAgentTools:
+    if unavailable is None:
+        return PlanningAgentTools(availability="available")
+    return PlanningAgentTools(
+        availability="unavailable",
+        unavailable_reason=unavailable.detail,
+        unavailable_code=unavailable.code,
+    )
+
+
 def not_offered_projection() -> PlanningProjection:
     """Return the projection of a deployment without a planning service."""
     return PlanningProjection(offered=False)
 
 
 __all__ = [
+    "AGENT_RESULT_BYTES",
     "BUDGET_TOOL",
+    "ESTIMATE_AGENT_TOOL",
     "ESTIMATE_TOOL",
+    "OVERVIEW_AGENT_TOOL",
+    "PLANNING_SERVICE_ID",
+    "PREDICTION_AGENT_TOOL",
     "HostedPlanningClient",
     "McpPlanningClient",
     "PlanningDeployment",

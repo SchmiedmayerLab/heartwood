@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from hub import ORIGIN, Browser, gateway_pods, wait_for_gateway
+from hub import Browser, gateway_pods, wait_for_gateway
 from identity import FIRST, PLATFORM, SECOND, SESSIONS, probe, researcher
 from kube import Cluster
 
@@ -167,6 +167,78 @@ def test_the_researcher_opens_the_gateway_through_the_hubs_proxy(server: Server)
     server.recorded = created
     status, sessions = server.first.api(_base(), "GET", "/sessions", server.capability)
     assert status == 200, sessions
+
+
+# Run in the Hub's container: each request to the Hub and to the gateway, plain and over
+# TLS, and what answered. A TLS client trusts the platform CA alone.
+_HOPS = """
+import http.client, json, socket, ssl, sys
+tls = "/usr/local/etc/heartwood/hub/tls"
+gateway, path = sys.argv[1], sys.argv[2]
+
+def answer(connection, target):
+    try:
+        connection.request("GET", target)
+        return connection.getresponse().status
+    except (OSError, http.client.HTTPException) as error:
+        return type(error).__name__
+    finally:
+        connection.close()
+
+def context(client):
+    created = ssl.create_default_context(cafile=tls + "/hub-ca/hub-ca.crt")
+    if client:
+        created.load_cert_chain(tls + "/hub-internal/hub-internal.crt",
+                                tls + "/hub-internal/hub-internal.key")
+    return created
+
+def secure(host, port, client):
+    return http.client.HTTPSConnection(host, port, context=context(client), timeout=10)
+
+def peer(host, port):
+    with socket.create_connection((host, port), timeout=10) as raw:
+        with context(False).wrap_socket(raw, server_hostname=host) as wrapped:
+            names = [value for kind, value in wrapped.getpeercert()["subjectAltName"]]
+            return sorted(names)
+
+print(json.dumps({
+    "hub plain": answer(http.client.HTTPConnection("localhost", 8081, timeout=10), "/hub/health"),
+    "hub without client certificate": answer(secure("localhost", 8081, False), "/hub/health"),
+    "hub": answer(secure("localhost", 8081, True), "/hub/health"),
+    "gateway plain": answer(http.client.HTTPConnection(gateway, 8888, timeout=10), path),
+    "gateway": answer(secure(gateway, 8888, False), path),
+    "gateway names": peer(gateway, 8888),
+}))
+"""
+
+# Run in the proxy's container: a plain HTTP request to the Hub.
+_PROXY_PLAIN = (
+    "require('http').get('http://hub:8081/hub/health', r => console.log(r.statusCode))"
+    ".on('error', e => console.log(e.code || e.message))"
+)
+
+
+def test_the_hub_and_the_gateway_answer_only_over_tls(server: Server, cluster: Cluster) -> None:
+    gateway = f"hw-gw-{server.session}.hw-gateways.{SESSIONS}.svc.cluster.local"
+    result = cluster.kubectl(
+        "exec", f"--namespace={PLATFORM}", "deployment/hub", "--container=hub", "--",
+        "python3", "-I", "-c", _HOPS, gateway, f"{_base()}/",
+    )  # fmt: skip
+    assert result.returncode == 0, result.stderr
+    answers = json.loads(result.stdout)
+    # A plain request and a TLS client without a certificate get no HTTP answer.
+    for hop in ("hub plain", "hub without client certificate", "gateway plain"):
+        assert not isinstance(answers[hop], int), (hop, answers[hop])
+    assert answers["hub"] == 200
+    assert isinstance(answers["gateway"], int)
+    assert answers["gateway"] < 500
+    # The gateway's certificate carries its names under the gateways' Service alone.
+    assert answers["gateway names"] == sorted([gateway, gateway.removesuffix(".cluster.local")])
+    proxied = cluster.kubectl(
+        "exec", f"--namespace={PLATFORM}", "deployment/proxy", "--", "node", "-e", _PROXY_PLAIN
+    )
+    assert proxied.returncode == 0, proxied.stderr
+    assert not proxied.stdout.strip().isdigit(), proxied.stdout
 
 
 def test_the_gateway_plans_with_an_exchanged_token_over_tls(server: Server) -> None:
@@ -373,6 +445,9 @@ def test_the_hub_creates_only_gateway_pods_of_the_admitted_shape(
         ),
         ("mounts only its session's Secret", changed(volumes=other_secret)),
         ("hw-gw-<session>", changed(serviceAccountName="default")),
+        # Another session's name, which that session's certificate carries.
+        ("host name hw-gw-<session>", changed(hostname="hw-gw-0000000000000000")),
+        ("host name hw-gw-<session>", changed(subdomain="other")),
         # The restricted Pod Security Standard of the namespace refuses it first.
         ("PodSecurity", changed(hostNetwork=True)),
         ("no exec probe", changed(containers=probe_exec)),
@@ -427,7 +502,8 @@ def test_the_hub_creates_only_its_own_volume_claims_and_nothing_elsewhere(
 def test_the_idle_culler_stops_the_server_and_keeps_the_session(
     server: Server, cluster: Cluster
 ) -> None:
-    deadline = time.monotonic() + 420
+    # The cull timeout, the Hub's activity refresh and one culler interval, with margin.
+    deadline = time.monotonic() + 600
     while gateway_pods(cluster, server.session) and time.monotonic() < deadline:
         time.sleep(10)
     assert not gateway_pods(cluster, server.session), "the culler did not stop the server"
@@ -458,7 +534,7 @@ def test_a_restart_recovers_the_session(server: Server) -> None:
     assert status == 200, sessions
     listed = json.dumps(sessions)
     assert server.recorded["session_id"] in listed, (server.recorded, sessions)
-    status, _, _ = server.first.get(f"{ORIGIN}{_base()}/")
+    status, _, _ = server.first.get(f"{_base()}/")
     assert status == 200
 
 
@@ -482,3 +558,13 @@ def test_deleting_the_named_server_removes_the_session(server: Server, cluster: 
         )
         result = cluster.kubectl("get", f"--namespace={SESSIONS}", kind, name)
         assert result.returncode != 0, (kind, result.stdout)
+
+
+def test_hub_logout_requires_a_new_hub_sign_in(server: Server) -> None:
+    status, _, _ = server.first.get("/hub/logout")
+    assert status in {200, 302}
+    status, location, _ = server.first.get("/hub/home")
+    assert status == 302
+    assert "/hub/login" in location or "/hub/oauth_login" in location
+    server.first.sign_in_to_hub()
+    assert server.first.get("/hub/home")[0] == 200

@@ -382,7 +382,6 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     smoke = Path(".github/workflows/container-smoke.yml").read_text(encoding="utf-8")
     gpu = Path(".github/workflows/gpu-container-pr-validation.yml").read_text(encoding="utf-8")
     capable = Path(".github/workflows/capable-model.yml").read_text(encoding="utf-8")
-    dependabot = Path(".github/dependabot.yml").read_text(encoding="utf-8")
 
     assert "Container Images" not in pull_request
     assert "GPU Coding-Agent Qualification" not in pull_request
@@ -406,8 +405,26 @@ def test_pull_request_validation_has_no_optional_job_placeholders() -> None:
     assert "uses: docker/bake-action@" in gpu
     assert "cache-from=type=gha" not in gpu
     assert "cache-to=type=gha" not in gpu
-    assert dependabot.count('multi-ecosystem-group: "weekly-dependencies"') == 4
-    assert dependabot.count("default-days: 7") == 4
+
+
+def test_dependency_updates_share_the_weekly_group_and_cooldown() -> None:
+    config = _workflow(".github/dependabot.yml")
+    group = config["multi-ecosystem-groups"]["weekly-dependencies"]
+    assert group["schedule"]["interval"] == "weekly"
+    updates = config["updates"]
+    by_ecosystem = {entry["package-ecosystem"]: entry for entry in updates}
+    assert set(by_ecosystem) == {"docker", "github-actions", "npm", "opentofu", "uv"}
+    assert set(by_ecosystem["docker"]["directories"]) == {
+        "/images",
+        "/images/platform",
+        "/images/worker/candidate",
+        "/reference-platform/images/funnel",
+        "/reference-platform/services",
+    }
+    assert by_ecosystem["opentofu"]["directory"] == "/reference-platform/infrastructure/gke"
+    for entry in updates:
+        assert entry["multi-ecosystem-group"] == "weekly-dependencies"
+        assert entry["cooldown"]["default-days"] == "7"
 
 
 def test_only_capable_model_acceptance_and_the_end_to_end_stage_use_the_large_runner() -> None:

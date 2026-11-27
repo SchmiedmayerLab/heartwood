@@ -99,6 +99,9 @@ SPDX-License-Identifier: MIT
 **FinOps Open Cost and Usage Specification (FOCUS)**
 : A vendor-neutral specification for technology cost and usage data; its pricing and cost definitions inform the platform contract without replacing platform estimation, authorization, or spending controls.
 
+**Funnel**
+: An open-source implementation of the GA4GH Task Execution Service; the Kubernetes reference platform runs one Funnel server per project as the executor of batch tasks.
+
 **GGUF**
 : A single-file model format commonly used with llama.cpp and quantized CPU inference.
 
@@ -132,6 +135,9 @@ SPDX-License-Identifier: MIT
 **JupyterHub**
 : A server that signs users in and starts one server process for each of them; the Kubernetes reference platform uses it to start one Heartwood gateway per researcher and project.
 
+**Keycloak**
+: An open-source identity provider; the Kubernetes reference platform uses it for researcher sign-in and for exchanging researcher tokens for platform service tokens.
+
 **Key management service (KMS)**
 : A managed service that controls cryptographic keys and performs authorized operations such as checkpoint signing without exposing private key material to Heartwood.
 
@@ -153,6 +159,9 @@ SPDX-License-Identifier: MIT
 **Launch context**
 : A platform-issued record that binds a Heartwood gateway to a platform project and its billing or grant attribution, separate from the local research directory.
 
+**LiteLLM**
+: An open-source proxy that offers many model providers behind one OpenAI-compatible API; the Kubernetes reference platform routes worker inference through it with one budgeted virtual key per session.
+
 **Local launch**
 : Running `heartwood`, `heartwood gateway serve` without `--deployment`, or a notebook in a project folder: state lives in `.heartwood/` and agent tools run with the user's own permissions.
 
@@ -170,6 +179,9 @@ SPDX-License-Identifier: MIT
 
 **Model transfer bundle**
 : A reproducible Heartwood ZIP64 artifact containing one model's immutable source metadata, runtime settings, selected files, and per-file SHA-256 digests for verified import into another project.
+
+**Mountpoint**
+: Mountpoint for Amazon S3, a client that mounts an S3 bucket as a file system, with a CSI driver for Kubernetes; the Kubernetes reference platform uses it for read-only volumes of granted dataset versions.
 
 **Mutual TLS (mTLS)**
 : Transport Layer Security configured so both the client and server authenticate with certificates trusted by the other side.
@@ -308,6 +320,12 @@ SPDX-License-Identifier: MIT
 
 **uv**
 : A Python package and environment manager used by Heartwood to install locked analysis dependencies in a separate environment.
+
+**ValidatingAdmissionPolicy**
+: A Kubernetes resource that accepts or refuses API requests by declarative rules; the Kubernetes reference platform uses such policies to confine what its principals create, bind or open, including in namespaces created at run time.
+
+**versitygw**
+: An open-source S3-compatible object store gateway; the Kubernetes reference platform runs it in the cluster for project data and job results.
 
 **vLLM**
 : A GPU-oriented inference server used by supported Heartwood NVIDIA deployments.

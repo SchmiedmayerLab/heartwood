@@ -1,0 +1,559 @@
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs b/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
+index 598b2256b2042a6eeea777978d8874cd7f269ff6..199fc8f2a5a01f3009d54af6e874a48194ab0e88 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/ordinary.rs
+@@ -392,7 +392,7 @@ macro_rules! scoped_mutation {
+ }
+ 
+ macro_rules! sandbox_scoped_mutation {
+-    ($req:ty, $resp:ty, $method:literal, $handler:path, $role:ident, $capture:expr, $restore:expr $(, $replay_method:literal)?) => {
++    ($req:ty, $resp:ty, $method:literal, $handler:path, $role:ident, $capture:expr, $restore:expr $(, $replay_method:literal)? $(; record_failures = $record:literal)?) => {
+         mutation!(
+             $req,
+             $resp,
+@@ -410,6 +410,7 @@ macro_rules! sandbox_scoped_mutation {
+             $capture,
+             $restore
+             $(, $replay_method)?
++            $(; record_failures = $record)?
+         );
+     };
+ }
+@@ -427,7 +428,7 @@ fn sandbox_receipt(
+ }
+ 
+ macro_rules! sandbox_mutation {
+-    ($req:ty, $method:literal, $handler:path $(, $replay_method:literal)?) => {
++    ($req:ty, $method:literal, $handler:path $(, $replay_method:literal)? $(; record_failures = $record:literal)?) => {
+         sandbox_scoped_mutation!(
+             $req,
+             SandboxResponse,
+@@ -449,6 +450,7 @@ macro_rules! sandbox_mutation {
+                 })
+             }
+             $(, $replay_method)?
++            $(; record_failures = $record)?
+         );
+     };
+ }
+@@ -479,21 +481,26 @@ scoped_mutation!(
+     // the original code; the caller lists the workspace to learn what remains.
+     record_failures = true
+ );
++// Start, stop and update record failures as creation does. The sandbox stays
++// readable, and a pending update after a failure is resumed with a new ID.
+ sandbox_mutation!(
+     openshell_core::proto::UpdateSandboxRequest,
+     "UpdateSandbox",
+     sandbox::handle_update_sandbox,
+-    "/openshell.v1.SandboxUpdates/UpdateSandbox"
++    "/openshell.v1.SandboxUpdates/UpdateSandbox";
++    record_failures = true
+ );
+ sandbox_mutation!(
+     StartSandboxRequest,
+     "StartSandbox",
+-    sandbox::handle_start_sandbox
++    sandbox::handle_start_sandbox;
++    record_failures = true
+ );
+ sandbox_mutation!(
+     StopSandboxRequest,
+     "StopSandbox",
+-    sandbox::handle_stop_sandbox
++    sandbox::handle_stop_sandbox;
++    record_failures = true
+ );
+ 
+ macro_rules! attachment_mutation {
+diff --git a/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs b/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
+index e4aae6a42eab9a2c0220d29d26ad05ba3d560d37..33594d84c1a5dfbc99ae2dd2b18f7e49706184fd 100644
+--- a/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
++++ b/crates/openshell-server/src/grpc/mutation_replay/ordinary/tests.rs
+@@ -141,6 +141,7 @@ pub(in crate::grpc::mutation_replay) async fn exercise_protected_backend(url: &s
+ }
+ 
+ fn assert_replayed_failure(status: &Status, code: Code) {
++    assert_eq!(status.code(), Code::FailedPrecondition);
+     assert_eq!(reason(status), "REQUEST_FAILED");
+     assert_eq!(status.metadata().get("openshell-replayed").unwrap(), "true");
+     assert_eq!(
+@@ -284,13 +285,219 @@ async fn failed_sandbox_creation_and_deletion_release_their_slots_after_the_wind
+     );
+ }
+ 
++#[tokio::test]
++async fn failed_sandbox_start_stop_and_update_record_their_failures() {
++    let (_directory, mut state) = protected_state().await;
++    {
++        let state = Arc::get_mut(&mut state).unwrap();
++        state.config.mutation_admission_limit_per_caller = 3;
++        state.admin_role = "openshell-admin".into();
++    }
++    let mut existing = create_sandbox("lifecycle");
++    existing.request_id = String::new();
++    let sandbox = run(&state, authed_request(existing))
++        .await
++        .unwrap()
++        .into_inner()
++        .sandbox
++        .unwrap();
++    let sandbox = state
++        .store
++        .update_message_cas::<Sandbox, _>(
++            sandbox.object_id(),
++            sandbox.get_resource_version(),
++            |sandbox| sandbox.set_phase(SandboxPhase::Stopped as i32),
++        )
++        .await
++        .unwrap();
++    let scope = || Some(openshell_core::proto::workspace_selector("default"));
++    let start = StartSandboxRequest {
++        name: "missing".into(),
++        workspace_scope: scope(),
++        request_id: id(),
++    };
++    let stop = StopSandboxRequest {
++        name: "missing".into(),
++        workspace_scope: scope(),
++        request_id: id(),
++    };
++    // A stale resource version fails before any driver call.
++    let update = openshell_core::proto::UpdateSandboxRequest {
++        name: "lifecycle".into(),
++        workspace_scope: scope(),
++        labels: Some(openshell_core::proto::SandboxMapUpdate {
++            values: HashMap::from([("team".into(), "agents".into())]),
++        }),
++        expected_resource_version: sandbox.get_resource_version() + 1,
++        request_id: id(),
++        ..Default::default()
++    };
++    let failed = run(&state, authed_request(update.clone()))
++        .await
++        .unwrap_err();
++    assert_eq!(failed.code(), Code::Aborted);
++    let update_reason = failed
++        .get_error_details()
++        .error_info()
++        .map(|info| info.reason.clone());
++    assert_eq!(
++        run(&state, authed_request(start.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::NotFound
++    );
++    assert_eq!(
++        run(&state, authed_request(stop.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::NotFound
++    );
++
++    // Each replay is refused with the original code and is not executed again:
++    // a sandbox created under the missing name afterwards is not started or
++    // stopped, and the update is not applied once its version matches.
++    let mut late = create_sandbox("missing");
++    late.request_id = String::new();
++    let late = run(&state, authed_request(late))
++        .await
++        .unwrap()
++        .into_inner()
++        .sandbox
++        .unwrap();
++    let bumped = state
++        .store
++        .update_message_cas::<Sandbox, _>(
++            sandbox.object_id(),
++            sandbox.get_resource_version(),
++            |_| {},
++        )
++        .await
++        .unwrap();
++    assert_eq!(
++        bumped.get_resource_version(),
++        update.expected_resource_version
++    );
++    let mut versions = Vec::new();
++    for id in [late.object_id(), sandbox.object_id()] {
++        let stored = state
++            .store
++            .get_message::<Sandbox>(id)
++            .await
++            .unwrap()
++            .unwrap();
++        versions.push((id.to_string(), stored.get_resource_version()));
++    }
++    assert_replayed_failure(
++        &run(&state, authed_request(start.clone()))
++            .await
++            .unwrap_err(),
++        Code::NotFound,
++    );
++    assert_replayed_failure(
++        &run(&state, authed_request(stop.clone())).await.unwrap_err(),
++        Code::NotFound,
++    );
++    let replayed = run(&state, authed_request(update.clone()))
++        .await
++        .unwrap_err();
++    assert_replayed_failure(&replayed, Code::Aborted);
++    assert_eq!(
++        replayed
++            .get_error_details()
++            .error_info()
++            .unwrap()
++            .metadata
++            .get("original_reason")
++            .cloned(),
++        update_reason
++    );
++    for (id, version) in versions {
++        let stored = state
++            .store
++            .get_message::<Sandbox>(&id)
++            .await
++            .unwrap()
++            .unwrap();
++        assert_eq!(stored.get_resource_version(), version);
++        assert!(!stored.metadata.unwrap().labels.contains_key("team"));
++    }
++
++    // The replay checks still come first.
++    let mut changed = update.clone();
++    changed.labels = None;
++    changed.annotations = Some(openshell_core::proto::SandboxMapUpdate {
++        values: HashMap::from([("example.com/revision".into(), "2".into())]),
++    });
++    assert_eq!(
++        reason(&run(&state, authed_request(changed)).await.unwrap_err()),
++        "REQUEST_ID_PAYLOAD_MISMATCH"
++    );
++    let mut revoked = authed_request(stop.clone());
++    if let Principal::User(user) = revoked.extensions_mut().get_mut::<Principal>().unwrap() {
++        user.identity.roles.clear();
++    }
++    let denied = run(&state, revoked).await.unwrap_err();
++    assert_eq!(denied.code(), Code::NotFound);
++    assert_eq!(denied.message(), "sandbox not found");
++
++    // Only the code and the gateway reason are stored.
++    let rows = state
++        .store
++        .list_by_type_after(OBJECT_TYPE, None, 100)
++        .await
++        .unwrap();
++    assert_eq!(rows.len(), 3);
++    for row in &rows {
++        let admission: Admission = serde_json::from_slice(&row.payload).unwrap();
++        assert!(admission.failure.is_some() && admission.success.is_none());
++        let payload = String::from_utf8(row.payload.clone()).unwrap();
++        assert!(!payload.contains(failed.message()), "{payload}");
++        assert!(!payload.contains("not found"), "{payload}");
++    }
++
++    let next = create_sandbox("after-lifecycle");
++    assert_eq!(
++        run(&state, authed_request(next.clone()))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::ResourceExhausted
++    );
++
++    // After the window, the same request ID executes again, as after a success.
++    state
++        .store
++        .delete(Sandbox::object_type(), late.object_id())
++        .await
++        .unwrap();
++    expire_terminal_admissions(&state).await;
++    let again = run(&state, authed_request(start)).await.unwrap_err();
++    assert_eq!(again.code(), Code::NotFound, "{again:?}");
++    assert!(again.metadata().get("openshell-replayed").is_none());
++    run(&state, authed_request(next)).await.unwrap();
++    run(&state, authed_request(create_sandbox("third-slot")))
++        .await
++        .unwrap();
++    assert_eq!(
++        run(&state, authed_request(create_sandbox("fourth-slot")))
++            .await
++            .unwrap_err()
++            .code(),
++        Code::ResourceExhausted
++    );
++}
++
+ #[tokio::test]
+ async fn mutations_without_recorded_failures_keep_errors_unresolved() {
+     let (_directory, state) = protected_state().await;
+-    let req = StartSandboxRequest {
+-        name: "missing".into(),
++    let req = AttachSandboxProviderRequest {
++        sandbox: "missing".into(),
++        provider: "missing-provider".into(),
+         workspace_scope: Some(openshell_core::proto::workspace_selector("default")),
+         request_id: id(),
++        ..Default::default()
+     };
+     assert_eq!(
+         run(&state, authed_request(req.clone()))
+diff --git a/crates/openshell-server/src/grpc/sandbox/image_update_tests.rs b/crates/openshell-server/src/grpc/sandbox/image_update_tests.rs
+index e83d786ee06cd1db68054c6f02e0ecac9eebb1e1..f57f546e4632631ca83f21e17d420f250b26ffc9 100644
+--- a/crates/openshell-server/src/grpc/sandbox/image_update_tests.rs
++++ b/crates/openshell-server/src/grpc/sandbox/image_update_tests.rs
+@@ -212,19 +212,11 @@ async fn public_image_update_checks_workspace_and_missing_resource() {
+     );
+ }
+ 
+-#[tokio::test]
+-async fn public_image_update_replays_without_reapplying_or_touching_same_name_replacement() {
+-    let (mut state, driver, sandbox) = state().await;
+-    // Exercise production routing with the explicit local developer identity.
+-    Arc::get_mut(&mut state)
+-        .unwrap()
+-        .config
+-        .auth
+-        .allow_unauthenticated_users = true;
++fn configure_replay_key(state: &mut Arc<ServerState>) -> tempfile::TempDir {
+     let directory = tempfile::tempdir().unwrap();
+     let key = directory.path().join("private-key");
+     std::fs::write(&key, b"test-only stable private fingerprint material").unwrap();
+-    Arc::get_mut(&mut state).unwrap().config.gateway_jwt =
++    Arc::get_mut(state).unwrap().config.gateway_jwt =
+         Some(openshell_core::config::GatewayJwtConfig {
+             signing_key_path: key,
+             public_key_path: directory.path().join("public"),
+@@ -232,6 +224,19 @@ async fn public_image_update_replays_without_reapplying_or_touching_same_name_re
+             gateway_id: "test".into(),
+             ttl_secs: None,
+         });
++    directory
++}
++
++#[tokio::test]
++async fn public_image_update_replays_without_reapplying_or_touching_same_name_replacement() {
++    let (mut state, driver, sandbox) = state().await;
++    // Exercise production routing with the explicit local developer identity.
++    Arc::get_mut(&mut state)
++        .unwrap()
++        .config
++        .auth
++        .allow_unauthenticated_users = true;
++    let _directory = configure_replay_key(&mut state);
+     let (mut client, _server) = wire_client(state.clone()).await;
+     let req = UpdateSandboxRequest {
+         expected_resource_version: sandbox.get_resource_version(),
+@@ -362,10 +367,14 @@ fn configuration_update_presence_and_reserved_metadata() {
+ 
+ #[tokio::test]
+ async fn pending_update_retry_preserves_later_update_config_annotations() {
++    use crate::grpc::mutation_replay::run;
+     use openshell_core::proto::{SandboxMapUpdate, UpdateConfigRequest};
++    use openshell_core::rpc_error::StatusExt;
+ 
+-    let (state, driver, sandbox) = state().await;
++    let (mut state, driver, sandbox) = state().await;
++    let _directory = configure_replay_key(&mut state);
+     let mut update = UpdateSandboxRequest {
++        request_id: uuid::Uuid::new_v4().to_string(),
+         expected_resource_version: sandbox.get_resource_version(),
+         annotations: Some(SandboxMapUpdate {
+             values: HashMap::from([
+@@ -377,7 +386,7 @@ async fn pending_update_retry_preserves_later_update_config_annotations() {
+     };
+     driver.set_image_update_error(Some(Code::Unavailable));
+     assert_eq!(
+-        handle_update_sandbox(&state, authed_request(update.clone()))
++        run(&state, authed_request(update.clone()))
+             .await
+             .unwrap_err()
+             .code(),
+@@ -390,6 +399,34 @@ async fn pending_update_retry_preserves_later_update_config_annotations() {
+         .unwrap()
+         .unwrap();
+ 
++    let pending_intent = async || {
++        state
++            .store
++            .get_sandbox_image_state(sandbox.object_id())
++            .await
++            .unwrap()
++            .unwrap()
++            .pending
++            .unwrap()
++    };
++    let intent = pending_intent().await;
++    let calls = driver.calls();
++    driver.set_image_update_error(None);
++    let replay = run(&state, authed_request(update.clone()))
++        .await
++        .unwrap_err();
++    assert_eq!(replay.code(), Code::FailedPrecondition);
++    assert_eq!(replay.metadata().get("openshell-replayed").unwrap(), "true");
++    let details = replay.get_error_details();
++    let info = details.error_info().unwrap();
++    assert_eq!(info.reason, "REQUEST_FAILED");
++    assert_eq!(
++        info.metadata["original_code"],
++        (Code::Unavailable as i32).to_string()
++    );
++    assert_eq!(driver.calls(), calls);
++    assert_eq!(pending_intent().await, intent);
++
+     // Exercise the existing public annotation writer while the update is
+     // pending, including both a new key and an overwrite of a selected key.
+     let annotations = crate::grpc::policy::handle_update_config(
+@@ -423,10 +460,10 @@ async fn pending_update_retry_preserves_later_update_config_annotations() {
+         workspace_scope: update.workspace_scope,
+         name: update.name,
+         expected_resource_version: current.get_resource_version(),
++        request_id: uuid::Uuid::new_v4().to_string(),
+         ..Default::default()
+     };
+-    driver.set_image_update_error(None);
+-    let completed = handle_update_sandbox(&state, authed_request(update))
++    let completed = run(&state, authed_request(update))
+         .await
+         .unwrap()
+         .into_inner()
+@@ -436,6 +473,17 @@ async fn pending_update_retry_preserves_later_update_config_annotations() {
+         completed.metadata.as_ref().unwrap().annotations,
+         annotations
+     );
++    assert_eq!(
++        completed
++            .spec
++            .as_ref()
++            .unwrap()
++            .template
++            .as_ref()
++            .unwrap()
++            .image,
++        "example/workload:new"
++    );
+     assert_eq!(completed.phase(), SandboxPhase::Stopped as i32);
+     assert!(
+         completed
+diff --git a/docs/how-it-works/gateways/configuration.mdx b/docs/how-it-works/gateways/configuration.mdx
+index ac3b9862c34d6d9f8647e2da5c5c5dc26880fbf0..df940d4fcf38b7af9f8b24b6a681cc1ae804c19e 100644
+--- a/docs/how-it-works/gateways/configuration.mdx
++++ b/docs/how-it-works/gateways/configuration.mdx
+@@ -130,10 +130,11 @@ sandbox again. CLI wait and image-preparation timeouts are separate settings.
+ 
+ Clients that send a `request_id` get a durable admission for each mutation, such
+ as sandbox create, start, exec, or delete. A successful admission keeps its slot
+-until its replay window ends, and so does a sandbox create or delete that
+-returned an error. An unresolved admission keeps its slot until an operator
+-reconciles it. The gateway deletes expired admissions in the background about
+-once a minute, and immediately for a caller that reaches the limit. Admissions are counted per caller identity across every replica
++until its replay window ends, and so does a sandbox create, delete, start, stop,
++or update that returned an error. An unresolved admission keeps its slot until
++an operator reconciles it. The gateway deletes expired admissions in the
++background about once a minute, and immediately for a caller that reaches the
++limit. Admissions are counted per caller identity across every replica
+ that shares the database. When a caller's admissions reach the limit, the gateway
+ rejects new requests with `RESOURCE_EXHAUSTED`. Requests without a `request_id`
+ do not use this capacity.
+diff --git a/docs/how-it-works/sandboxes/overview.mdx b/docs/how-it-works/sandboxes/overview.mdx
+index 6c2b757a1dfc5789763a7ee43cccb6776f72a3a1..ff3d3c7ff7c089bd5a0c6abd188d6982bc66326a 100644
+--- a/docs/how-it-works/sandboxes/overview.mdx
++++ b/docs/how-it-works/sandboxes/overview.mdx
+@@ -1128,7 +1128,7 @@ uses the stored operation and target values. With no pending update, this return
+ `status.provisioning.driver_operation_id` while pending; the full intent stays private.
+ 
+ The optional `request_id` uses [durable request admission](/sdk/api-errors#durable-request-admission).
+-Reusing an unresolved ID returns `REQUEST_OUTCOME_UNCERTAIN`. For explicit resume,
++Reusing the ID of a failed request returns `REQUEST_FAILED`. For explicit resume,
+ use a new ID or omit it, and use the fresh resource version. Do not change the
+ original payload under its original ID. A confirmed successful request still
+ replays without applying another update.
+diff --git a/docs/kubernetes/high-availability.mdx b/docs/kubernetes/high-availability.mdx
+index 06483b0a3b95601ee9b3042fef41e3181d14c166..8d606ff2b05d3c1fbc7b8deea78f8ace4d3d9ba6 100644
+--- a/docs/kubernetes/high-availability.mdx
++++ b/docs/kubernetes/high-availability.mdx
+@@ -502,10 +502,10 @@ they provision or remove the sandbox's SSH host identity, so that step runs for
+ one sandbox at a time across all replicas. For other
+ mutations, a lock wait longer than 10 seconds returns `UNAVAILABLE` with the
+ reason `MUTATION_LOCK_TIMEOUT`, and clients can retry the request. A retry
+-with the same `request_id` returns `REQUEST_FAILED` for sandbox create and
+-delete, and `REQUEST_OUTCOME_UNCERTAIN` for other mutations, whose admission
+-stays unresolved. Observe resource state and reconcile effects, then send a new
+-request with a new `request_id`. Refer to
++with the same `request_id` returns `REQUEST_FAILED` for sandbox create, delete,
++start, stop, and update, and `REQUEST_OUTCOME_UNCERTAIN` for other mutations,
++whose admission stays unresolved. Observe resource state and reconcile effects,
++then send a new request with a new `request_id`. Refer to
+ [Durable Request Admission](/sdk/api-errors#durable-request-admission).
+ 
+ ### Upgrade from an Earlier Release
+diff --git a/docs/sdk/api-errors.mdx b/docs/sdk/api-errors.mdx
+index 7ac7c0104d25b2d16ab02600be2694a296dae1c6..661d6c966d4c458fbb380f18facd2d18b0979eda 100644
+--- a/docs/sdk/api-errors.mdx
++++ b/docs/sdk/api-errors.mdx
+@@ -32,7 +32,7 @@ Recognized gateway reasons include the following.
+ | `RESOURCE_VERSION_CONFLICT` | `ABORTED` | Read the resource again and construct a new conditional write. `metadata.recovery` is `REFRESH_STATE`; `current_resource_version` is included when known. |
+ | `PROFILE_SOURCE_UNAVAILABLE` | `UNAVAILABLE` | Retry a profile snapshot read after at least the supplied delay. |
+ | `DATABASE_UNAVAILABLE` | `UNAVAILABLE` | The gateway could not get a database connection within 5 seconds. Retry after at least the supplied delay. |
+-| `MUTATION_LOCK_TIMEOUT` | `UNAVAILABLE` | The request waited more than 10 seconds for a concurrent mutation to release a sandbox, workspace, or gateway-wide lock. Retry after at least the supplied delay. A retry with the same `request_id` returns `REQUEST_FAILED` for `CreateSandbox` and `DeleteSandbox`, and `REQUEST_OUTCOME_UNCERTAIN` for other mutations, whose admission stays unresolved. Observe resource state and reconcile effects before you start a new request with a new ID. |
++| `MUTATION_LOCK_TIMEOUT` | `UNAVAILABLE` | The request waited more than 10 seconds for a concurrent mutation to release a sandbox, workspace, or gateway-wide lock. Retry after at least the supplied delay. A retry with the same `request_id` returns `REQUEST_FAILED` for `CreateSandbox`, `DeleteSandbox`, `StartSandbox`, `StopSandbox`, and `UpdateSandbox`, and `REQUEST_OUTCOME_UNCERTAIN` for other mutations, whose admission stays unresolved. Observe resource state and reconcile effects before you start a new request with a new ID. |
+ | `REQUEST_FAILED` | `FAILED_PRECONDITION` | The original attempt with this request ID returned an error, and the gateway did not execute it again. `metadata.original_code` is the numeric gRPC code of that error and `metadata.original_reason` its gateway reason, when it had one. The error does not prove that the attempt had no effects. Observe resource state and reconcile effects before you start a new request with a new ID. |
+ | `REQUEST_ID_PAYLOAD_MISMATCH` | `FAILED_PRECONDITION` | Keep the original payload for that request ID. Inspect the original operation before submitting a different one. |
+ | `REQUEST_OUTCOME_UNCERTAIN` | `FAILED_PRECONDITION` | An attempt is admitted but has no confirmed replayable success. Observe resource state and reconcile effects. Do not switch to a new ID to bypass the admission. |
+@@ -138,7 +138,7 @@ leaves the admission unresolved. No gateway replica takes over that admission,
+ even after restart or after the replay window. Status codes alone do not prove
+ that the attempt had no effects.
+ 
+-`CreateSandbox` and `DeleteSandbox` record an error instead. The gateway stores
++`CreateSandbox`, `DeleteSandbox`, `StartSandbox`, `StopSandbox`, and `UpdateSandbox` record an error instead. The gateway stores
+ its gRPC code and gateway reason, never its message, and completes the admission
+ with that failure. A replay, including a concurrent duplicate that arrives after
+ the failure is recorded, returns `REQUEST_FAILED` with `openshell-replayed: true`
+@@ -236,8 +236,8 @@ resource version and send `UpdateSandbox` with no selected fields. The gateway
+ loads the stored intent; no pending intent returns `FAILED_PRECONDITION`.
+ Explicit delete can reclaim a sandbox whose update cannot complete.
+ 
+-If the original request supplied `request_id`, an error leaves its admission
+-unresolved. Reusing that ID returns `REQUEST_OUTCOME_UNCERTAIN`; changing its
++If the original request supplied `request_id`, the gateway records an error.
++Reusing that ID returns `REQUEST_FAILED` for the replay window; changing its
+ payload returns `REQUEST_ID_PAYLOAD_MISMATCH`. For explicit resume, use the fresh
+ version with a new ID or no ID. A confirmed success replays the current sandbox
+ without applying another update.
+diff --git a/proto/openshell.proto b/proto/openshell.proto
+index 2e1f65a569d9eb31f5f47518aa87de703d9be1c5..c7fefa47664f7e1358325953865723ab36bffb9b 100644
+--- a/proto/openshell.proto
++++ b/proto/openshell.proto
+@@ -1389,7 +1389,9 @@ message UpdateSandboxRequest {
+   SandboxMapUpdate annotations = 9;
+   // Required nonzero resource version read by the caller.
+   uint64 expected_resource_version = 4;
+-  // Optional nonzero UUID for durable at-most-once admission.
++  // Optional nonzero UUID for durable at-most-once admission. Successful results
++  // can be replayed for 24 hours, and a failed attempt is refused for the same
++  // window; see the API errors and retries reference.
+   string request_id = 5;
+ }
+ 
+@@ -1575,7 +1577,8 @@ message StopSandboxRequest {
+   openshell.datamodel.v1.WorkspaceSelector workspace_scope = 2;
+   string name = 1;
+   // Optional nonzero UUID for durable at-most-once admission. Successful results
+-  // can be replayed for 24 hours; see the API errors and retries reference.
++  // can be replayed for 24 hours, and a failed attempt is refused for the same
++  // window; see the API errors and retries reference.
+   string request_id = 3;
+ }
+ 
+@@ -1585,7 +1588,8 @@ message StartSandboxRequest {
+   openshell.datamodel.v1.WorkspaceSelector workspace_scope = 2;
+   string name = 1;
+   // Optional nonzero UUID for durable at-most-once admission. Successful results
+-  // can be replayed for 24 hours; see the API errors and retries reference.
++  // can be replayed for 24 hours, and a failed attempt is refused for the same
++  // window; see the API errors and retries reference.
+   string request_id = 3;
+ }
+ 

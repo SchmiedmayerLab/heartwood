@@ -45,8 +45,12 @@ from heartwood.schemas import (
     PlatformOptionalCapability,
 )
 from heartwood_platform.jobs.objects import DRS_ID, ObjectNotFoundError, ProjectObjects
-from heartwood_platform.jobs.platform import BudgetDeniedError, JobBudgets, JobUsage
-from heartwood_platform.jobs.records import ConflictError, Operation, Records
+from heartwood_platform.jobs.platform import (
+    BudgetDeniedError,
+    JobBudgets,
+    JobUsage,
+)
+from heartwood_platform.jobs.records import AttemptTimes, ConflictError, Operation, Records
 from heartwood_platform.jobs.tes import (
     PROGRESS,
     TERMINAL,
@@ -243,6 +247,33 @@ def _time(value: str | None) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
+def _attempt_times(previous: AttemptTimes, view: TesTaskView, now: datetime) -> AttemptTimes:
+    """Keep the known boundaries of each TES attempt, including across incomplete polls."""
+    attempts = list(previous)
+    for index, log in enumerate(view.logs or ()):
+        if index == len(attempts):
+            attempts.append((None, None))
+        start, end = attempts[index]
+        attempts[index] = (_time(log.start_time) or start, _time(log.end_time) or end)
+    if view.state == "RUNNING":
+        if not attempts:
+            attempts.append((now, None))
+        elif attempts[-1] == (None, None):
+            attempts[-1] = (now, None)
+    return tuple(attempts)
+
+
+def _run_seconds(record: Operation) -> int:
+    """Sum attempt durations, closing only the last open attempt at termination or loss."""
+    elapsed = timedelta()
+    for index, (start, end) in enumerate(record.attempts):
+        if end is None and index == len(record.attempts) - 1:
+            end = record.ended_at
+        if start is not None and end is not None and end > start:
+            elapsed += end - start
+    return math.ceil(elapsed.total_seconds())
+
+
 def _outcome(view: TesTaskView) -> str | None:
     """Describe why a task ended without success, from fixed texts only.
 
@@ -286,11 +317,11 @@ class JobService:
         executors: dict[str, TesExecutor],
         policies: dict[str, ProjectPolicy],
         objects: ProjectObjects,
-        budgets: JobBudgets | None,
+        budgets: JobBudgets,
         settings: ServiceSettings,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        """Run each project's tasks on its executor; ``budgets`` None reserves nothing."""
+        """Run each project's tasks on its executor, reserving from its compute budget."""
         if set(executors) != set(policies):
             raise ValueError("every project has one executor and one policy")
         self._records = records
@@ -344,11 +375,15 @@ class JobService:
             limitations=self._limitations(),
         )
 
-    def _limitations(self) -> tuple[str, ...]:
-        notes = ["Admission checks the project's entitlements, limits and budget at submission."]
-        if self._budgets is None:
-            notes.append("This deployment reserves no budget for jobs.")
-        return tuple(notes)
+    @staticmethod
+    def _limitations() -> tuple[str, ...]:
+        return (
+            "Admission checks the project's entitlements, limits and budget at submission.",
+            "A submission reserves the price of its run time limit from the project's compute "
+            "budget and is denied when the available amount does not cover it.",
+            "When the task ends, the reservation is settled with the run time the executor "
+            "observed, priced as at the reservation, and the rest is released.",
+        )
 
     def _refusal(self, policy: ProjectPolicy, request: TaskRequest) -> str | None:
         """Return why the platform refuses a request, or None when the policy admits it."""
@@ -375,11 +410,9 @@ class JobService:
             return f"The request exceeds the project's limit for {', '.join(exceeded)}."
         return None
 
-    def _usage(self, resources: JobResources, seconds: int) -> JobUsage:
-        profile = self._settings.gpu_profile if resources.gpu_count else self._settings.cpu_profile
-        return JobUsage(
-            profile, resources.cpu_cores, resources.ram_gb, resources.gpu_count, seconds
-        )
+    def _usage(self, gpu_count: int, seconds: int) -> JobUsage:
+        profile = self._settings.gpu_profile if gpu_count else self._settings.cpu_profile
+        return JobUsage(profile, seconds)
 
     def propose(
         self, caller: Caller, tool: str, arguments: dict[str, object]
@@ -412,6 +445,21 @@ class JobService:
             )
         limitations = list(self._limitations())
         refusal = self._refusal(policy, request)
+        usage = self._usage(resources.gpu_count, resources.max_runtime_seconds)
+        if refusal is None:
+            try:
+                amount = self._budgets.quote(caller.project, usage)
+            except BudgetDeniedError as error:
+                refusal = str(error)
+            except httpx.HTTPError:
+                quoted = "the price of its run time limit"
+            else:
+                quoted = f"{amount} of budget {amount.budget_id}"
+            if refusal is None:
+                limitations.append(
+                    f"Submission reserves {quoted}, for the run time limit of "
+                    f"{usage.seconds} seconds at the prices in effect at submission."
+                )
         if refusal is not None:
             limitations.append(f"{refusal} Admission denies it.")
         scope = (
@@ -430,7 +478,7 @@ class JobService:
             service_id=SERVICE_ID,
             tool=tool,
             description=description,
-            runtime_profile_ref=self._usage(resources, 0).runtime_profile_ref,
+            runtime_profile_ref=usage.runtime_profile_ref,
             resource_limits=tuple(limits),
             data_scope=scope,
             destination=(
@@ -469,7 +517,7 @@ class JobService:
                 subject=caller.subject,
                 context=caller.project_context_id,
                 request_sha256=digest,
-                state="SUBMITTING",
+                state="RESERVING",
                 task_id=None,
                 target=None,
                 detail=None,
@@ -479,6 +527,7 @@ class JobService:
                 gpu_count=request.resources.gpu_count,
                 max_runtime_seconds=request.resources.max_runtime_seconds,
                 reservation=None,
+                incurred=None,
                 settled=False,
                 created_at=now,
                 started_at=None,
@@ -494,32 +543,36 @@ class JobService:
                 return self._observe(self._deny(record, task))
             # Recorded before the budget and the executor are called, so a reservation or
             # a task whose reply is lost always has a record: the reservation is settled by
-            # its holder, and the task is found by its tag.
+            # its operation, and the task is found by its tag.
             self._records.insert(record)
-            if self._budgets is not None:
-                try:
-                    reservation = self._budgets.reserve(
-                        caller.project,
-                        _holder(caller.project, operation_id),
-                        self._usage(request.resources, request.resources.max_runtime_seconds),
-                    )
-                except BudgetDeniedError as error:
-                    record = self._records.update(
-                        record,
-                        state="DENIED",
-                        detail=str(error) or "The budget denied it.",
-                        settled=True,
-                    )
-                    return self._observe(record)
-                except httpx.HTTPError:
-                    record = self._records.update(
-                        record,
-                        state="SYSTEM_ERROR",
-                        failure="The budget could not be reserved.",
-                        ended_at=self._clock(),
-                    )
-                    return self._observe(self._settle(record))
-                record = self._records.update(record, reservation=reservation)
+            try:
+                reservation = self._budgets.reserve(
+                    caller.project,
+                    operation_id,
+                    self._usage(request.resources.gpu_count, request.resources.max_runtime_seconds),
+                )
+            except BudgetDeniedError as error:
+                # Nothing was reserved, so nothing is settled.
+                record = self._records.update(
+                    record,
+                    state="DENIED",
+                    detail=str(error) or "The budget denied it.",
+                    settled=True,
+                )
+                return self._observe(record)
+            except httpx.HTTPError:
+                record = self._records.update(
+                    record,
+                    state="SYSTEM_ERROR",
+                    failure="The budget could not be reserved.",
+                    ended_at=self._clock(),
+                )
+                return self._observe(self._settle(record))
+            record = self._records.update(
+                record,
+                state="SUBMITTING",
+                reservation=f"{reservation} of budget {reservation.budget_id}",
+            )
             try:
                 task_id = self._executors[caller.project].create(task)
             except httpx.HTTPStatusError as error:
@@ -623,6 +676,7 @@ class JobService:
                     gpu_count=0,
                     max_runtime_seconds=0,
                     reservation=None,
+                    incurred=None,
                     settled=True,
                     created_at=self._clock(),
                     started_at=None,
@@ -682,6 +736,7 @@ class JobService:
                 gpu_count=0,
                 max_runtime_seconds=0,
                 reservation=None,
+                incurred=None,
                 settled=True,
                 created_at=self._clock(),
                 started_at=None,
@@ -732,6 +787,16 @@ class JobService:
         if record.kind != "submit" or record.state == "DENIED":
             return record
         now = self._clock()
+        if record.state == "RESERVING":
+            # Submission records the hold before contacting TES. Only the ledger can
+            # have accepted work if the service stopped during reservation.
+            record = self._records.update(
+                record,
+                state="SYSTEM_ERROR",
+                failure="Budget reservation was interrupted.",
+                ended_at=now,
+            )
+            return self._settle(record)
         try:
             if record.state == "SUBMITTING":
                 found = self._find(record)
@@ -770,23 +835,15 @@ class JobService:
         state = (
             view.state if PROGRESS[view.state] >= PROGRESS.get(record.state, 0) else record.state
         )
-        attempts = view.logs or ()
-        started = record.started_at or next(
-            (time for attempt in attempts if (time := _time(attempt.start_time)) is not None), None
-        )
-        if started is None and state in {"RUNNING", "PAUSED", "CANCELING"}:
-            started = self._clock()
+        now = self._clock()
+        attempts = _attempt_times(record.attempts, view, now)
+        started = next((start for start, _ in attempts if start is not None), None)
         ended = record.ended_at
         if state in TERMINAL and ended is None:
-            ended = next(
-                (
-                    time
-                    for attempt in reversed(attempts)
-                    if (time := _time(attempt.end_time)) is not None
-                ),
-                self._clock(),
-            )
+            ended = (attempts[-1][1] if attempts else None) or now
         changes: dict[str, object] = {}
+        if attempts != record.attempts:
+            changes["attempts"] = attempts
         if state != record.state:
             changes["state"] = state
         if started != record.started_at:
@@ -831,25 +888,22 @@ class JobService:
     def _settle(self, record: Operation) -> Operation:
         if record.settled or record.state not in TERMINAL:
             return record
-        # A reservation is settled by its holder, also when the reply to it was lost.
-        if self._budgets is not None and record.kind == "submit":
-            seconds = 0
-            if record.started_at is not None and record.ended_at is not None:
-                seconds = max(0, math.ceil((record.ended_at - record.started_at).total_seconds()))
-            resources = JobResources(
-                cpu_cores=record.cpu_cores,
-                ram_gb=record.ram_gb,
-                gpu_count=record.gpu_count,
-                max_runtime_seconds=max(1, record.max_runtime_seconds),
+        if record.kind != "submit":
+            return self._records.update(record, settled=True)
+        # A reservation is settled by its operation, also when the reply to it was lost.
+        seconds = _run_seconds(record)
+        try:
+            settlement = self._budgets.settle(
+                record.project, record.operation_id, self._usage(record.gpu_count, seconds)
             )
-            try:
-                self._budgets.settle(
-                    _holder(record.project, record.operation_id), self._usage(resources, seconds)
-                )
-            except httpx.HTTPError:
-                _LOGGER.warning("the reservation of %s is not settled yet", record.operation_id)
-                return record
-        return self._records.update(record, settled=True)
+        except httpx.HTTPError:
+            _LOGGER.warning("the reservation of %s is not settled yet", record.operation_id)
+            return record
+        return self._records.update(
+            record,
+            incurred=f"{settlement.incurred} for {seconds} seconds of run time",
+            settled=True,
+        )
 
     def reconcile(self, project: str) -> list[str]:
         """Cancel the project's tasks that no operation recorded and refresh open operations.
@@ -862,7 +916,14 @@ class JobService:
         """
         cancelled: list[str] = []
         executor = self._executors[project]
-        views = [view for state in ACTIVE for view in self._pages(project, TaskFilter(state=state))]
+        try:
+            views = [
+                view for state in ACTIVE for view in self._pages(project, TaskFilter(state=state))
+            ]
+        except httpx.HTTPError:
+            # Terminal records can still settle while the executor is unavailable.
+            _LOGGER.warning("could not list active tasks of %s", project)
+            views = []
         for view in views:
             try:
                 with self._locks[project]:
@@ -940,6 +1001,14 @@ class JobService:
                 limitations.append(f"TES state {record.state}.")
             if record.state == "SUBMITTING":
                 limitations.append("The executor has not confirmed the task yet.")
+            if record.reservation is not None:
+                limitations.append(f"Reserved {record.reservation}.")
+            if record.incurred is not None:
+                limitations.append(
+                    f"Settled at {record.incurred}; the rest of the reservation is released."
+                )
+            elif record.reservation is not None and record.state in TERMINAL:
+                limitations.append("The reservation is not settled yet.")
         return PlatformOperationObservation(
             project_context_id=record.context,
             operation_id=record.operation_id,
@@ -960,7 +1029,3 @@ def _adoptable(view: TesTaskView, record: Operation) -> bool:
     """
     created = _time(view.creation_time)
     return created is not None and created >= record.created_at - timedelta(seconds=60)
-
-
-def _holder(project: str, operation_id: str) -> str:
-    return f"job/{project}/{operation_id}"

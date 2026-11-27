@@ -14,10 +14,11 @@ import importlib.util
 import json
 import re
 import subprocess
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 import pytest
@@ -140,11 +141,18 @@ def test_the_arguments_of_the_hook_match_the_admission_policy(
     ]
     assert f"size(object.spec.containers[0].args) == {len(arguments)}" in expression
     for index, value in enumerate(arguments):
-        if index != 14:
+        if index not in {16, 18}:
             assert f"args[{index}] == {json.dumps(value)}" in expression or (
                 f"args[{index}] == '{value}'" in expression
             )
-    assert arguments[14] == f"/user/{_RESEARCHER}/demo"
+    assert arguments[18] == f"/user/{_RESEARCHER}/demo"
+    # The gateway serves TLS with the certificate that the init container copies.
+    assert arguments[11:15] == [
+        "--tls-certificate",
+        "/etc/heartwood/deployment/gateway-tls.crt",
+        "--tls-key",
+        "/etc/heartwood/deployment/gateway-tls.key",
+    ]
     # The policy admits a base path of the researcher identifier form alone.
     assert "'^/user/r[0-9a-f]{32}/" in expression
 
@@ -279,6 +287,9 @@ class _Hub:
     deleted: list[str]
     proxy_requests: list[tuple[str, Any]]
     http_error: type[Exception]
+    application: Any
+    client: Any
+    application_module: Any
 
 
 @pytest.fixture
@@ -299,8 +310,18 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         body = b""
 
     class Client:
+        configured: ClassVar[list[tuple[Any, dict[str, Any]]]] = []
+
         def __init__(self, **options: Any) -> None:  # noqa: ANN401
             self.options = options
+
+        @classmethod
+        def configured_class(cls) -> str:
+            return "curl"
+
+        @classmethod
+        def configure(cls, implementation: Any, **options: Any) -> None:  # noqa: ANN401
+            cls.configured.append((implementation, options))
 
         async def fetch(self, request: Any, raise_error: bool = True) -> Response:  # noqa: ANN401, ARG002
             sent.append((request.method, request.url))
@@ -317,6 +338,17 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
 
         async def delete_forever(self) -> None:
             deleted.append(self.name)
+
+    class JupyterHub:
+        # JupyterHub selects its HTTP client after it loads the configuration, and the
+        # selection replaces the client's defaults.
+        application = types.SimpleNamespace(
+            init_pycurl=lambda: Client.configured.append(("curl", {}))
+        )
+
+        @classmethod
+        def instance(cls) -> Any:  # noqa: ANN401
+            return cls.application
 
     class ConfigurableHTTPProxy:
         async def api_request(
@@ -339,6 +371,12 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
     jupyterhub = types.ModuleType("jupyterhub")
     proxy = types.ModuleType("jupyterhub.proxy")
     proxy.ConfigurableHTTPProxy = ConfigurableHTTPProxy  # type: ignore[attr-defined]
+    user = types.ModuleType("jupyterhub.user")
+    monkeypatch.setattr(
+        user, "User", type("User", (), {"server_url": lambda _self, _name: "/"}), raising=False
+    )
+    app = types.ModuleType("jupyterhub.app")
+    app.JupyterHub = JupyterHub  # type: ignore[attr-defined]
     pycurl = types.ModuleType("pycurl")
     pycurl.CAPATH = "CAPATH"  # type: ignore[attr-defined]
     for name, module in (
@@ -348,6 +386,8 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         ("kubespawner", kubespawner),
         ("jupyterhub", jupyterhub),
         ("jupyterhub.proxy", proxy),
+        ("jupyterhub.app", app),
+        ("jupyterhub.user", user),
         ("pycurl", pycurl),
     ):
         monkeypatch.setitem(sys.modules, name, module)
@@ -363,8 +403,75 @@ def hub(objects: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.Monke
         "researcher_id_key_file": str(key),
     }
     config = _Config()
-    _module().configure(config, settings)
-    return _Hub(config, settings, sent, deleted, proxy_requests, HTTPError)
+    # The idle culler of the JupyterHub chart, as its configuration defines it.
+    config.JupyterHub.services = [
+        {
+            "name": "jupyterhub-idle-culler",
+            "command": [
+                "python3",
+                "-m",
+                "jupyterhub_idle_culler",
+                "--url=http://localhost:8081/hub/api",
+                "--timeout=3600",
+            ],
+        }
+    ]
+    module = _module()
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps(settings))
+    monkeypatch.setattr(module, "SETTINGS", settings_path)
+    module.configure(config, settings)
+    return _Hub(
+        config,
+        settings,
+        sent,
+        deleted,
+        proxy_requests,
+        HTTPError,
+        JupyterHub.application,
+        Client,
+        app,
+    )
+
+
+@pytest.mark.parametrize("change", ["project_domain", "public_origin", "shared-callback", "valid"])
+def test_spawn_checks_effective_public_route(
+    hub: _Hub, tmp_path: Path, change: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    current = dict(hub.settings)
+    if change in ("project_domain", "public_origin"):
+        current[change] = "changed.example.test"
+    (tmp_path / "settings.json").write_text(json.dumps(current))
+    host = _module().project_host(hub.settings["project_domain"], _RESEARCHER, "demo")
+    origin = hub.settings["public_origin"] if change == "shared-callback" else f"https://{host}"
+
+    async def fetch(_client: object, _request: object, **_kwargs: object) -> types.SimpleNamespace:
+        assert change not in ("project_domain", "public_origin")
+        launch = {
+            "redirect_uri": f"{origin}/user/{_RESEARCHER}/demo/oauth_callback",
+            "session": _SESSION,
+            "gateway_service_account": "hw-gw-session",
+        }
+        return types.SimpleNamespace(code=200, body=json.dumps(launch))
+
+    monkeypatch.setattr(hub.client, "fetch", fetch)
+    spawner = types.SimpleNamespace(
+        user=types.SimpleNamespace(name=_RESEARCHER),
+        name="demo",
+        user_options={},
+        pvc_name="",
+        extra_labels={},
+    )
+    hook = hub.config.KubeSpawner.pre_spawn_hook
+    if change == "valid":
+        asyncio.run(hook(spawner))
+        assert f"https://{host}" in spawner.args
+    else:
+        with pytest.raises(hub.http_error, match=r"(public routes|project callback)"):
+            asyncio.run(hook(spawner))
+        assert not hasattr(spawner, "image")
 
 
 def test_deleting_a_server_calls_the_control_service_only_for_a_project_name(hub: _Hub) -> None:
@@ -426,7 +533,24 @@ def test_the_proxy_serves_https_with_a_certificate_of_the_platform_ca(
         "proxy-public.heartwood-platform.svc.cluster.local",
         "proxy-api.heartwood-platform.svc.cluster.local",
         origin.hostname,
+        "*.demo." + settings["project_domain"],
     } <= names
+    for project, valid in (("demo", True), ("unregistered", False)):
+        host = f"{_RESEARCHER}.{project}.{settings['project_domain']}"
+        verified = subprocess.run(
+            [
+                "openssl",
+                "verify",
+                "-CAfile",
+                str(authority),
+                "-verify_hostname",
+                host,
+                str(serving),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        assert (verified.returncode == 0) == valid
     # The proxy serves researchers and its API with the certificate, and its Service
     # offers no HTTP port.
     proxy = _named(objects, "Deployment", "proxy")["spec"]["template"]["spec"]
@@ -475,6 +599,24 @@ def test_the_public_origin_must_be_https_with_a_host_name(origin: str) -> None:
     assert "publicOrigin" in result.stderr
 
 
+def test_proxy_routes_distinguish_projects_and_researchers(hub: _Hub) -> None:
+    proxy = hub.config.JupyterHub.proxy_class()
+    origins = set()
+    for researcher, project in (
+        (_RESEARCHER, "demo"),
+        (_RESEARCHER, "other"),
+        ("r" + "1" * 32, "demo"),
+    ):
+        path = f"/user/{researcher}/{project}/"
+        host = f"{researcher}.{project}.{hub.settings['project_domain']}"
+        route = proxy._routespec_to_chp_path(path)
+        assert route == f"/{host}{path.rstrip('/')}"
+        assert proxy._routespec_from_chp_path(route) == path
+        origins.add(host)
+    assert len(origins) == 3
+    assert proxy._routespec_from_chp_path(proxy._routespec_to_chp_path("/")) == "/"
+
+
 def test_the_hub_calls_the_proxy_api_over_https_trusting_the_platform_ca(hub: _Hub) -> None:
     import asyncio
 
@@ -500,3 +642,255 @@ def test_the_hub_calls_the_proxy_api_over_https_trusting_the_platform_ca(hub: _H
 
     defaults["prepare_curl_callback"](Curl())
     assert unset == ["CAPATH"]
+
+
+def _write(path: Path, data: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def _names(certificate: Path) -> set[str]:
+    text = subprocess.run(
+        ["openssl", "x509", "-noout", "-ext", "subjectAltName", "-in", str(certificate)],
+        check=True,
+        capture_output=True,
+    ).stdout.decode()
+    return {item.strip().removeprefix("DNS:") for item in text.splitlines()[-1].split(",")}
+
+
+def test_the_hub_serves_tls_with_a_certificate_of_the_platform_ca(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    authority = _write(
+        tmp_path / "ca.crt",
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"]),
+    )
+    secret = _named(objects, "Secret", "hub-tls")
+    serving = _write(tmp_path / "hub.crt", base64.b64decode(secret["data"]["tls.crt"]))
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), "-purpose", "sslserver", str(serving)],
+        check=True,
+        capture_output=True,
+    )
+    # The idle culler presents the Hub's certificate as its client certificate.
+    subprocess.run(
+        ["openssl", "verify", "-CAfile", str(authority), "-purpose", "sslclient", str(serving)],
+        check=True,
+        capture_output=True,
+    )
+    assert {"hub", "hub.heartwood-platform.svc.cluster.local", "localhost"} <= _names(serving)
+    settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
+    assert settings["hub_url"] == "https://hub:8081"
+    pod = _named(objects, "Deployment", "hub")["spec"]["template"]["spec"]
+    (container,) = pod["containers"]
+    # kubelet cannot present a client certificate; the start hook waits for the Hub.
+    assert "livenessProbe" not in container
+    assert "readinessProbe" not in container
+    assert container["lifecycle"]["postStart"]["exec"]["command"] == [
+        "python3",
+        "-I",
+        "/usr/local/etc/heartwood/hub/config/heartwood_hub.py",
+    ]
+    mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
+    assert mounts["tls"]["mountPath"] == settings["tls_directory"]
+    assert mounts["heartwood"]["mountPath"] == "/usr/local/etc/heartwood/hub/config"
+    (volume,) = [item for item in pod["volumes"] if item["name"] == "tls"]
+    files = _module().tls_files(settings)
+    paths = {
+        f"{settings['tls_directory']}/{item['path']}": (
+            source.get("secret") or source["configMap"]
+        )["name"]
+        for source in volume["projected"]["sources"]
+        for item in (source.get("secret") or source["configMap"])["items"]
+    }
+    assert paths == {
+        files["key"]: "hub-tls",
+        files["certificate"]: "hub-tls",
+        files["ca"]: "platform-ca",
+    }
+    assert volume["projected"]["defaultMode"] == 0o440
+
+
+def test_the_proxy_reaches_the_hub_and_the_gateways_over_tls_trusting_the_platform_ca(
+    objects: list[dict[str, Any]],
+) -> None:
+    proxy = _named(objects, "Deployment", "proxy")["spec"]["template"]["spec"]
+    (container,) = proxy["containers"]
+    command = container["command"]
+    for argument in (
+        "--host-routing",
+        "--default-target=$(HEARTWOOD_NO_TARGET)",
+        "--error-target=$(HEARTWOOD_NO_TARGET)",
+        "--client-ssl-key=/etc/chp/tls/tls.key",
+        "--client-ssl-cert=/etc/chp/tls/tls.crt",
+        "--client-ssl-ca=/etc/chp/tls/ca.crt",
+    ):
+        assert argument in command
+    assert {"name": "HEARTWOOD_NO_TARGET", "value": ""} in container["env"]
+    assert not [argument for argument in command if argument.startswith("--insecure")]
+    secret = _named(objects, "Secret", "proxy-tls")
+    assert secret["data"]["ca.crt"] == _named(objects, "Secret", "platform-ca")["data"]["tls.crt"]
+
+
+def test_gateways_are_reached_by_the_name_that_their_certificates_carry(
+    objects: list[dict[str, Any]],
+) -> None:
+    hub = _module()
+    settings = json.loads(_named(objects, "ConfigMap", "heartwood-hub")["data"]["settings.json"])
+    pod = hub.pod_settings(
+        {"session": _SESSION, "gateway_service_account": f"hw-gw-{_SESSION}"}, settings
+    )
+    assert pod["extra_pod_config"] == {"hostname": f"hw-gw-{_SESSION}", "subdomain": "hw-gateways"}
+    spec = {"spec": pod["extra_pod_config"]}
+    assert hub.gateway_url(spec, settings) == (
+        f"https://hw-gw-{_SESSION}.hw-gateways.heartwood-sessions.svc.cluster.local:8888"
+    )
+    for other in (
+        {},
+        {"spec": {"subdomain": "hw-gateways"}},
+        {"spec": {"hostname": "other", "subdomain": "hw-gateways"}},
+        {"spec": {"hostname": f"hw-gw-{_SESSION}", "subdomain": "other"}},
+        {"spec": {"hostname": "hw-gw-a.evil", "subdomain": "hw-gateways"}},
+    ):
+        with pytest.raises(ValueError, match="host name"):
+            hub.gateway_url(other, settings)
+    service = _named(objects, "Service", "hw-gateways")
+    assert service["metadata"]["namespace"] == "heartwood-sessions"
+    assert service["spec"]["clusterIP"] == "None"
+    assert service["spec"]["publishNotReadyAddresses"] is True
+    assert service["spec"]["selector"] == {"heartwood.platform/role": "hosted-gateway"}
+    policy = _named(objects, "ValidatingAdmissionPolicy", "heartwood-hub-pods")
+    (expression,) = [
+        item["expression"]
+        for item in policy["spec"]["validations"]
+        if "host name" in item["message"]
+    ]
+    assert "object.spec.hostname == 'hw-gw-' + variables.session" in expression
+    assert 'object.spec.subdomain == "hw-gateways"' in expression
+
+
+def test_the_hub_listens_and_calls_over_tls_with_its_certificate(hub: _Hub) -> None:
+    files = _module().tls_files(hub.settings)
+    assert hub.application.internal_ssl_key == files["key"]
+    assert hub.application.internal_ssl_cert == files["certificate"]
+    assert hub.application.internal_ssl_ca == files["ca"]
+    assert hub.config.JupyterHub.hub_bind_url == "https://:8081"
+    assert hub.config.JupyterHub.hub_connect_url == "https://hub:8081"
+    # The defaults are set when JupyterHub selects its client, after the selection.
+    assert hub.client.configured == []
+    hub.application.init_pycurl()
+    (selected, (implementation, options)) = hub.client.configured
+    assert selected == ("curl", {})
+    assert implementation == "curl"
+    defaults = options["defaults"]
+    assert defaults["ca_certs"] == hub.settings["ca_file"]
+    assert defaults["validate_cert"] is True
+    assert (defaults["client_key"], defaults["client_cert"]) == (
+        files["key"],
+        files["certificate"],
+    )
+    # libcurl reads no certificate directory besides the CA file.
+    unset: list[str] = []
+    defaults["prepare_curl_callback"](types.SimpleNamespace(unsetopt=unset.append))
+    assert unset == ["CAPATH"]
+    (culler,) = hub.config.JupyterHub.services
+    assert culler["command"] == [
+        "python3",
+        "-m",
+        "jupyterhub_idle_culler",
+        "--url=https://localhost:8081/hub/api",
+        "--timeout=3600",
+        "--ssl-enabled=true",
+        f"--internal-certs-location={hub.settings['tls_directory']}",
+    ]
+    # JupyterHub's TLS contexts trust the platform CA alone.
+    assert hub.application_module.make_ssl_context.__name__ == "platform_ssl_context"
+    with pytest.raises(ValueError, match="no URL"):
+        _module().culler_command(["python3", "-m", "jupyterhub_idle_culler"], hub.settings)
+    pod = {"spec": {"hostname": f"hw-gw-{_SESSION}", "subdomain": "hw-gateways"}}
+    url = hub.config.KubeSpawner.get_pod_url(object(), pod)
+    assert url.startswith(f"https://hw-gw-{_SESSION}.hw-gateways.")
+
+
+def test_the_start_hook_waits_for_the_hub_over_mutual_tls(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    import http.server
+    import ssl
+    import threading
+
+    hub = _module()
+    settings = {"tls_directory": str(tmp_path / "tls")}
+    files = hub.tls_files(settings)
+    secret = _named(objects, "Secret", "hub-tls")["data"]
+    _write(Path(files["key"]), base64.b64decode(secret["tls.key"]))
+    _write(Path(files["certificate"]), base64.b64decode(secret["tls.crt"]))
+    _write(
+        Path(files["ca"]),
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"]),
+    )
+    clients: list[Any] = []
+
+    class Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            clients.append(self.connection.getpeercert())
+            self.send_response(200 if self.path == "/hub/health" else 404)
+            self.end_headers()
+
+        def log_message(self, *_: Any) -> None:  # noqa: ANN401
+            pass
+
+    server = http.server.HTTPServer(("localhost", 0), Health)
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH, cafile=files["ca"])
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_cert_chain(files["certificate"], files["key"])
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        hub.wait_until_serving(settings, timeout=10, port=server.server_address[1])
+    finally:
+        server.shutdown()
+    # The hook presented the Hub's certificate as its client certificate.
+    assert clients
+    assert clients[0]["subject"] == ((("commonName", "hub"),),)
+    with pytest.raises(SystemExit, match="did not answer"):
+        hub.wait_until_serving(settings, timeout=0, port=server.server_address[1])
+
+
+def test_the_hubs_tls_contexts_trust_the_ca_file_alone(
+    objects: list[dict[str, Any]], tmp_path: Path
+) -> None:
+    import ssl
+
+    hub = _module()
+    secret = _named(objects, "Secret", "hub-tls")["data"]
+    key = _write(tmp_path / "tls.key", base64.b64decode(secret["tls.key"]))
+    certificate = _write(tmp_path / "tls.crt", base64.b64decode(secret["tls.crt"]))
+    authority = _write(
+        tmp_path / "ca.crt",
+        base64.b64decode(_named(objects, "Secret", "platform-ca")["data"]["tls.crt"]),
+    )
+    assert hub.platform_ssl_context(None, str(certificate), str(authority)) is None
+    for purpose, hostname in ((ssl.Purpose.CLIENT_AUTH, False), (ssl.Purpose.SERVER_AUTH, True)):
+        context = hub.platform_ssl_context(str(key), str(certificate), str(authority), purpose)
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is hostname
+        (only,) = context.get_ca_certs()
+        assert only["subject"] == ((("commonName", "Heartwood Platform CA"),),)
+
+
+def test_the_proxy_verifies_the_target_host_and_the_culler_stops_servers_before_expiry(
+    objects: list[dict[str, Any]],
+) -> None:
+    proxy = _named(objects, "Deployment", "proxy")["spec"]["template"]["spec"]
+    (container,) = proxy["containers"]
+    environment = {item["name"]: item.get("value") for item in container["env"]}
+    preload = environment["NODE_OPTIONS"]
+    assert preload.startswith("--import=data:text/javascript,")
+    assert "servername:o.host" in preload
+    configuration = yaml.safe_load(
+        base64.b64decode(_named(objects, "Secret", "hub")["data"]["values.yaml"])
+    )
+    assert 0 < configuration["cull"]["maxAge"] < 30 * 24 * 3600

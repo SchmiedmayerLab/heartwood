@@ -50,7 +50,7 @@ docs = [
     { name = "mike", git = "https://github.com/squidfunk/mike.git?rev=0f62791256ebeba60d20d2f1d8fe6ec3b7d1e2b3" },
     { name = "zensical", specifier = "==0.0.52" },
 ]
-worker = [{ name = "openhands-agent-server", path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }]
+worker = [{ name = "openhands-agent-server", path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -1954,8 +1954,8 @@ requires-dist = [
     { name = "keyring", specifier = "==25.7.0" },
     { name = "mcp", specifier = "==2.3.0" },
     { name = "openai", specifier = "==2.53.0" },
-    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" },
-    { name = "openhands-tools", path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.3-py3-none-any.whl" },
+    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl" },
+    { name = "openhands-tools", path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.5-py3-none-any.whl" },
     { name = "openshell", path = "vendor/runtime-wheels/openshell-0.1.9+heartwood.2-py3-none-any.whl" },
     { name = "packaging", specifier = "==26.3" },
     { name = "pydantic", specifier = ">=2.12" },
@@ -2065,7 +2065,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" },
+    { name = "openhands-sdk", path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]
@@ -3746,8 +3746,8 @@ wheels = [
 
 [[package]]
 name = "openhands-agent-server"
-version = "1.62.0+heartwood.3"
-source = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl" }
+version = "1.62.0+heartwood.5"
+source = { path = "vendor/runtime-wheels/openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
@@ -3764,7 +3764,7 @@ dependencies = [
     { name = "wsproto" },
 ]
 wheels = [
-    { filename = "openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792" },
+    { filename = "openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl", hash = "sha256:5123550b8c603a5c39506461e2877934386fdb5844f8d021439561fd7bac6dcc" },
 ]
 
 [package.metadata]
@@ -3788,8 +3788,8 @@ provides-extras = ["posthog"]
 
 [[package]]
 name = "openhands-sdk"
-version = "1.62.0+heartwood.3"
-source = { path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl" }
+version = "1.62.0+heartwood.5"
+source = { path = "vendor/runtime-wheels/openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "certifi" },
@@ -3812,7 +3812,7 @@ dependencies = [
     { name = "websockets" },
 ]
 wheels = [
-    { filename = "openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:926a57328eb4d526ce7edce5b97a889bcf0b01b40b91cf97da5eabadd29c86f5" },
+    { filename = "openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl", hash = "sha256:d85f96f17db38b2012e687b96b86b91653b363d7ce4801cf6109a504ad0d7136" },
 ]
 
 [package.metadata]
@@ -3844,8 +3844,8 @@ provides-extras = ["boto3", "toolshield", "vertex"]
 
 [[package]]
 name = "openhands-tools"
-version = "1.62.0+heartwood.3"
-source = { path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.3-py3-none-any.whl" }
+version = "1.62.0+heartwood.5"
+source = { path = "vendor/runtime-wheels/openhands_tools-1.62.0+heartwood.5-py3-none-any.whl" }
 dependencies = [
     { name = "binaryornot" },
     { name = "browser-use" },
@@ -3862,7 +3862,7 @@ dependencies = [
     { name = "tree-sitter-bash" },
 ]
 wheels = [
-    { filename = "openhands_tools-1.62.0+heartwood.3-py3-none-any.whl", hash = "sha256:240742f7ed97ee02ac1baf25fa400ca8fd81f642c7dc41da9586a067f93b8697" },
+    { filename = "openhands_tools-1.62.0+heartwood.5-py3-none-any.whl", hash = "sha256:f90aaadd89c124cfc93b894d87d1e19bcecc05402d6f5d348d729b4572989afe" },
 ]
 
 [package.metadata]

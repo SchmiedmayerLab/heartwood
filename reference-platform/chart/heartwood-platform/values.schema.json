@@ -144,6 +144,40 @@
               }
             }
           },
+          "interactiveDataset": {
+            "description": "Sealed dataset version mounted at /data for members of this project.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "version",
+              "size",
+              "objects",
+              "reader"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+              },
+              "version": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "objects": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reader": {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9-]{1,128}$"
+              }
+            }
+          },
           "datasets": {
             "type": "array",
             "items": {
@@ -583,6 +617,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "projectDomain",
         "publicOrigin",
         "trustedProxySources",
         "storage",
@@ -591,6 +626,11 @@
         "modelRoute"
       ],
       "properties": {
+        "projectDomain": {
+          "type": "string",
+          "maxLength": 186,
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.])+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
         "publicOrigin": {
           "description": "HTTPS scheme, DNS host name and optional port of the Hub's proxy.",
           "type": "string",
@@ -667,6 +707,10 @@
                   "const": ""
                 }
               ]
+            },
+            "runtimeImages": {
+              "type": "object",
+              "description": "Node-specific OCI manifests and runtime configuration IDs for worker admission."
             },
             "policy": {
               "type": "object"

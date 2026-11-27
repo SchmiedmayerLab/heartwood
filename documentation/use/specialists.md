@@ -30,7 +30,7 @@ Cancellation does not undo completed actions, and the model provider may still p
 
 | Specialist | Focus | Verified Skills |
 |---|---|---|
-| Research Planner | A sequential plan, assumptions, inputs, checks, and required evidence | None |
+| Research Planner | A sequential plan, assumptions, inputs, checks, and required evidence | `workload-prediction` |
 | Data Quality Reviewer | Completeness, validity, temporal consistency, duplicates, and denominators | `omop-cohort-summary` |
 | Cohort and Feature Reviewer | Eligibility, timing, censoring, feature construction, and leakage | `omop-cohort-summary` |
 | Statistical Reviewer | Estimands, splits, specification, uncertainty, validation, and interpretation | `baseline-model` |

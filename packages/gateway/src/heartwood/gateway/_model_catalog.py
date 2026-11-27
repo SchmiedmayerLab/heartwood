@@ -979,12 +979,12 @@ def _discovery_error_code(error: Exception) -> BackendErrorCode:
     if getattr(error, "status_code", None) in {401, 403}:
         return BackendErrorCode.PROVIDER_AUTHENTICATION_FAILED
     prepare_openhands_import()
-    from openhands.sdk.event.error_classification import classify_error
+    from openhands.sdk.event.error_classification import classify_exception
 
     from heartwood.gateway._openhands_failures import classified_error_code
 
     code = classified_error_code(
-        classify_error(type(error).__name__, str(error)),
+        classify_exception(error),
         fallback=BackendErrorCode.PROVIDER_UNAVAILABLE,
     )
     # A model list involves no agent action, so other runtime outcomes do not apply.

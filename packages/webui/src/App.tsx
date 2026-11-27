@@ -57,6 +57,7 @@ import {
 import { UtilitySheet } from "./components/UtilitySheet";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import { downloadTextFile } from "./downloads";
+import { signOutOfProject } from "./gatewayAccess";
 import { modelProfileLabel } from "./modelPresentation";
 import {
   requestActivityForCommand,
@@ -90,6 +91,7 @@ import type {
 interface AppProps {
   client?: HeartwoodClient;
   initialSessionId?: string;
+  onSignedOut?: () => void;
 }
 
 interface InitialState {
@@ -150,7 +152,7 @@ const GroveLink = ({ href, ...props }: ComponentProps<"a">) => (
 
 const groveRouter = { Link: GroveLink };
 
-export const App = ({ client, initialSessionId }: AppProps) => {
+export const App = ({ client, initialSessionId, onSignedOut }: AppProps) => {
   const resolvedClient = useMemo(() => client ?? new GatewayClient(), [client]);
   const { theme, toggleTheme } = useColorTheme();
   const initializationRef = useRef<Promise<InitialState> | null>(null);
@@ -943,6 +945,21 @@ export const App = ({ client, initialSessionId }: AppProps) => {
             onRename={(title) => void renameSession(title)}
             onToggleTheme={toggleTheme}
           />
+
+          {(
+            onSignedOut &&
+            /^\/user\/r[0-9a-f]{32}\//.test(window.location.pathname)
+          ) ?
+            <Button
+              onClick={() =>
+                void signOutOfProject()
+                  .then(onSignedOut)
+                  .catch((caught: unknown) => setError(errorMessage(caught)))
+              }
+            >
+              Sign out of project
+            </Button>
+          : null}
 
           {error ?
             <div className="error-banner" role="alert">

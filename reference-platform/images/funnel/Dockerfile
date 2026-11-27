@@ -28,7 +28,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM build AS test
 ARG FUNNEL_TESTS
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    test -n "${FUNNEL_TESTS}" && go test -count=1 ${FUNNEL_TESTS}
+    test -n "${FUNNEL_TESTS}" && go test -count=1 ${FUNNEL_TESTS} && \
+    go test -count=1 -run '^TestRunAppliesGPUCountOnlyToExecutorContainer$' ./internal/worker
 
 # The server runs as a non-root user and the worker as root in its own user namespace.
 # The pod templates set both.

@@ -1,0 +1,25 @@
+diff --git a/openhands-sdk/openhands/sdk/event/error_classification.py b/openhands-sdk/openhands/sdk/event/error_classification.py
+index c662623..eee69fa 100644
+--- a/openhands-sdk/openhands/sdk/event/error_classification.py
++++ b/openhands-sdk/openhands/sdk/event/error_classification.py
+@@ -70,6 +70,10 @@ def classify_error(code: str, detail: str = "") -> ErrorClassification:
+     # raise the configured limit rather than treating this as an SDK failure.
+     if code in {"MaxBudgetReached"}:
+         return _failure(FailureKind.QUOTA, user_action="settings")
++    # An inference gateway refuses a key beyond its budget with a client error, which
++    # the SDK maps to a bad request; its text names the budget.
++    if code == "LLMBadRequestError" and "budget has been exceeded" in detail.casefold():
++        return _failure(FailureKind.QUOTA, user_action="settings")
+     if code in {
+         "LLMBadRequestError",
+         "ACPInitError",
+@@ -136,6 +140,9 @@ def classify_error(code: str, detail: str = "") -> ErrorClassification:
+             "does not support thinking",
+             "model is no longer available",
+             "model not found",
++            "key not allowed to access model",
++            "key_model_access_denied",
++            "is not available for this api key, or the model name is invalid",
+             "invalid params",
+             "inactive_service",
+             "powershell is not available",

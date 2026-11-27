@@ -48,8 +48,10 @@ from heartwood.core_adapter import (
     TokenDeltaSink,
 )
 from heartwood.core_adapter.external_actions import (
+    ExternalActionDecision,
     ExternalActionError,
     ExternalActionRecord,
+    canonical_request,
     external_action_records,
 )
 from heartwood.core_adapter.external_results import external_result_records
@@ -70,12 +72,17 @@ from heartwood.gateway._mcp_policy import (
     mcp_destinations_from_mapping,
     token_authentication,
 )
-from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_calls
+from heartwood.gateway._mcp_servers import (
+    McpOutsideAdapter,
+    _tool_arguments,
+    advance_outside_calls,
+)
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._rest import RestGateway, RestRequest
 from heartwood.gateway.platform_fakes import FakeTokenIssuer, serve
 from heartwood.gateway.worker_sessions import WorkerSessionPlan, WorkerSessionRequest
 from heartwood.schemas import (
+    JsonValue,
     McpServerAddRequest,
     McpServerEnabledRequest,
     McpServerTestRequest,
@@ -125,6 +132,7 @@ class Catalog:
         self.server.tool(self.get_operation, annotations=_READ_ONLY)
         self.server.tool(self.delete_records)
         self.server.tool(self.unbound_lookup, annotations=_READ_ONLY)
+        self.server.tool(self.label_records, annotations=_READ_ONLY)
         self.server.resource("resource://synthetic/notes")(self.notes)
         self.server.prompt(self.plan)
         self.app = self.server.http_app(path="/mcp", json_response=True, stateless_http=True)
@@ -182,6 +190,13 @@ class Catalog:
             self.tombstones.add(key)
             self.operations[key] = "not-received"
         return self._observation(project_id, operation_id)
+
+    async def label_records(
+        self, project_id: str, operation_id: str, summary: str
+    ) -> PlatformOperationObservation:
+        """Label synthetic records with a summary; the tool's own argument is named summary."""
+        self.calls.append(f"label:{summary}")
+        return await self.find_records(project_id, operation_id, summary)
 
     def delete_records(self, project_id: str, operation_id: str, term: str) -> str:
         """Delete synthetic records; the deployment does not allow this tool."""
@@ -335,7 +350,7 @@ def served(
             destination = McpDestination(
                 service_id=_SERVICE_ID,
                 origin=origin,
-                tools=("find_records", "unbound_lookup"),
+                tools=("find_records", "unbound_lookup", "label_records"),
                 observation_tool="get_operation",
                 max_result_bytes=max_result_bytes,
                 call_timeout_seconds=2,
@@ -971,20 +986,140 @@ def test_a_denied_call_sends_nothing(tmp_path: Path) -> None:
             assert service.catalog.calls == []
 
 
-def test_tools_outside_the_session_binding_and_gateway_fields_are_refused(tmp_path: Path) -> None:
+def test_the_sdk_fields_of_a_call_stay_out_of_the_reviewed_request(tmp_path: Path) -> None:
+    """OpenHands adds summary and security_risk to every client tool call it records."""
     with served(tmp_path) as service:
         service.enable()
         with outside_session(tmp_path, service) as (session, worker, adapter):
             (tool,) = adapter.tool_names
+            worker.call(tool, {"term": "synthetic", "summary": "Search", "security_risk": "LOW"})
+            advance_outside_calls(session, adapter)
+            (record,) = _records(session)
+            assert record.phase == "proposed"
+            assert json.loads(record.proposal.request.request_json) == {"term": "synthetic"}
+            _decide(session, record, CommandKind.APPROVE)
+            assert service.catalog.calls == ["synthetic"]
+
+
+def test_a_tool_that_declares_an_sdk_field_receives_it(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable(["label_records"])
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            worker.call(tool, {"summary": "Cohort A", "security_risk": "LOW"})
+            advance_outside_calls(session, adapter)
+            (record,) = _records(session)
+            assert json.loads(record.proposal.request.request_json) == {"summary": "Cohort A"}
+            _decide(session, record, CommandKind.APPROVE)
+            assert service.catalog.calls == ["label:Cohort A", "Cohort A"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "reason"),
+    [
+        (
+            {"term": "synthetic", "summary": "Search", "security_risk": "LOW", "limit": 5},
+            "The call has arguments the reviewed tool does not define",
+        ),
+        (
+            {"term": "synthetic", "project_id": "other-project"},
+            "The call names a field the gateway supplies",
+        ),
+        ({}, "The call is missing arguments the reviewed tool requires"),
+    ],
+)
+def test_a_refused_call_reaches_the_agent_and_contacts_no_service(
+    tmp_path: Path, arguments: dict[str, JsonValue], reason: str
+) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            worker.call(tool, arguments)
+            advance_outside_calls(session, adapter)
+            (record,) = _records(session)
+            # The researcher sees the refusal and its reason; it carries none of the arguments.
+            assert record.proposal.request.summary == (
+                f"Tell the agent its find_records call was refused: {reason}"
+            )
+            assert json.loads(record.proposal.request.request_json) == {"refusal": reason}
+            _decide(session, record, CommandKind.APPROVE)
+            (observed,) = _records(session)
+            assert observed.observation is not None
+            assert observed.observation.operation.status == "failed"
+            assert observed.observation.operation.limitations == (reason,)
+            advance_outside_calls(session, adapter, clock=lambda: 1e9)
+            (release,) = external_result_records(session.replay_events()).values()
+            assert json.loads(release.proposal.content_json)["limitations"] == [reason]
+            assert service.catalog.calls == []
+            assert service.catalog.operations == {}
+
+
+def test_a_server_named_like_a_refusal_is_called_as_a_service(tmp_path: Path) -> None:
+    """A server at `http://heartwood-refusal/mcp` has the destination `heartwood-refusal`."""
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            proposal = _call(session, worker, adapter).proposal
+            named = proposal.model_copy(
+                update={
+                    "request": proposal.request.model_copy(
+                        update={"destination": "heartwood-refusal"}
+                    )
+                }
+            )
+            now = datetime.now(UTC)
+            decision = ExternalActionDecision(
+                command_id="command",
+                actor_id="researcher",
+                decision="approved",
+                decided_at=now,
+                proposal_sha256=named.sha256,
+            )
+            adapter.check_policy(named, "researcher", now)
+            observed = adapter.submit(named, decision, ())
+            assert observed.operation.status == "completed"
+            assert service.catalog.calls == ["synthetic"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [{"refusal": "reason", "term": "synthetic"}, {"refusal": 5}, {"term": "synthetic"}],
+)
+def test_a_refusal_record_carrying_more_than_its_reason_is_refused(
+    tmp_path: Path, content: dict[str, JsonValue]
+) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
+            (tool,) = adapter.tool_names
+            worker.call(tool, {})
+            advance_outside_calls(session, adapter)
+            proposal = _records(session)[-1].proposal
+            altered = proposal.model_copy(
+                update={
+                    "request": proposal.request.model_copy(
+                        update={"request_json": canonical_request(json.dumps(content))}
+                    )
+                }
+            )
+            with pytest.raises(ExternalActionError, match="carries only its reason"):
+                adapter.check_policy(altered, "researcher", datetime.now(UTC))
+            with pytest.raises(ExternalActionError, match="carries only its reason"):
+                adapter.observe(altered)
+            assert service.catalog.calls == []
+
+
+def test_tools_outside_the_session_binding_are_refused(tmp_path: Path) -> None:
+    with served(tmp_path) as service:
+        service.enable()
+        with outside_session(tmp_path, service) as (session, worker, adapter):
             with pytest.raises(ExternalActionError):
                 adapter.prepare("catalog__delete_records", {"term": "synthetic"})
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, {"term": "synthetic", "project_id": "other-project"})
-            with pytest.raises(ExternalActionError):
-                adapter.prepare(tool, {})
             worker.call("catalog__delete_records", {"term": "synthetic"})
             advance_outside_calls(session, adapter)
             assert _records(session) == []
+            assert _tool_arguments({"summary": "s", "limit": 5}, {"term"}) == {"limit": 5}
 
 
 def test_a_tool_changed_after_review_is_not_called(tmp_path: Path) -> None:

@@ -23,24 +23,36 @@
         {
           "path": "terminal-environment.patch",
           "sha256": "1ac63931e09c91d49ce60bfd93aa5944abfb0d835fdfc1cfc2569d86b975bf26"
+        },
+        {
+          "path": "inference-gateway-refusals.patch",
+          "sha256": "c0c07663ec76d5a5cb6e7ca2178e9129e110364c37e837529f58c215fa4ab4d8"
+        },
+        {
+          "path": "subprocess-pty-completion.patch",
+          "sha256": "1410af3322274ab38a73f4972d2824be334db763cc0c2e3281a1f133df866532"
+        },
+        {
+          "path": "quota-rate-limit.patch",
+          "sha256": "b5c753f837ae6ed5816e2a0e04fbf5b6e94e62cd580ba09b454349f1b192cc6d"
         }
       ],
       "packages": [
         {
           "path": "openhands-sdk",
-          "version": "1.62.0+heartwood.3",
+          "version": "1.62.0+heartwood.5",
           "original_version": "1.62.0",
           "name": "openhands-sdk"
         },
         {
           "path": "openhands-tools",
-          "version": "1.62.0+heartwood.3",
+          "version": "1.62.0+heartwood.5",
           "original_version": "1.62.0",
           "name": "openhands-tools"
         },
         {
           "path": "openhands-agent-server",
-          "version": "1.62.0+heartwood.3",
+          "version": "1.62.0+heartwood.5",
           "original_version": "1.62.0",
           "name": "openhands-agent-server"
         }
@@ -75,14 +87,14 @@
     "version_suffix": "+heartwood.1",
     "dependency_replacements": {
       "filelock==4.2.10": "filelock==4.2.10",
-      "openhands-sdk==1.62.0+heartwood.3": "openhands-sdk==1.62.0+heartwood.3",
-      "openhands-tools==1.62.0+heartwood.3": "openhands-tools==1.62.0+heartwood.3"
+      "openhands-sdk==1.62.0+heartwood.5": "openhands-sdk==1.62.0+heartwood.5",
+      "openhands-tools==1.62.0+heartwood.5": "openhands-tools==1.62.0+heartwood.5"
     }
   },
   "wheels_sha256": {
-    "openhands_agent_server-1.62.0+heartwood.3-py3-none-any.whl": "6aa09b754ee07ae63cdb274eafc8b8bd73585f545ed65954b8f9c9bf0e2ba792",
-    "openhands_sdk-1.62.0+heartwood.3-py3-none-any.whl": "926a57328eb4d526ce7edce5b97a889bcf0b01b40b91cf97da5eabadd29c86f5",
-    "openhands_tools-1.62.0+heartwood.3-py3-none-any.whl": "240742f7ed97ee02ac1baf25fa400ca8fd81f642c7dc41da9586a067f93b8697",
+    "openhands_agent_server-1.62.0+heartwood.5-py3-none-any.whl": "5123550b8c603a5c39506461e2877934386fdb5844f8d021439561fd7bac6dcc",
+    "openhands_sdk-1.62.0+heartwood.5-py3-none-any.whl": "d85f96f17db38b2012e687b96b86b91653b363d7ce4801cf6109a504ad0d7136",
+    "openhands_tools-1.62.0+heartwood.5-py3-none-any.whl": "f90aaadd89c124cfc93b894d87d1e19bcecc05402d6f5d348d729b4572989afe",
     "openshell-0.1.9+heartwood.2-py3-none-any.whl": "4f628d5f8cc9b451ad1be2de16ff453c3f82dc88ef053b22454ba9c95b18a87f"
   }
 }

@@ -97,6 +97,16 @@ const RevisionView = ({
   return (
     <section aria-label={`Revision ${prediction.plan.revision}`}>
       <h5>Revision {prediction.plan.revision}</h5>
+      <p>
+        Prediction {displaySafeText(prediction.prediction.record_id)} revision{" "}
+        {prediction.prediction.revision}
+      </p>
+      {(prediction.evidence ?? []).map((item) => (
+        <p key={item.evidence_id}>
+          Evidence {displaySafeText(item.evidence_id)} ({item.kind}):{" "}
+          {displaySafeText(item.reference)}; {displaySafeText(item.description)}
+        </p>
+      ))}
       <p>Uncertainty: {displaySafeText(prediction.uncertainty)}</p>
       <TextList label="Assumption" items={prediction.assumptions} />
       <ul>
@@ -112,6 +122,7 @@ const RevisionView = ({
               {element.quantities.map((item) => (
                 <p key={item.metric}>{quantityLabel(item)}</p>
               ))}
+              <TextList label="Evidence" items={element.evidence_ids} />
               <TextList label="Assumption" items={element.assumptions} />
             </li>
           );
@@ -136,9 +147,14 @@ const RevisionView = ({
             {item.observed_at}
           </li>
         ))}
-        {(overview.operations ?? []).map((item) => (
-          <li key={item.operation_id}>
-            {`Operation ${displaySafeText(item.operation_id)}: ${item.status}; observed ${item.observed_at}`}
+        {(revision.observation_evidence ?? []).map((item) => (
+          <li key={item.reference}>
+            Operation {displaySafeText(item.operation_id)}:{" "}
+            {displaySafeText(item.status)}; observed {item.observed_at};{" "}
+            {displaySafeText(item.service_id)} run{" "}
+            {displaySafeText(item.backend_operation_ref)};{" "}
+            {displaySafeText(item.platform_record_ref)};{" "}
+            {displaySafeText(item.reference)}
           </li>
         ))}
       </ul>
@@ -234,6 +250,17 @@ export const PlanningOverview = ({
             </dd>
           </>
         : null}
+        {projection.agent_tools ?
+          <>
+            <dt>Agent Tools</dt>
+            <dd>
+              {projection.agent_tools.availability === "available" ?
+                "available"
+              : `${projection.agent_tools.unavailable_code}: ${projection.agent_tools.unavailable_reason}`
+              }
+            </dd>
+          </>
+        : null}
       </dl>
     : null}
     <section aria-label="Platform budgets">
@@ -277,7 +304,9 @@ export const PlanningOverview = ({
             <ul>
               {plan.comparison.map((row) => (
                 <li key={row.estimate_id}>
-                  Revision {row.prediction.revision}: {costLabel(row.total)}{" "}
+                  Prediction {displaySafeText(row.prediction.record_id)},
+                  revision {row.prediction.revision}, estimate{" "}
+                  {displaySafeText(row.estimate_id)}: {costLabel(row.total)}{" "}
                   with{" "}
                   {row.runtime_profile_refs.map(displaySafeText).join(", ")};{" "}
                   {row.state}

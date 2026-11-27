@@ -205,6 +205,7 @@ Otherwise open model settings, update the credential through the supported secre
 ### `HW-AGENT-009`: Model Provider Quota Exhausted
 
 The provider reported that the configured quota, credit, or budget is exhausted.
+For a platform connection, the deployment sets the budget; ask the operator to raise it.
 Review the approved provider account or select another approved model connection before continuing.
 
 ### `HW-AGENT-010`: Model Provider Rate Limited
@@ -215,6 +216,7 @@ Wait briefly and retry the task without repeating any action whose outcome is un
 ### `HW-AGENT-011`: Model Configuration Is Invalid
 
 The selected model, endpoint, or provider configuration cannot serve the requested task.
+A task reports it when the provider no longer allows the connection's credential to use the selected model.
 Model setup reports the same code when the model is no longer in the connection's model list or the deployment declares no protocol Heartwood supports for it.
 A withdrawn model stays selected until you choose another; Heartwood does not replace it.
 Open model settings, choose or correct the connection, and validate it before retrying.
@@ -320,7 +322,9 @@ Test the server, compare the listed tools, and select them again.
 ### `HW-MCP-004`: Research Services Require an Isolated Worker
 
 Research service calls run only in sessions with an isolated worker, because each call needs outside review.
-Start the gateway with a deployment manifest that configures an isolated worker and lists MCP destinations.
+The planning projection reports the agent planning tools as unavailable with this code, because their calls need the same review.
+Start the gateway with a deployment manifest that configures an isolated worker.
+Research services also need the manifest to list MCP destinations; planning tools need only the worker.
 `heartwood services` can still manage the servers of such a deployment.
 
 ### `HW-MCP-005`: Research Service Is Unavailable or Refused the Request
@@ -334,6 +338,13 @@ The MCP client reports a refused credential and an unavailable service the same 
 The deployment does not list the tool for the server's origin, or the tool does not accept a `project_id` and an `operation_id`.
 Heartwood supplies both values so the service can scope the call and recognize a repeated operation.
 Tools without them cannot be selected.
+
+### `HW-MCP-007`: Planning Tools Are Not Offered With Another Outside Service
+
+The gateway runs in an embedding that supplies its own outside service, so worker sessions receive no agent planning tools.
+The planning projection reports them as unavailable with this code.
+No deployment manifest change enables them.
+Researchers can still use planning through `/plan`, the browser or the notebook.
 
 ## Deployment Manifests
 
@@ -427,6 +438,17 @@ Inspect its record and continue in a new session.
 
 These conditions appear in the planning overview of the terminal, browser and notebook.
 The platform owns budgets, prices and admission; see [Launch Context, Budgets and Estimates](../operate/platform-contract.md#launch-context-budgets-and-estimates).
+
+### Earlier Planning Evidence References
+
+A journal containing a version 1 prediction with a free-text evidence reference such as `sample.csv` cannot be opened by the current planning reader.
+The gateway identifies the earlier format and leaves the journal in place.
+Because the protected project journal can hold several launch contexts, starting a fresh journal affects planning history for all of them.
+Stop all gateways using that protected project state and archive `planning.jsonl` and any `.planning.jsonl.pending` file under the same access controls.
+Verify the archived bytes. If an append is pending, complete recovery with the matching reader and archive the recovered journal as well.
+With all writers stopped, move the recovered journal to a distinct, unused backup name.
+Restart the gateway with the original journal path vacant to start fresh planning state.
+To inspect the historical evidence, use the matching earlier reader on an isolated copy of the archive.
 
 ### `HW-PLAN-001`: Platform Planning Information Is Unavailable
 
@@ -592,13 +614,27 @@ An access token signed with an algorithm other than RS256 or ES256, or without a
 Operators compare the manifest's [`[identity]` table](configuration.md#identity) with the provider's client: issuer, client identifier, secret, subject and the redirect URI `<public origin><base path>/oauth_callback`.
 
 A research service that takes an exchanged token reports this code while no sign-in is live, and when the provider refuses a token for that service.
-Sign in at the gateway again; operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
+Test and add such a service in the signed-in browser; `heartwood services` has no sign-in and reports this code for every such service.
+When this code refuses an approval of one of the service's operations, the terminal, browser and notebook show it and the review stays open.
+Sign in at the gateway again and approve the operation again.
+A review is valid for five minutes.
+While the service refuses with this code, an expired review of a submission is not replaced and no review opens for a new submission to the service.
+The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call, and the agent continues without the call's result.
+To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service while the sign-in is unchanged; a sign-in after none was live or a connection to the service, such as an approved operation, ends that wait.
+The first session read after the next sign-in opens a review with the platform's description, and the new review needs its own approval.
+Operators compare the destination's `token_exchange` scope and audience with the scopes the provider grants the gateway's client.
 
 ### `HW-INGRESS-005`: Identity Provider Is Unavailable
 
 The gateway could not reach the identity provider, or the provider answered with a document the gateway cannot use.
 Status `503` means the request to the provider failed or timed out; status `502` means the provider answered with an error or an unusable document.
 Retry when the provider is reachable.
+A research service that takes an exchanged token reports this code when the gateway cannot obtain its token, and an approval of one of its operations is refused with it in the terminal, browser and notebook.
+The review stays open; approve it again once the provider is reachable.
+While the provider stays unavailable, an expired review of a submission is not replaced and no review opens for a new submission to the service.
+The terminal, browser and notebook show **A research service call cannot be reviewed yet** with this code once for each such call, and the agent continues without the call's result.
+To describe calls that have no review, the gateway asks the provider at most every ten seconds for each service while the sign-in is unchanged.
+The first session read after the provider is reachable again and that interval has passed opens a review with the platform's description, and the new review needs its own approval.
 
 Operators check that `provider_url` is reachable from the gateway, that `ca_file` holds the authority of the provider's certificate, and that the discovery document's `issuer` equals the configured `issuer`.
 The discovery document's authorization, token and key endpoints must lie on the origin of `issuer` or of `provider_url`.

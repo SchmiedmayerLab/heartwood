@@ -982,8 +982,17 @@ class SessionService:
         """Prepare review of a retained worker proposal through a trusted service adapter."""
         with self._command_lock:
             self._await_command_locked()
-            events = propose_external_action_locked(self, source_event_id)
-        self._event_sink(events)
+            recorded = len(self.replay_events())
+            refusal: ValueError | None = None
+            try:
+                events = propose_external_action_locked(self, source_event_id)
+            except ValueError as error:
+                # A closed review and the reason for no new one still reach subscribers.
+                events, refusal = self.replay_events()[recorded:], error
+        if events:
+            self._event_sink(events)
+        if refusal is not None:
+            raise refusal
         return events[-1]
 
     def _undispatched_authorizations(self, events: tuple[SessionEvent, ...]) -> dict[str, str]:
