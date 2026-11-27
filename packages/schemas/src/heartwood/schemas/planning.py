@@ -13,9 +13,9 @@ a reported estimate or balance in it never guarantees that the platform admits w
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from heartwood.schemas._planning_contract import (
     BudgetObservation,
@@ -73,8 +73,17 @@ class PlanningAgentTools(_PlanningView):
     """Whether a session's agent can call the planning tools, reported like research services."""
 
     availability: Literal["available", "unavailable"]
-    unavailable_reason: str | None = None
-    unavailable_code: str | None = None
+    unavailable_reason: _Text | None = None
+    unavailable_code: _Text | None = None
+
+    @model_validator(mode="after")
+    def _reason_with_unavailability(self) -> Self:
+        unavailable = self.availability == "unavailable"
+        if unavailable != (self.unavailable_reason is not None) or unavailable != (
+            self.unavailable_code is not None
+        ):
+            raise ValueError("unavailable agent tools need a code and reason, available none")
+        return self
 
 
 class PlanningOutcome(_PlanningView):

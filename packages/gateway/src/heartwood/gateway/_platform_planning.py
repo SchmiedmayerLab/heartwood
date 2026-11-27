@@ -461,12 +461,12 @@ class PlatformPlanning:
         journal_path: Path,
         contains_file: Callable[[Path], bool],
         run_ids: Callable[[], set[str]],
-        worker_available: bool,
+        agent_tools_unavailable: str | None,
     ) -> None:
         """Keep planning records in ``journal_path``; the binding's clock judges validity.
 
-        Only isolated worker sessions receive the agent planning tools, so without
-        ``worker_available`` the projection reports them unavailable.
+        ``agent_tools_unavailable`` is why no session's agent receives the planning tools,
+        or None when worker sessions receive them.
         """
         self.launch = binding.launch
         self.client = binding.client
@@ -474,7 +474,7 @@ class PlatformPlanning:
         self.clock = binding.clock
         self._contains_file = contains_file
         self._run_ids = run_ids
-        self._agent_tools = _agent_tool_availability(worker_available=worker_available)
+        self._agent_tools = _agent_tool_availability(agent_tools_unavailable)
         self._lock = Lock()
         self._discovery: PlanningDiscovery | None = None
         self._services = PlanningServices(budgets="unchecked", estimates="unchecked")
@@ -1510,12 +1510,12 @@ def _agent_view(
     }
 
 
-def _agent_tool_availability(*, worker_available: bool) -> PlanningAgentTools:
-    if worker_available:
+def _agent_tool_availability(reason: str | None) -> PlanningAgentTools:
+    if reason is None:
         return PlanningAgentTools(availability="available")
     return PlanningAgentTools(
         availability="unavailable",
-        unavailable_reason="planning tools run only in isolated worker sessions",
+        unavailable_reason=reason,
         unavailable_code=diagnostic_for("mcp-worker-required").code,
     )
 

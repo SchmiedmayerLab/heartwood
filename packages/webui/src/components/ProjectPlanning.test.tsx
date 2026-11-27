@@ -49,6 +49,22 @@ describe("project planning", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("shows agent tools as available when worker sessions receive them", async () => {
+    render(
+      <ProjectPlanning
+        client={client({
+          ...projection,
+          agent_tools: { availability: "available" },
+        })}
+      />,
+    );
+    fireEvent.click(await screen.findByText("Research Planning"));
+
+    expect(
+      screen.getByText("Agent Tools").nextElementSibling,
+    ).toHaveTextContent(/^available$/);
+  });
+
   it("shows budgets, revisions, estimates, the comparison and outcomes", async () => {
     render(<ProjectPlanning client={client()} />);
     fireEvent.click(await screen.findByText("Research Planning"));

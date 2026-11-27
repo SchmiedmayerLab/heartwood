@@ -705,6 +705,9 @@ def _produce(
     return gateway.planning()
 
 
+_AGENT_TOOLS = "Agent planning tools: "
+
+
 @pytest.mark.parametrize(
     "state",
     [item for item in _STATES if item["surface"] == "planning"],
@@ -729,9 +732,6 @@ def test_planning_outcomes_show_the_same_diagnostic_in_every_interface(
             interface
         )
         assert any(line.startswith(f"{state['diagnostic']} (") for line in lines), interface
-
-
-_AGENT_TOOLS = "Agent planning tools: "
 
 
 def test_every_interface_reports_planning_tools_unavailable_without_a_worker(
@@ -1231,7 +1231,7 @@ def test_correction_rechecks_evidence_and_cites_one_historical_observation(
             journal_path=gateway.project.state_root / "planning.jsonl",
             contains_file=gateway.project.contains,
             run_ids=set,
-            worker_available=False,
+            agent_tools_unavailable="no worker",
         )
         evidence = tuple(
             item.model_copy(update={"project_context_id": "other-context"})
@@ -1351,7 +1351,7 @@ def test_concurrent_writers_record_one_version_of_a_revision(tmp_path: Path, clo
             journal_path=path,
             contains_file=ProjectContext(tmp_path).contains,
             run_ids=set,
-            worker_available=False,
+            agent_tools_unavailable="no worker",
         )
         for _ in range(4)
     ]

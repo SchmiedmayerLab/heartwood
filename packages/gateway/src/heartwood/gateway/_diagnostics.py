@@ -314,7 +314,8 @@ _DIAGNOSTICS: dict[str, DiagnosticDefinition] = {
     "mcp-worker-required": DiagnosticDefinition(
         "HW-MCP-004",
         "Research services require an isolated worker",
-        "Start Heartwood with a deployment manifest that configures an isolated worker.",
+        "Start Heartwood with a deployment manifest that configures an isolated worker; "
+        "agent planning tools need only the worker.",
         "/reference/troubleshooting/#hw-mcp-004-research-services-require-an-isolated-worker",
     ),
     "mcp-unavailable": DiagnosticDefinition(

@@ -322,7 +322,8 @@ Test the server, compare the listed tools, and select them again.
 ### `HW-MCP-004`: Research Services Require an Isolated Worker
 
 Research service calls run only in sessions with an isolated worker, because each call needs outside review.
-Start the gateway with a deployment manifest that configures an isolated worker and lists MCP destinations.
+The planning projection reports the agent planning tools with this code too, for the same reason.
+Start the gateway with a deployment manifest that configures an isolated worker and lists MCP destinations; the planning tools need only the isolated worker.
 `heartwood services` can still manage the servers of such a deployment.
 
 ### `HW-MCP-005`: Research Service Is Unavailable or Refused the Request
