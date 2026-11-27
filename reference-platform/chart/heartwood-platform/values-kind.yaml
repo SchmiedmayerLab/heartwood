@@ -142,7 +142,9 @@ jobs:
     maxActiveTasks: 4
 
 jupyterhub:
-  # Short enough for the cluster tests to observe a cull.
+  # Short enough for the cluster tests to observe a cull, and long enough that a server
+  # whose start or first command takes a few minutes is not culled, since the Hub
+  # refreshes a server's activity only every 60 seconds.
   cull:
-    timeout: 120
+    timeout: 300
     every: 30

@@ -502,7 +502,8 @@ def test_the_hub_creates_only_its_own_volume_claims_and_nothing_elsewhere(
 def test_the_idle_culler_stops_the_server_and_keeps_the_session(
     server: Server, cluster: Cluster
 ) -> None:
-    deadline = time.monotonic() + 420
+    # The cull timeout, the Hub's activity refresh and one culler interval, with margin.
+    deadline = time.monotonic() + 600
     while gateway_pods(cluster, server.session) and time.monotonic() < deadline:
         time.sleep(10)
     assert not gateway_pods(cluster, server.session), "the culler did not stop the server"

@@ -381,7 +381,8 @@ def _stop_other_servers(server: _CaseServer) -> None:
     assert status == 200, status
     names = set(user.get("servers", {})) - {server.project}
     for name in names:
-        browser.hub_api("DELETE", f"/users/{server.user}/servers/{name}")
+        status, _ = browser.hub_api("DELETE", f"/users/{server.user}/servers/{name}")
+        assert status in {202, 204}, status
     deadline = time.monotonic() + 180
     while names:
         status, user = browser.hub_api("GET", f"/users/{server.user}")
