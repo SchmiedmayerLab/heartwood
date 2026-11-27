@@ -21,6 +21,7 @@ from uuid import UUID, uuid4
 from heartwood.core_adapter._facade import BackendErrorCode, BackendErrorEvent, BackendEvent
 from heartwood.core_adapter._state import SessionRecoveryError
 from heartwood.core_adapter.external_actions import (
+    REFUSAL_DESTINATION,
     ExternalActionAdapter,
     ExternalActionDecision,
     ExternalActionError,
@@ -579,11 +580,12 @@ def _check_target(request: ExternalActionRequest, target: ExternalActionRecord |
     """Admit a cancellation only for an operation this session sent to the same service.
 
     The target identifier the service receives comes from this record, never from the
-    worker's text.
+    worker's text. A refused call reached no service, so it has nothing to cancel.
     """
     if (
         target is None
         or target.phase != "observed"
+        or target.proposal.request.destination == REFUSAL_DESTINATION
         or target.proposal.request.service_id != request.service_id
         or target.proposal.request.project_context_id != request.project_context_id
         or target.proposal.request.target_operation_id is not None

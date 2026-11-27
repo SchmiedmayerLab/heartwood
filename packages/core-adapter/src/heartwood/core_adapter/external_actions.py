@@ -168,6 +168,12 @@ class ExternalOperationReview(_Record):
         return self
 
 
+# The destination of a call the gateway refused before contacting any service. A
+# service's destination is its URL's host, which `urlsplit` always renders in lower case,
+# so no configured service can name this marker.
+REFUSAL_DESTINATION = "Heartwood-Refusal"
+
+
 class ExternalActionRequest(_Record):
     """Native operation content resolved from trusted service configuration.
 

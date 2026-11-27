@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from heartwood.core_adapter.external_actions import (
+    REFUSAL_DESTINATION,
     ExternalActionDecision,
     ExternalActionError,
     ExternalActionObservation,
@@ -878,7 +879,7 @@ class McpOutsideAdapter:
         return ExternalActionRequest(
             service_id=bound.destination.service_id,
             tool_name=tool_name,
-            destination=_REFUSED,
+            destination=REFUSAL_DESTINATION,
             summary=f"Tell the agent its {bound.tool.name} call was refused: {reason}"[:512],
             request_json=canonical_request(json.dumps({"refusal": reason})),
             project_context_id=self._context(),
@@ -1127,10 +1128,6 @@ class McpOutsideAdapter:
 
 # Fields OpenHands adds to every client tool's schema and keeps in the call's arguments.
 _SDK_FIELDS = frozenset({"summary", "security_risk"})
-# The destination of a research call the gateway refused; a refusal contacts no service.
-# A server's destination is its URL's host, which `urlsplit` always renders in lower case,
-# so no configured server can name this marker.
-_REFUSED = "Heartwood-Refusal"
 
 
 def _refusal_reason(request: ExternalActionRequest) -> str | None:
@@ -1138,7 +1135,7 @@ def _refusal_reason(request: ExternalActionRequest) -> str | None:
 
     A request naming the refusal marker must carry exactly the reason, or it is refused.
     """
-    if request.destination != _REFUSED:
+    if request.destination != REFUSAL_DESTINATION:
         return None
     content = json.loads(request.request_json)
     if (
