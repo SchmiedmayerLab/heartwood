@@ -251,6 +251,7 @@ def decide_external_action(
                         if isinstance(error, ExternalActionError) and error.code is not None
                         else {"reason": "outside authorization or input validation failed"}
                     ),
+                    "outside_review": True,
                     "affects_lifecycle": False,
                 },
             ),

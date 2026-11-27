@@ -889,7 +889,11 @@ def _start_correction(
     )
     submitted = service._handle_task(turn)
     if any(event.kind == EventKind.ERROR_RECORDED for event in submitted):
-        return (*recorded, *submitted, *settle_workflow_correction(service, evaluator, live=False))
+        return (
+            *recorded,
+            *submitted,
+            *settle_workflow_correction(service, evaluator, live=False, turn_refused=True),
+        )
     return (*recorded, *submitted)
 
 
@@ -926,7 +930,8 @@ def attempt_error_recorded(events: Sequence[SessionEvent], started_sequence: int
     return any(
         event.sequence > started_sequence
         and event.kind == EventKind.ERROR_RECORDED
-        and event.payload.get("affects_lifecycle") is not False
+        and "pending_call" not in event.payload
+        and event.payload.get("outside_review") is not True
         for event in events
     )
 
@@ -937,8 +942,12 @@ def settle_workflow_correction(
     *,
     execution_settled: bool = False,
     live: bool = True,
+    turn_refused: bool = False,
 ) -> tuple[SessionEvent, ...]:
-    """Recheck a settled attempt and continue only within its recorded consent and budget."""
+    """Recheck a settled attempt and continue only within its recorded consent and budget.
+
+    ``turn_refused`` settles an attempt whose turn the session refused before it ran.
+    """
     if evaluator is None:
         return ()
     events = service.replay_events()
@@ -960,8 +969,8 @@ def settle_workflow_correction(
         ),
         None,
     )
-    failed_without_lifecycle = lifecycle is None and attempt_error_recorded(
-        events, attempt.started_sequence
+    failed_without_lifecycle = lifecycle is None and (
+        turn_refused or attempt_error_recorded(events, attempt.started_sequence)
     )
     if lifecycle not in {"finished", "error"} and not failed_without_lifecycle:
         return ()
