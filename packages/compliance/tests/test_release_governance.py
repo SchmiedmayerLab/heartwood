@@ -427,7 +427,7 @@ def test_dependency_updates_share_the_weekly_group_and_cooldown() -> None:
         assert entry["cooldown"]["default-days"] == "7"
 
 
-def test_only_capable_model_acceptance_uses_the_large_hosted_runner() -> None:
+def test_only_capable_model_acceptance_and_the_end_to_end_stage_use_the_large_runner() -> None:
     workflow_root = Path(".github/workflows")
     workflows = {
         path.name: path.read_text(encoding="utf-8") for path in workflow_root.glob("*.yml")
@@ -442,7 +442,14 @@ def test_only_capable_model_acceptance_uses_the_large_hosted_runner() -> None:
         "gpu-container-pr.yml",
     }
     large = {name for name, text in workflows.items() if "heartwood-ubuntu-large" in text}
-    assert large == {"capable-model.yml"}
+    assert large == {"capable-model.yml", "kubernetes-qualification.yml"}
+    # In the cluster qualification only the end-to-end stage uses the large runner.
+    stages = _workflow(".github/workflows/kubernetes-qualification.yml")["jobs"]["cluster"][
+        "strategy"
+    ]["matrix"]["include"]
+    assert {entry["stage"] for entry in stages if entry["runner"] != "ubuntu-24.04"} == {
+        "end-to-end"
+    }
     capable = workflows["capable-model.yml"]
     assert capable.count("runs-on: heartwood-ubuntu-large") == 1
     assert "runs-on: ubuntu-24.04" not in capable

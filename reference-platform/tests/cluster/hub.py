@@ -152,7 +152,12 @@ class Browser:
     ) -> tuple[int, Any]:
         """Call the Hub's REST API with the browser's session."""
         xsrf = self.cookie("_xsrf")
-        data = ["--data-binary", "@-"] if body is not None else []
+        # The Hub refuses a cookie-authenticated POST whose body is not labelled JSON.
+        data = (
+            ["--header", "Content-Type: application/json", "--data-binary", "@-"]
+            if body is not None
+            else []
+        )
         with private_file(self.cluster, self.pod, f"X-XSRFToken: {xsrf}") as headers:
             output = curl(
                 self.cluster,

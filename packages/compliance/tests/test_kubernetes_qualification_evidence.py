@@ -250,7 +250,9 @@ def test_each_cluster_test_module_runs_in_exactly_one_stage() -> None:
     prefix = "../tests/cluster/"
     platform = stages["platform"]
     ignored = {item.removeprefix("--ignore=" + prefix) for item in platform[1:]}
-    named = [item.removeprefix(prefix) for stage in ("hosted", "end-to-end") for item in stages[stage]]
+    named = [
+        item.removeprefix(prefix) for stage in ("hosted", "end-to-end") for item in stages[stage]
+    ]
 
     assert set(stages) == {"platform", "hosted", "end-to-end", "worker"}
     # The platform stage runs every module that another stage does not.

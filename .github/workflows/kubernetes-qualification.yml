@@ -123,7 +123,9 @@ jobs:
 
   # Each stage runs on its own kind cluster with the same images and chart, so the
   # stages run in parallel. A cluster test module that is not named here runs in the
-  # platform stage.
+  # platform stage. The end-to-end story runs a session worker and a batch task at once,
+  # whose CPU requests exceed a four-CPU node, so it runs on the larger runner. Its
+  # servers wait idle between its tests, so the stage does not cull them.
   cluster:
     name: Kubernetes qualification of the ${{ matrix.stage }} stage
     needs: [scope, images]
@@ -132,13 +134,14 @@ jobs:
       hosted: ${{ steps.receipt.outputs.hosted }}
       worker: ${{ steps.receipt.outputs.worker }}
     if: needs.scope.outputs.required == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - stage: platform
+            runner: ubuntu-24.04
             tests: >-
               ../tests/cluster
               --ignore=../tests/cluster/test_hub_spawning.py
@@ -146,14 +149,18 @@ jobs:
               --ignore=../tests/cluster/test_hosted_worker.py
               --ignore=../tests/cluster/test_end_to_end.py
           - stage: hosted
+            runner: ubuntu-24.04
             tests: >-
               ../tests/cluster/test_hub_spawning.py
               ../tests/cluster/test_hosted_recovery.py
               ../tests/cluster/test_hosted_worker.py
           - stage: end-to-end
+            runner: heartwood-ubuntu-large
+            chart: --set jupyterhub.cull.timeout=3600
             tests: >-
               ../tests/cluster/test_end_to_end.py
           - stage: worker
+            runner: ubuntu-24.04
             tests: ""
     env:
       QUALIFICATION_STAGE: ${{ matrix.stage }}
@@ -300,7 +307,7 @@ jobs:
       - name: Install the platform chart
         if: ${{ !inputs.published-images }}
         run: >-
-          bash reference-platform/cluster/install-chart.sh heartwood
+          bash reference-platform/cluster/install-chart.sh heartwood ${{ matrix.chart }}
           --set "images.platformServices=${PLATFORM_SERVICES_IMAGE}"
           --set "images.openshellGateway=${GATEWAY_IMAGE}"
           --set "images.openshellRepository=${OPENSHELL_REPOSITORY}"
