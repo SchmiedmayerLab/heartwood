@@ -6,8 +6,9 @@
 
 name: Kubernetes Qualification
 
-# The cluster job downloads the wheels and the gateway that the Worker Dependency
-# Candidate workflow built in the same run, so a caller runs this workflow after it.
+# The image and cluster jobs download the wheels and the gateway that the Worker
+# Dependency Candidate workflow built in the same run, so a caller runs this workflow
+# after it.
 on:
   workflow_call:
 
@@ -27,7 +28,7 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
           submodules: true
-      # The scope is decided here, so a caller sees success when the cluster job is skipped.
+      # The scope is decided here, so a caller sees success when the cluster jobs are skipped.
       - name: Compare a pull request with its base
         id: inputs
         env:
@@ -50,12 +51,79 @@ jobs:
           fi
           echo "required=${required}" >> "${GITHUB_OUTPUT}"
 
-  cluster:
-    name: Kubernetes qualification
+  # The images are built once and passed to each cluster job as an artifact.
+  images:
+    name: Build the cluster images
     needs: scope
     if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Download candidate wheels
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: worker-dependency-candidate-${{ github.sha }}
+          path: test-results/worker-candidate
+      - name: Build and check candidate images
+        run: bash images/worker/build-candidate-images.sh test-results/worker-candidate "${GITHUB_SHA}"
+      - name: Build the platform services image
+        run: >-
+          docker build --file reference-platform/services/Dockerfile
+          --tag heartwood-platform-services:candidate .
+      - name: Build the Funnel image
+        run: >-
+          python3 reference-platform/tools/prepare_funnel.py "${RUNNER_TEMP}/funnel"
+          --image heartwood-funnel:candidate
+      - name: Save the images
+        run: |
+          mkdir -p "${RUNNER_TEMP}/cluster-images"
+          docker save --output "${RUNNER_TEMP}/cluster-images/images.tar" \
+            heartwood-worker:qualification heartwood-runtime:qualification \
+            heartwood-hosted-gateway:qualification heartwood-platform-services:candidate \
+            heartwood-funnel:candidate
+      - name: Retain the images for the cluster jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: kubernetes-qualification-images-${{ github.sha }}
+          path: ${{ runner.temp }}/cluster-images/images.tar
+          if-no-files-found: error
+          retention-days: 1
+          # Fast compression keeps the upload of the image archive short.
+          compression-level: 1
+
+  # Each stage runs on its own kind cluster with the same images and chart, so the
+  # stages run in parallel. A cluster test module that is not named here runs in the
+  # platform stage.
+  cluster:
+    name: Kubernetes qualification of the ${{ matrix.stage }} stage
+    needs: [scope, images]
+    if: needs.scope.outputs.required == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stage: platform
+            tests: >-
+              ../tests/cluster
+              --ignore=../tests/cluster/test_hub_spawning.py
+              --ignore=../tests/cluster/test_hosted_recovery.py
+              --ignore=../tests/cluster/test_hosted_worker.py
+              --ignore=../tests/cluster/test_end_to_end.py
+          - stage: hosted
+            tests: >-
+              ../tests/cluster/test_hub_spawning.py
+              ../tests/cluster/test_hosted_recovery.py
+              ../tests/cluster/test_hosted_worker.py
+              ../tests/cluster/test_end_to_end.py
+          - stage: worker
+            tests: ""
     env:
       KIND_VERSION: v0.33.0
       KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
@@ -85,40 +153,40 @@ jobs:
             --strip-components 1 linux-amd64/helm
           chmod +x "${RUNNER_TEMP}/bin/kind" "${RUNNER_TEMP}/bin/kubectl"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      # Only the chart tests run uv.
       - name: Install uv
+        if: matrix.stage != 'worker'
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.13.7"
           enable-cache: true
-      - name: Download candidate wheels
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: worker-dependency-candidate-${{ github.sha }}
-          path: test-results/worker-candidate
       - name: Download the pinned gateway build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: worker-gateway-candidate-${{ github.sha }}
           path: test-results/gateway-candidate
-      - name: Build and check candidate images
-        run: bash images/worker/build-candidate-images.sh test-results/worker-candidate "${GITHUB_SHA}"
+      - name: Download the images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: kubernetes-qualification-images-${{ github.sha }}
+          path: ${{ runner.temp }}/cluster-images
+      - name: Load the images
+        run: |
+          docker load --input "${RUNNER_TEMP}/cluster-images/images.tar"
+          rm -rf "${RUNNER_TEMP}/cluster-images"
       - name: Create the kind cluster with Calico and Agent Sandbox
         run: bash reference-platform/cluster/create-cluster.sh heartwood
       - name: Require network policy enforcement
         run: >-
           bash reference-platform/cluster/network-policy-controls.sh heartwood
           test-results/kubernetes-qualification
-      - name: Build the platform services image and push it to the cluster registry
+      - name: Push the platform services image to the cluster registry
         run: |
-          docker build --file reference-platform/services/Dockerfile \
-            --tag heartwood-platform-services:candidate .
           image="$(bash reference-platform/cluster/push-image.sh heartwood \
             heartwood-platform-services:candidate)"
           echo "PLATFORM_SERVICES_IMAGE=${image}" >> "${GITHUB_ENV}"
-      - name: Build the Funnel image and push it to the cluster registry
+      - name: Push the Funnel image to the cluster registry
         run: |
-          python3 reference-platform/tools/prepare_funnel.py "${RUNNER_TEMP}/funnel" \
-            --image heartwood-funnel:candidate
           image="$(bash reference-platform/cluster/push-image.sh heartwood heartwood-funnel:candidate)"
           echo "FUNNEL_IMAGE=${image}" >> "${GITHUB_ENV}"
       - name: Push the hosted gateway image to the cluster registry
@@ -164,8 +232,12 @@ jobs:
           --set-json "sessions.stagingImages=${STAGING_IMAGES}"
           --set-json "hub.modelRoute.binaries=${WORKER_INTERPRETER}"
       - name: Test the installed chart
+        if: matrix.stage != 'worker'
         working-directory: reference-platform/services
+        env:
+          TESTS: ${{ matrix.tests }}
         run: |
+          read -ra tests <<<"${TESTS}"
           uv sync --locked
           # Tests replace the control pod, so its logs are followed into the evidence meanwhile.
           while :; do
@@ -173,14 +245,16 @@ jobs:
               --timestamps pod/heartwood-control-0 || true
             sleep 2
           done >> ../../test-results/kubernetes-qualification/control.log 2>&1 &
-          uv run pytest -c pyproject.toml ../tests/cluster --cluster-context kind-heartwood \
+          uv run pytest -c pyproject.toml "${tests[@]}" --cluster-context kind-heartwood \
             --staging-image "${WORKER_IMAGE}" \
             --junitxml ../../test-results/kubernetes-qualification/platform-chart.xml
       - name: Qualify managed workers on the Kubernetes driver
+        if: matrix.stage == 'worker'
         run: >-
           python3 deploy/qualify-kubernetes-worker.py run --cluster heartwood
           --output test-results/kubernetes-qualification/worker
       - name: Verify the evidence for this commit
+        if: matrix.stage == 'worker'
         run: >-
           python3 deploy/qualification_evidence.py
           test-results/kubernetes-qualification/worker --commit "${GITHUB_SHA}"
@@ -192,9 +266,29 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: kubernetes-qualification-${{ github.sha }}
+          name: kubernetes-qualification-${{ matrix.stage }}-${{ github.sha }}
           path: |
             test-results/kubernetes-qualification/
             !test-results/kubernetes-qualification/worker/gateway/
           if-no-files-found: ignore
           retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
+
+  # The check of the whole stage, which passes when the stage was not required or every
+  # cluster job passed.
+  qualification:
+    name: Kubernetes qualification
+    needs: [scope, images, cluster]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every cluster job
+        env:
+          REQUIRED: ${{ needs.scope.outputs.required }}
+          RESULTS: ${{ toJson(needs) }}
+        run: |
+          if [[ "${REQUIRED}" == "true" ]]; then
+            jq --exit-status 'to_entries | all(.value.result == "success")' <<<"${RESULTS}"
+          else
+            jq --exit-status '.scope.result == "success"' <<<"${RESULTS}"
+          fi
