@@ -150,6 +150,8 @@ jobs:
               ../tests/cluster/test_hub_spawning.py
               ../tests/cluster/test_hosted_recovery.py
               ../tests/cluster/test_hosted_worker.py
+          - stage: end-to-end
+            tests: >-
               ../tests/cluster/test_end_to_end.py
           - stage: worker
             tests: ""
