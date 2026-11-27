@@ -61,6 +61,11 @@ describe("project planning", () => {
     expect(screen.getByText("research-project-a")).toBeInTheDocument();
     expect(screen.getByText("binding-a")).toBeInTheDocument();
     expect(
+      screen.getByText(
+        "HW-MCP-004: planning tools run only in isolated worker sessions",
+      ),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(/available 10 USD, allocated 50 USD, reserved 0 USD/),
     ).toBeInTheDocument();
     const comparison = screen.getByRole("region", {

@@ -724,8 +724,37 @@ def test_planning_outcomes_show_the_same_diagnostic_in_every_interface(
     ]
     shown = {"terminal": (terminal.message or "").splitlines(), "notebook": notebook.items}
     for interface, lines in shown.items():
-        assert set(re.findall(r"HW-[A-Z]+-\d{3}", "\n".join(lines))) == {state["code"]}, interface
+        outcomes = [item for item in lines if not item.startswith(_AGENT_TOOLS)]
+        assert set(re.findall(r"HW-[A-Z]+-\d{3}", "\n".join(outcomes))) == {state["code"]}, (
+            interface
+        )
         assert any(line.startswith(f"{state['diagnostic']} (") for line in lines), interface
+
+
+_AGENT_TOOLS = "Agent planning tools: "
+
+
+def test_every_interface_reports_planning_tools_unavailable_without_a_worker(
+    gateway: SessionGateway,
+) -> None:
+    # This gateway has no isolated worker, so no session's agent receives the planning tools.
+    expected = "HW-MCP-004: planning tools run only in isolated worker sessions"
+    browser = RestGateway(gateway).handle(RestRequest("GET", "/project/planning")).body
+    terminal = InteractiveSession(gateway, session_id="planning").submit("/plan")
+    notebook = build_planning_spec(NotebookSession(gateway=gateway).planning())
+
+    assert browser["agent_tools"] == {
+        "availability": "unavailable",
+        "unavailable_reason": "planning tools run only in isolated worker sessions",
+        "unavailable_code": "HW-MCP-004",
+    }
+    for interface, lines in {
+        "terminal": (terminal.message or "").splitlines(),
+        "notebook": notebook.items,
+    }.items():
+        assert [item for item in lines if item.startswith(_AGENT_TOOLS)] == [
+            _AGENT_TOOLS + expected
+        ], interface
 
 
 def test_terminal_plan_commands_record_estimate_and_hide_without_planning(

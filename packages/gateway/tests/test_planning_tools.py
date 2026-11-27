@@ -48,6 +48,7 @@ from heartwood.gateway._mcp_servers import McpOutsideAdapter, advance_outside_ca
 from heartwood.gateway._model_settings import ModelProfile, ModelSettings
 from heartwood.gateway._openhands_persistence import ContentMinimizedLocalFileStore
 from heartwood.gateway._openhands_sdk import _agent_context, _security_configuration, _tool_call
+from heartwood.gateway._planning_presentation import planning_lines
 from heartwood.gateway._platform_planning import (
     AGENT_RESULT_BYTES,
     ESTIMATE_AGENT_TOOL,
@@ -247,6 +248,7 @@ def test_worker_sessions_receive_the_planning_tools(
         assert gateway._mcp_adapters[id(session)].tool_names == _TOOLS
         assert all(item.annotations is None for item in request.client_tools)
         assert gateway.planning().agent_tools == PlanningAgentTools(availability="available")
+        assert "Agent planning tools: available" in planning_lines(gateway.planning())
     finally:
         gateway.stop()
 
